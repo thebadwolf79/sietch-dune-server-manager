@@ -1,17 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import {
-  Activity,
-  Database,
-  HardDrive,
-  Map,
-  RadioTower,
-  Server,
-  SlidersHorizontal,
-  Terminal,
-  Users
-} from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { AppHeader, AppSidebar, StatusStrip } from "./components/appShell";
+import { useDashboardDerivedState } from "./hooks/useDashboardDerivedState";
 import { useManagerTelemetry } from "./hooks/useManagerTelemetry";
 import { BattleGroupsPanel } from "./views/battlegroups";
 import { ConfigView } from "./views/config";
@@ -36,7 +26,6 @@ import type {
   ManagerApiStatus,
   ManagerWorkloads,
   MapOverrideDraft,
-  NavItem,
   TransferDraft,
   ViewKey,
   VmStatus,
@@ -105,88 +94,44 @@ export default function App() {
     managerError
   } = useManagerTelemetry(configLoaded, config);
 
-  const selectedBattleGroup = useMemo(
-    () => battleGroups.find((group) => group.namespace === selectedNamespace) ?? battleGroups[0],
-    [battleGroups, selectedNamespace]
-  );
-  const vmState = vm?.state.toLowerCase() ?? "";
-  const vmIsRunning = vmState === "running";
-  const vmIsStarting = vmState === "starting";
-  const vmIsChanging = ["starting", "stopping", "pausing", "resuming", "resetting", "saving"].includes(vmState);
-  const canControlVm = Boolean(host?.isElevated && host?.hypervAvailable && vm);
-  const startVmDisabledReason = busy
-    ? "An operation is already running"
-    : !host?.isElevated
-      ? "VM controls require the app to run elevated"
-      : !host?.hypervAvailable
-        ? "Hyper-V is unavailable"
-        : !vm
-          ? "VM was not detected"
-          : vmIsRunning
-            ? "VM is already running"
-            : vmIsChanging
-              ? "VM is changing state"
-              : "Start VM";
-  const stopVmDisabledReason = busy
-    ? "An operation is already running"
-    : !host?.isElevated
-      ? "VM controls require the app to run elevated"
-      : !host?.hypervAvailable
-        ? "Hyper-V is unavailable"
-        : !vm
-          ? "VM was not detected"
-          : !vmIsRunning
-            ? "VM is not running"
-            : vmIsChanging
-              ? "VM is changing state"
-              : "Stop VM";
-  const battleGroupIsStopped =
-    selectedBattleGroup?.stop === true || selectedBattleGroup?.phase.toLowerCase() === "stopped";
-  const battleGroupIsRunning =
-    selectedBattleGroup?.stop === false &&
-    ["running", "ready", "starting"].includes(selectedBattleGroup?.phase.toLowerCase() ?? "");
-  const canUseGuest = Boolean(vmIsRunning && guest?.connected && guest?.sudo && guest?.kubectl);
-  const managerApiConfigured = config.managerApiUrl.trim().length > 0;
-  const managerReadiness = managerStatus ? "Ready" : managerApiConfigured ? "Offline" : "Disabled";
-  const managerTelemetryState = managerApiConfigured ? managerSocketState : "disabled";
-  const canUseManager = managerApiConfigured && Boolean(managerStatus);
-  const managerToolsInstalled = canUseManager;
-  const directorAvailable = Boolean(managerToolsInstalled && managerStatus?.directorConfigured);
-  const managerInstallNamespace = config.managerApiNamespace.trim() || selectedBattleGroup?.namespace || "";
-  const canInstallManagerApi = Boolean(canUseGuest && managerInstallNamespace && config.managerApiBinaryPath.trim());
-  const managerRequiredViews = ["battlegroups", "workloads", "config", "logs", "players", "director"];
-  const directorRequiredViews = ["players", "director"];
-  const activeViewRequiresManager = managerRequiredViews.includes(activeView);
-  const activeViewRequiresDirector = directorRequiredViews.includes(activeView);
-  const viewLabels: Record<ViewKey, string> = {
-    overview: "Overview",
-    host: "Host & VM",
-    manager: "Manager API",
-    players: "Players",
-    battlegroups: "BattleGroups",
-    workloads: "Pods & Services",
-    director: "Director",
-    config: "Config",
-    logs: "Logs"
-  };
-  const pageTitle = activeView === "overview" ? selectedBattleGroup?.title || "Dune Awakening" : viewLabels[activeView];
-  const pageSubtitle =
-    activeView === "overview"
-      ? selectedBattleGroup?.name || "No battlegroup detected"
-      : selectedBattleGroup?.title || selectedBattleGroup?.name || "No battlegroup selected";
-  const navItems: NavItem[] = [
-    { key: "overview", label: "Overview", icon: Server },
-    { key: "host", label: "Host & VM", icon: HardDrive },
-    { key: "manager", label: "Manager API", icon: RadioTower },
-    { key: "players", label: "Players", icon: Users, disabled: !directorAvailable },
-    { key: "battlegroups", label: "BattleGroups", icon: Activity, disabled: !managerToolsInstalled },
-    { key: "workloads", label: "Pods & Services", icon: Database, disabled: !managerToolsInstalled },
-    { key: "director", label: "Director", icon: Map, disabled: !directorAvailable },
-    { key: "config", label: "Config", icon: SlidersHorizontal, disabled: !managerToolsInstalled },
-    { key: "logs", label: "Logs", icon: Terminal, disabled: !managerToolsInstalled }
-  ];
-  const selectedDirectorMapSummary =
-    directorMaps.find((map) => map.name === selectedDirectorMap) ?? directorMaps[0] ?? null;
+  const {
+    selectedBattleGroup,
+    selectedDirectorMapSummary,
+    vmIsRunning,
+    vmIsStarting,
+    vmIsChanging,
+    canControlVm,
+    startVmDisabledReason,
+    stopVmDisabledReason,
+    battleGroupIsStopped,
+    battleGroupIsRunning,
+    managerApiConfigured,
+    managerReadiness,
+    managerTelemetryState,
+    canUseManager,
+    managerToolsInstalled,
+    directorAvailable,
+    managerInstallNamespace,
+    canInstallManagerApi,
+    activeViewRequiresManager,
+    activeViewRequiresDirector,
+    pageTitle,
+    pageSubtitle,
+    navItems
+  } = useDashboardDerivedState({
+    config,
+    host,
+    vm,
+    guest,
+    battleGroups,
+    selectedNamespace,
+    directorMaps,
+    selectedDirectorMap,
+    busy,
+    managerStatus,
+    managerSocketState,
+    activeView
+  });
 
   async function capture<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
     try {
