@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{anyhow, Context};
 use axum::{
     body::{Body, Bytes},
@@ -8,15 +10,21 @@ use axum::{
 use k8s_openapi::api::core::v1::Service;
 use kube::{api::ListParams, Api};
 use serde_json::{json, Value};
+use tokio::time;
 
 use crate::{
     errors::{ApiError, ApiResponse},
+    kubernetes_domain::{list_battlegroups, patch_battlegroup_stop},
     security::redact_json,
     state::AppState,
 };
 
+const DIRECTOR_READY_ATTEMPTS: usize = 18;
+const DIRECTOR_READY_DELAY: Duration = Duration::from_secs(5);
+const DIRECTOR_PROBE_PATH: &str = "/v0/battlegroup";
+
 pub async fn director_get_json(state: &AppState, path: &str) -> Result<Value, ApiError> {
-    let base_url = resolve_director_base_url(state).await?;
+    let base_url = ensure_director_available(state).await?;
     let value = state
         .http
         .get(format!("{base_url}{path}"))
@@ -106,6 +114,25 @@ pub async fn resolve_director_base_url(state: &AppState) -> Result<String, ApiEr
     discover_director_base_url(state).await
 }
 
+pub async fn ensure_director_available(state: &AppState) -> Result<String, ApiError> {
+    let base_url = resolve_director_base_url(state).await?;
+    if director_probe(state, &base_url).await {
+        return Ok(base_url);
+    }
+
+    ensure_battlegroup_started(state).await?;
+    for _ in 0..DIRECTOR_READY_ATTEMPTS {
+        if director_probe(state, &base_url).await {
+            return Ok(base_url);
+        }
+        time::sleep(DIRECTOR_READY_DELAY).await;
+    }
+
+    Err(ApiError::bad_gateway(
+        "Director did not become reachable after starting the battlegroup",
+    ))
+}
+
 async fn proxy_director_request(
     state: &AppState,
     method: Method,
@@ -113,7 +140,7 @@ async fn proxy_director_request(
     query: Option<String>,
     body: Bytes,
 ) -> Result<reqwest::Response, ApiError> {
-    let base_url = resolve_director_base_url(state).await?;
+    let base_url = ensure_director_available(state).await?;
     let mut url = format!("{base_url}{path}");
     if let Some(query) = query.filter(|value| !value.is_empty()) {
         url.push('?');
@@ -133,6 +160,31 @@ async fn proxy_director_request(
         .await
         .context("failed to proxy Director request")
         .map_err(ApiError::from)
+}
+
+async fn ensure_battlegroup_started(state: &AppState) -> Result<(), ApiError> {
+    let battlegroups = list_battlegroups(state).await?;
+    let battlegroup = battlegroups
+        .first()
+        .ok_or_else(|| ApiError::bad_gateway("no battlegroup found to start Director"))?;
+
+    if battlegroup.stop {
+        patch_battlegroup_stop(state, &battlegroup.namespace, &battlegroup.name, false).await?;
+    }
+
+    Ok(())
+}
+
+async fn director_probe(state: &AppState, base_url: &str) -> bool {
+    match state
+        .http
+        .get(format!("{base_url}{DIRECTOR_PROBE_PATH}"))
+        .send()
+        .await
+    {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
 }
 
 async fn discover_director_base_url(state: &AppState) -> Result<String, ApiError> {
