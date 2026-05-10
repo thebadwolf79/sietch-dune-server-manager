@@ -1,12 +1,13 @@
 use anyhow::{anyhow, Context, Result};
 use axum::{
+    body::{Body, Bytes},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, State,
+        OriginalUri, Path, Query, State,
     },
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
     Json, Router,
 };
 use futures::{SinkExt, StreamExt};
@@ -153,6 +154,61 @@ struct WorkloadsResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DirectorCapabilities {
+    configured: bool,
+    api_paths: Vec<DirectorPathCapability>,
+    ui_proxy_path: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectorPathCapability {
+    method: &'static str,
+    path: &'static str,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct DirectorPlayerSummary {
+    active: i64,
+    online: i64,
+    in_transit: i64,
+    grace_period: i64,
+    completion: i64,
+    queued: i64,
+    login_requests_total: i64,
+    travel_requests_total: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectorMapSummary {
+    name: String,
+    kind: String,
+    players: i64,
+    online: i64,
+    queued: i64,
+    servers: Vec<DirectorServerSummary>,
+    has_override: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DirectorServerSummary {
+    label: String,
+    server_id: String,
+    partition_id: Option<i64>,
+    dimension_index: Option<i64>,
+    players: i64,
+    online: i64,
+    queued: Option<i64>,
+    status: String,
+    heartbeat_seconds_ago: Option<i64>,
+    has_override: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TelemetryEnvelope {
     event_type: String,
     time_unix_ms: u128,
@@ -231,6 +287,35 @@ async fn main() -> Result<()> {
         .route("/api/workloads", get(workloads))
         .route("/api/logs", get(logs))
         .route("/api/director/battlegroup", get(director_battlegroup))
+        .route("/api/director/capabilities", get(director_capabilities))
+        .route(
+            "/api/director/players/summary",
+            get(director_players_summary),
+        )
+        .route("/api/director/maps", get(director_maps))
+        .route(
+            "/api/director/config/fls",
+            get(director_fls_config)
+                .post(director_update_fls_config)
+                .delete(director_clear_fls_config),
+        )
+        .route(
+            "/api/director/config/character-transfer",
+            get(director_character_transfer_config)
+                .post(director_update_character_transfer_config)
+                .delete(director_clear_character_transfer_config),
+        )
+        .route(
+            "/api/director/config/maps/:map_name/override",
+            post(director_update_map_override).delete(director_clear_map_override),
+        )
+        .route("/api/director/v0/*path", any(director_api_proxy))
+        .route("/v0/*path", any(director_root_api_proxy))
+        .route("/director", any(director_ui_proxy_root))
+        .route("/director/*path", any(director_ui_proxy))
+        .route("/Script/*path", any(director_script_proxy))
+        .route("/Stylesheet/*path", any(director_stylesheet_proxy))
+        .route("/Icons/*path", any(director_icons_proxy))
         .route("/api/telemetry", get(telemetry))
         .with_state(state.clone())
         .layer(TraceLayer::new_for_http())
@@ -415,13 +500,343 @@ async fn director_battlegroup(
     headers: HeaderMap,
 ) -> ApiResponse<Value> {
     authorize(&state, &headers, None)?;
-    let base_url = state
-        .director_base_url
-        .as_ref()
-        .ok_or_else(|| ApiError::bad_gateway("DIRECTOR_BASE_URL is not configured"))?;
+    let value = director_get_json(&state, "/v0/battlegroup").await?;
+
+    Ok(Json(redact_json(value)))
+}
+
+async fn director_capabilities(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<DirectorCapabilities> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(DirectorCapabilities {
+        configured: state.director_base_url.is_some(),
+        api_paths: director_capabilities_list(),
+        ui_proxy_path: "/director",
+    }))
+}
+
+async fn director_players_summary(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<DirectorPlayerSummary> {
+    authorize(&state, &headers, None)?;
+    let value = director_get_json(&state, "/v0/battlegroup").await?;
+    Ok(Json(director_player_summary(&value)))
+}
+
+async fn director_maps(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<Vec<DirectorMapSummary>> {
+    authorize(&state, &headers, None)?;
+    let value = director_get_json(&state, "/v0/battlegroup").await?;
+    Ok(Json(director_map_summaries(&value)))
+}
+
+async fn director_fls_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<Value> {
+    authorize(&state, &headers, None)?;
+    let value = director_get_json(&state, "/v0/BattlegroupFetchFlsReportSettings").await?;
+    Ok(Json(redact_json(value)))
+}
+
+async fn director_update_fls_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResponse<Value> {
+    authorize(&state, &headers, None)?;
+    proxy_director_json(
+        &state,
+        Method::POST,
+        "/v0/BattlegroupUpdateFlsReportSettings",
+        None,
+        body,
+    )
+    .await
+}
+
+async fn director_clear_fls_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<Value> {
+    authorize(&state, &headers, None)?;
+    proxy_director_json(
+        &state,
+        Method::POST,
+        "/v0/BattlegroupClearFlsReportOverrides",
+        None,
+        Bytes::new(),
+    )
+    .await
+}
+
+async fn director_character_transfer_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<Value> {
+    authorize(&state, &headers, None)?;
+    let value = director_get_json(&state, "/v0/BattlegroupFetchCharacterTransferRules").await?;
+    Ok(Json(redact_json(value)))
+}
+
+async fn director_update_character_transfer_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResponse<Value> {
+    authorize(&state, &headers, None)?;
+    proxy_director_json(
+        &state,
+        Method::POST,
+        "/v0/BattlegroupUpdateCharacterTransferSettings",
+        None,
+        body,
+    )
+    .await
+}
+
+async fn director_clear_character_transfer_config(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<Value> {
+    authorize(&state, &headers, None)?;
+    proxy_director_json(
+        &state,
+        Method::POST,
+        "/v0/BattlegroupClearCharacterTransferOverrides",
+        None,
+        Bytes::new(),
+    )
+    .await
+}
+
+async fn director_update_map_override(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(map_name): Path<String>,
+    body: Bytes,
+) -> ApiResponse<Value> {
+    authorize(&state, &headers, None)?;
+    validate_director_map_name(&map_name)?;
+    proxy_director_json(
+        &state,
+        Method::POST,
+        "/v0/BattlegroupUpdateServerGroupConfig",
+        None,
+        body,
+    )
+    .await
+}
+
+async fn director_clear_map_override(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(map_name): Path<String>,
+) -> ApiResponse<Value> {
+    authorize(&state, &headers, None)?;
+    validate_director_map_name(&map_name)?;
+    proxy_director_json(
+        &state,
+        Method::POST,
+        "/v0/BattlegroupClearMapConfigOverrides",
+        None,
+        Bytes::from(map_name),
+    )
+    .await
+}
+
+async fn director_api_proxy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    method: Method,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers, query_token(uri.query()))?;
+    let director_path = format!("/v0/{path}");
+    if !is_allowed_director_api(method.as_str(), &director_path) {
+        return Err(ApiError::bad_request(
+            "Director API path is not allowlisted",
+        ));
+    }
+    proxy_director_response(
+        &state,
+        method,
+        &director_path,
+        director_query(uri.query()),
+        body,
+        None,
+    )
+    .await
+}
+
+async fn director_root_api_proxy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    method: Method,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers, query_token(uri.query()))?;
+    let director_path = format!("/v0/{path}");
+    if !is_allowed_director_api(method.as_str(), &director_path) {
+        return Err(ApiError::bad_request(
+            "Director API path is not allowlisted",
+        ));
+    }
+    proxy_director_response(
+        &state,
+        method,
+        &director_path,
+        director_query(uri.query()),
+        body,
+        None,
+    )
+    .await
+}
+
+async fn director_ui_proxy_root(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    OriginalUri(uri): OriginalUri,
+    method: Method,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers, query_token(uri.query()))?;
+    proxy_director_response(
+        &state,
+        method,
+        "/",
+        director_query(uri.query()),
+        body,
+        query_token(uri.query()),
+    )
+    .await
+}
+
+async fn director_script_proxy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    method: Method,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    director_static_proxy(state, headers, path, uri, method, body, "Script").await
+}
+
+async fn director_stylesheet_proxy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    method: Method,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    director_static_proxy(state, headers, path, uri, method, body, "Stylesheet").await
+}
+
+async fn director_icons_proxy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    method: Method,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    director_static_proxy(state, headers, path, uri, method, body, "Icons").await
+}
+
+async fn director_static_proxy(
+    state: Arc<AppState>,
+    headers: HeaderMap,
+    path: String,
+    uri: axum::http::Uri,
+    method: Method,
+    body: Bytes,
+    prefix: &str,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers, query_token(uri.query()))?;
+    if !is_safe_static_path(&path) {
+        return Err(ApiError::bad_request("invalid Director static path"));
+    }
+    let director_path = format!("/{prefix}/{path}");
+    proxy_director_response(
+        &state,
+        method,
+        &director_path,
+        director_query(uri.query()),
+        body,
+        None,
+    )
+    .await
+}
+
+async fn director_ui_proxy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(path): Path<String>,
+    OriginalUri(uri): OriginalUri,
+    method: Method,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers, query_token(uri.query()))?;
+    let director_path = format!("/{path}");
+    proxy_director_response(
+        &state,
+        method,
+        &director_path,
+        director_query(uri.query()),
+        body,
+        query_token(uri.query()),
+    )
+    .await
+}
+
+fn director_capabilities_list() -> Vec<DirectorPathCapability> {
+    const PATHS: &[(&str, &str)] = &[
+        ("GET", "/v0/igwoBattlegroup"),
+        ("GET", "/v0/getPodset"),
+        ("GET", "/v0/battlegroup"),
+        ("GET", "/v0/players"),
+        ("GET", "/v0/players/online"),
+        ("GET", "/v0/players/intransit"),
+        ("GET", "/v0/players/graceperiod"),
+        ("GET", "/v0/players/completion"),
+        ("GET", "/v0/players/queued"),
+        ("POST", "/v0/BattlegroupUpdateServerGroupConfig"),
+        ("POST", "/v0/BattlegroupClearMapConfigOverrides"),
+        ("GET", "/v0/BattlegroupFetchFlsReportSettings"),
+        ("GET", "/v0/BattlegroupFetchCharacterTransferRules"),
+        ("POST", "/v0/BattlegroupUpdateFlsReportSettings"),
+        ("POST", "/v0/BattlegroupUpdateCharacterTransferSettings"),
+        ("POST", "/v0/BattlegroupClearFlsReportOverrides"),
+        ("POST", "/v0/BattlegroupClearCharacterTransferOverrides"),
+    ];
+    PATHS
+        .iter()
+        .map(|(method, path)| DirectorPathCapability { method, path })
+        .collect()
+}
+
+fn is_allowed_director_api(method: &str, path: &str) -> bool {
+    director_capabilities_list()
+        .iter()
+        .any(|item| item.method == method && item.path == path)
+}
+
+async fn director_get_json(state: &AppState, path: &str) -> Result<Value, ApiError> {
+    let base_url = director_base_url(state)?;
     let value = state
         .http
-        .get(format!("{base_url}/v0/battlegroup"))
+        .get(format!("{base_url}{path}"))
         .send()
         .await
         .context("failed to call Director")?
@@ -430,8 +845,295 @@ async fn director_battlegroup(
         .json::<Value>()
         .await
         .context("failed to parse Director response")?;
+    Ok(value)
+}
 
+async fn proxy_director_json(
+    state: &AppState,
+    method: Method,
+    path: &str,
+    query: Option<String>,
+    body: Bytes,
+) -> ApiResponse<Value> {
+    let response = proxy_director_request(state, method, path, query, body).await?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .context("failed to read Director response")?;
+    if !status.is_success() {
+        return Err(ApiError {
+            status: StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+            message: String::from_utf8_lossy(&bytes).to_string(),
+        });
+    }
+    if bytes.is_empty() {
+        return Ok(Json(json!({ "ok": true })));
+    }
+    let value = serde_json::from_slice::<Value>(&bytes).unwrap_or_else(|_| {
+        json!({
+            "ok": true,
+            "body": String::from_utf8_lossy(&bytes)
+        })
+    });
     Ok(Json(redact_json(value)))
+}
+
+async fn proxy_director_response(
+    state: &AppState,
+    method: Method,
+    path: &str,
+    query: Option<String>,
+    body: Bytes,
+    set_auth_cookie: Option<&str>,
+) -> Result<Response, ApiError> {
+    let response = proxy_director_request(state, method, path, query, body).await?;
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
+    let cache_control = response.headers().get(header::CACHE_CONTROL).cloned();
+    let bytes = response
+        .bytes()
+        .await
+        .context("failed to read Director response body")?;
+
+    let mut builder = Response::builder().status(status);
+    if let Some(value) = content_type {
+        builder = builder.header(header::CONTENT_TYPE, value);
+    }
+    if let Some(value) = cache_control {
+        builder = builder.header(header::CACHE_CONTROL, value);
+    }
+    if let Some(token) = set_auth_cookie {
+        builder = builder.header(
+            header::SET_COOKIE,
+            format!("dune_manager_token={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400"),
+        );
+    }
+
+    builder
+        .body(Body::from(bytes))
+        .map_err(|err| ApiError::from(anyhow!(err)))
+}
+
+async fn proxy_director_request(
+    state: &AppState,
+    method: Method,
+    path: &str,
+    query: Option<String>,
+    body: Bytes,
+) -> Result<reqwest::Response, ApiError> {
+    let base_url = director_base_url(state)?;
+    let mut url = format!("{base_url}{path}");
+    if let Some(query) = query.filter(|value| !value.is_empty()) {
+        url.push('?');
+        url.push_str(&query);
+    }
+
+    let reqwest_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
+        .map_err(|_| ApiError::bad_request("unsupported HTTP method"))?;
+    let mut request = state.http.request(reqwest_method, url);
+    if !body.is_empty() {
+        request = request
+            .header(header::CONTENT_TYPE.as_str(), "application/json")
+            .body(body);
+    }
+    request
+        .send()
+        .await
+        .context("failed to proxy Director request")
+        .map_err(ApiError::from)
+}
+
+fn director_base_url(state: &AppState) -> Result<&str, ApiError> {
+    state
+        .director_base_url
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_gateway("DIRECTOR_BASE_URL is not configured"))
+}
+
+fn query_token(query: Option<&str>) -> Option<&str> {
+    query.and_then(|query| {
+        query.split('&').find_map(|part| {
+            let (key, value) = part.split_once('=')?;
+            (key == "token").then_some(value)
+        })
+    })
+}
+
+fn director_query(query: Option<&str>) -> Option<String> {
+    query.map(|query| {
+        query
+            .split('&')
+            .filter(|part| !part.starts_with("token="))
+            .collect::<Vec<_>>()
+            .join("&")
+    })
+}
+
+fn validate_director_map_name(value: &str) -> Result<(), ApiError> {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    {
+        return Err(ApiError::bad_request("invalid Director map name"));
+    }
+    Ok(())
+}
+
+fn is_safe_static_path(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains("..")
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/'))
+}
+
+fn director_player_summary(value: &Value) -> DirectorPlayerSummary {
+    let mut summary = DirectorPlayerSummary {
+        login_requests_total: value_i64(value, "numLoginRequestsTotal"),
+        travel_requests_total: value_i64(value, "numTravelRequestsTotal"),
+        ..Default::default()
+    };
+    for map in director_all_map_values(value) {
+        for server in director_server_values(map) {
+            summary.active += value_i64(server, "numPlayersInGame");
+            summary.online += value_i64(server, "numPlayersOnline");
+            summary.in_transit += value_i64(server, "numPlayersInTransit");
+            summary.grace_period += value_i64(server, "numPlayersInGracePeriod");
+            summary.completion += value_i64(server, "numPlayersWithCompletion");
+            summary.queued += value_i64(server, "numPlayersInQueue");
+        }
+        if director_server_values(map).is_empty() {
+            summary.active += value_i64(map, "numPlayersInGame");
+            summary.online += value_i64(map, "numPlayersOnline");
+            summary.in_transit += value_i64(map, "numPlayersInTransit");
+            summary.grace_period += value_i64(map, "numPlayersInGracePeriod");
+            summary.completion += value_i64(map, "numPlayersWithCompletion");
+            summary.queued += value_i64(map, "numPlayersInQueue");
+        }
+    }
+    summary
+}
+
+fn director_map_summaries(value: &Value) -> Vec<DirectorMapSummary> {
+    let mut maps = Vec::new();
+    collect_director_maps(value, "singleServerMaps", "Single", &mut maps);
+    collect_director_maps(value, "dimensionMaps", "Dimension", &mut maps);
+    collect_director_maps(value, "instancedMaps", "Instanced", &mut maps);
+    maps.sort_by(|left, right| left.name.cmp(&right.name));
+    maps
+}
+
+fn collect_director_maps(
+    value: &Value,
+    key: &str,
+    kind: &str,
+    output: &mut Vec<DirectorMapSummary>,
+) {
+    let Some(items) = value.get(key).and_then(Value::as_object) else {
+        return;
+    };
+    for (name, map) in items {
+        let servers = director_server_values(map)
+            .into_iter()
+            .map(director_server_summary)
+            .collect::<Vec<_>>();
+        let players = if servers.is_empty() {
+            value_i64(map, "numPlayersInGame")
+        } else {
+            servers.iter().map(|server| server.players).sum()
+        };
+        let online = if servers.is_empty() {
+            value_i64(map, "numPlayersOnline")
+        } else {
+            servers.iter().map(|server| server.online).sum()
+        };
+        let queued = if servers.is_empty() {
+            value_i64(map, "numPlayersInQueue")
+        } else {
+            servers.iter().filter_map(|server| server.queued).sum()
+        };
+        output.push(DirectorMapSummary {
+            name: name.clone(),
+            kind: kind.to_string(),
+            players,
+            online,
+            queued,
+            servers,
+            has_override: !map.get("webOverrideCfg").unwrap_or(&Value::Null).is_null(),
+        });
+    }
+}
+
+fn director_all_map_values(value: &Value) -> Vec<&Value> {
+    ["singleServerMaps", "dimensionMaps", "instancedMaps"]
+        .iter()
+        .flat_map(|key| {
+            value
+                .get(*key)
+                .and_then(Value::as_object)
+                .map(|items| items.values().collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+fn director_server_values(map: &Value) -> Vec<&Value> {
+    if let Some(items) = map.get("serversByDimension").and_then(Value::as_object) {
+        return items.values().collect();
+    }
+    if let Some(items) = map.get("instances").and_then(Value::as_array) {
+        return items.iter().collect();
+    }
+    if let Some(items) = map.get("instances").and_then(Value::as_object) {
+        return items.values().collect();
+    }
+    if map.get("partition").is_some() {
+        return vec![map];
+    }
+    Vec::new()
+}
+
+fn director_server_summary(value: &Value) -> DirectorServerSummary {
+    let partition = &value["partition"];
+    let status_code = value_i64(value, "status");
+    let heartbeat_seconds_ago = value["lastServerState"]["reportTimestamp"]
+        .as_i64()
+        .map(|timestamp| (now_unix_ms() as i64 / 1000).saturating_sub(timestamp));
+    DirectorServerSummary {
+        label: partition["label"]
+            .as_str()
+            .or_else(|| value["lastServerState"]["displayName"].as_str())
+            .unwrap_or_default()
+            .to_string(),
+        server_id: partition["serverId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        partition_id: partition["partitionId"].as_i64(),
+        dimension_index: partition["dimensionIndex"].as_i64(),
+        players: value_i64(value, "numPlayersInGame"),
+        online: value_i64(value, "numPlayersOnline"),
+        queued: value.get("numPlayersInQueue").and_then(Value::as_i64),
+        status: match status_code {
+            1 => "Allocating",
+            2 => "Running But Not Ready",
+            3 => "Running",
+            _ => "Not Available",
+        }
+        .to_string(),
+        heartbeat_seconds_ago,
+        has_override: !value
+            .get("webOverrideCfg")
+            .unwrap_or(&Value::Null)
+            .is_null(),
+    }
+}
+
+fn value_i64(value: &Value, key: &str) -> i64 {
+    value.get(key).and_then(Value::as_i64).unwrap_or_default()
 }
 
 async fn telemetry(
@@ -786,12 +1488,25 @@ fn authorize(
         .get("authorization")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .or(query_token);
+        .or(query_token)
+        .or_else(|| cookie_token(headers));
 
     match bearer {
         Some(actual) if constant_time_eq(actual.as_bytes(), expected.as_bytes()) => Ok(()),
         _ => Err(ApiError::unauthorized()),
     }
+}
+
+fn cookie_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value.split(';').find_map(|part| {
+                let (key, token) = part.trim().split_once('=')?;
+                (key == "dune_manager_token").then_some(token)
+            })
+        })
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {

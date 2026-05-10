@@ -38,6 +38,7 @@ Desktop.ini
 
 # Local app/runtime data and secrets
 .tmp/
+.playwright-mcp/
 app/default-config.json
 *.pem
 *.key
