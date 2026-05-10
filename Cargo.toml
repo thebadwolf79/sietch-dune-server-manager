@@ -1,4 +1,3 @@
 [workspace]
-members = ["crates/dune-manager-core"]
-exclude = ["app/src-tauri", "app/manager-api"]
+members = ["crates/dune-manager-core", "manager-api"]
 resolver = "2"

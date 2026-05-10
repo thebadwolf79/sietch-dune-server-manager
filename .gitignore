@@ -10,7 +10,7 @@ app/dist/
 target/
 src-tauri/target/
 app/src-tauri/target/
-app/manager-api/target/
+manager-api/target/
 
 # Local environment
 .env
