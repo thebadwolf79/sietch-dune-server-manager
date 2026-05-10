@@ -44,6 +44,7 @@ struct AppConfig {
     manager_api_token: String,
     manager_api_namespace: String,
     manager_api_image: String,
+    manager_api_binary_path: String,
     manager_api_director_url: String,
 }
 
@@ -59,6 +60,7 @@ impl Default for AppConfig {
             manager_api_token: String::new(),
             manager_api_namespace: String::new(),
             manager_api_image: String::new(),
+            manager_api_binary_path: String::new(),
             manager_api_director_url: String::new(),
         }
     }
@@ -150,7 +152,8 @@ struct ManagerApiInstallResult {
     namespace: String,
     deployment: String,
     service: String,
-    image: String,
+    binary_path: String,
+    url: String,
 }
 
 fn failure(message: impl Into<String>) -> CommandFailure {
@@ -327,6 +330,7 @@ fn normalize_config(mut config: AppConfig) -> AppConfig {
     config.manager_api_token = config.manager_api_token.trim().to_string();
     config.manager_api_namespace = config.manager_api_namespace.trim().to_string();
     config.manager_api_image = config.manager_api_image.trim().to_string();
+    config.manager_api_binary_path = config.manager_api_binary_path.trim().to_string();
     config.manager_api_director_url = config
         .manager_api_director_url
         .trim()
@@ -569,6 +573,65 @@ fn run_ssh_with_stdin(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn scp_path(app: &AppHandle) -> CommandResult<String> {
+    let ssh_path = read_app_config(app)
+        .map(|config| config.ssh_path)
+        .unwrap_or_default();
+    if ssh_path.is_empty() {
+        return Err(failure("SSH path is not configured"));
+    }
+
+    let path = Path::new(&ssh_path);
+    let scp = path
+        .parent()
+        .map(|parent| parent.join("scp.exe"))
+        .filter(|candidate| candidate.exists())
+        .unwrap_or_else(|| PathBuf::from("scp.exe"));
+    Ok(scp.to_string_lossy().to_string())
+}
+
+fn copy_to_guest(
+    app: &AppHandle,
+    install_path: &str,
+    ip: &str,
+    ssh_user: &str,
+    source: &str,
+    destination: &str,
+) -> CommandResult<()> {
+    let source_path = Path::new(source);
+    if !source_path.exists() {
+        return Err(failure(format!(
+            "Manager API binary was not found at {}",
+            source_path.display()
+        )));
+    }
+
+    let key = prepare_key(app, install_path)?;
+    let key_str = key.to_string_lossy().to_string();
+    let target = format!("{ssh_user}@{ip}:{destination}");
+    let scp = scp_path(app)?;
+    run_program(
+        &scp,
+        &[
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "PreferredAuthentications=publickey",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=NUL",
+            "-o",
+            "ConnectTimeout=6",
+            "-i",
+            &key_str,
+            source,
+            &target,
+        ],
+    )?;
+    Ok(())
 }
 
 fn discover_ip_from_logs(install_path: &str) -> Option<String> {
@@ -1075,134 +1138,11 @@ fn export_live_config(
     })
 }
 
-fn yaml_string(value: &str) -> CommandResult<String> {
-    serde_json::to_string(value)
-        .map_err(|err| failure(format!("Failed to quote manifest value: {err}")))
-}
-
-fn manager_api_manifest(
-    namespace: &str,
-    image: &str,
-    token: &str,
-    director_base_url: &str,
-) -> CommandResult<String> {
-    Ok(format!(
-        r#"apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: dune-manager-api
-  namespace: {namespace}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: dune-manager-api-auth
-  namespace: {namespace}
-type: Opaque
-stringData:
-  token: {token}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: dune-manager-api
-  namespace: {namespace}
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "pods/log", "services", "events"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["igw.funcom.com"]
-    resources: ["battlegroups", "battlegroupdirectors", "battlegroupstats", "databases", "databasedeployments", "filebrowsers", "messagequeues", "servergateways", "servergroups", "serversets", "serverstats", "textrouters"]
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: dune-manager-api
-  namespace: {namespace}
-subjects:
-  - kind: ServiceAccount
-    name: dune-manager-api
-    namespace: {namespace}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: dune-manager-api
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: dune-manager-api
-  namespace: {namespace}
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: dune-manager-api
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: dune-manager-api
-    spec:
-      serviceAccountName: dune-manager-api
-      containers:
-        - name: api
-          image: {image}
-          imagePullPolicy: IfNotPresent
-          ports:
-            - name: http
-              containerPort: 8787
-          env:
-            - name: POD_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
-            - name: MANAGER_API_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: dune-manager-api-auth
-                  key: token
-            - name: DIRECTOR_BASE_URL
-              value: {director_base_url}
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 2
-            periodSeconds: 5
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 10
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: dune-manager-api
-  namespace: {namespace}
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: dune-manager-api
-  ports:
-    - name: http
-      port: 8787
-      targetPort: http
-"#,
-        namespace = namespace,
-        image = yaml_string(image)?,
-        token = yaml_string(token)?,
-        director_base_url = yaml_string(director_base_url)?,
-    ))
-}
-
 #[tauri::command]
 fn install_manager_api(
     app: AppHandle,
     namespace: String,
-    image: String,
+    binary_path: String,
     token: String,
     director_base_url: String,
     install_path: Option<String>,
@@ -1210,41 +1150,95 @@ fn install_manager_api(
     ssh_user: Option<String>,
 ) -> CommandResult<ManagerApiInstallResult> {
     let namespace = namespace.trim().to_string();
-    let image = image.trim().to_string();
+    let binary_path = binary_path.trim().to_string();
     let token = token.trim().to_string();
     let director_base_url = director_base_url.trim().trim_end_matches('/').to_string();
     validate_kube_arg(&namespace, "namespace")?;
-    validate_plain_value(&image, "Manager API image")?;
+    validate_plain_value(&binary_path, "Manager API binary")?;
     validate_plain_value(&token, "Manager API token")?;
     if !director_base_url.is_empty() {
         validate_plain_value(&director_base_url, "Director base URL")?;
     }
 
     let (install_path, ip, ssh_user) = resolve_connection(&app, install_path, ip, ssh_user)?;
-    let manifest = manager_api_manifest(&namespace, &image, &token, &director_base_url)?;
+    let upload_path = format!("/home/{ssh_user}/dune-manager-api");
+    copy_to_guest(
+        &app,
+        &install_path,
+        &ip,
+        &ssh_user,
+        &binary_path,
+        &upload_path,
+    )?;
+
+    let install_script = format!(
+        r#"set -eu
+install -d -m 0755 /opt/dune-manager
+install -m 0755 {upload_path} /opt/dune-manager/dune-manager-api
+rm -f {upload_path}
+cat > /etc/dune-manager-api.env <<'EOF'
+MANAGER_API_TOKEN={token}
+DUNE_NAMESPACE={namespace}
+KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+DIRECTOR_BASE_URL={director_base_url}
+PORT=8787
+RUST_LOG=dune_manager_api=info,tower_http=info
+EOF
+chmod 0600 /etc/dune-manager-api.env
+cat > /opt/dune-manager/run-manager-api <<'EOF'
+#!/bin/sh
+set -a
+. /etc/dune-manager-api.env
+set +a
+exec /opt/dune-manager/dune-manager-api
+EOF
+chmod 0755 /opt/dune-manager/run-manager-api
+cat > /etc/init.d/dune-manager-api <<'EOF'
+#!/sbin/openrc-run
+name="Dune Manager API"
+description="Dune dedicated server manager guest service"
+command="/opt/dune-manager/run-manager-api"
+command_background="yes"
+pidfile="/run/dune-manager-api.pid"
+output_log="/var/log/dune-manager-api.log"
+error_log="/var/log/dune-manager-api.log"
+depend() {{
+  need net
+  after k3s
+}}
+EOF
+chmod 0755 /etc/init.d/dune-manager-api
+rc-update add dune-manager-api default >/dev/null 2>&1 || true
+rc-service dune-manager-api restart
+"#,
+        upload_path = upload_path,
+        token = token,
+        namespace = namespace,
+        director_base_url = director_base_url,
+    );
+
     run_ssh_with_stdin(
         &app,
         &install_path,
         &ip,
         &ssh_user,
-        "sudo kubectl apply -f -",
-        &manifest,
+        "sudo sh -s",
+        &install_script,
     )?;
     run_ssh(
         &app,
         &install_path,
         &ip,
         &ssh_user,
-        &format!(
-            "sudo kubectl rollout status deployment/dune-manager-api -n {namespace} --timeout=60s"
-        ),
+        "sudo rc-service dune-manager-api status",
     )?;
 
     Ok(ManagerApiInstallResult {
         namespace,
         deployment: "dune-manager-api".to_string(),
-        service: "dune-manager-api".to_string(),
-        image,
+        service: "openrc".to_string(),
+        binary_path,
+        url: format!("http://{ip}:8787"),
     })
 }
 

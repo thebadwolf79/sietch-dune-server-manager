@@ -46,6 +46,7 @@ type AppConfig = {
   managerApiToken: string;
   managerApiNamespace: string;
   managerApiImage: string;
+  managerApiBinaryPath: string;
   managerApiDirectorUrl: string;
 };
 
@@ -148,7 +149,8 @@ type ManagerApiInstallResult = {
   namespace: string;
   deployment: string;
   service: string;
-  image: string;
+  binaryPath: string;
+  url: string;
 };
 
 const defaultConfig: AppConfig = {
@@ -161,6 +163,7 @@ const defaultConfig: AppConfig = {
   managerApiToken: "",
   managerApiNamespace: "",
   managerApiImage: "",
+  managerApiBinaryPath: "",
   managerApiDirectorUrl: ""
 };
 
@@ -249,7 +252,7 @@ export default function App() {
   const canUseGuest = Boolean(vmIsRunning && guest?.connected && guest?.sudo && guest?.kubectl);
   const managerApiConfigured = config.managerApiUrl.trim().length > 0;
   const managerInstallNamespace = config.managerApiNamespace.trim() || selectedBattleGroup?.namespace || "";
-  const canInstallManagerApi = Boolean(canUseGuest && managerInstallNamespace && config.managerApiImage.trim());
+  const canInstallManagerApi = Boolean(canUseGuest && managerInstallNamespace && config.managerApiBinaryPath.trim());
 
   async function capture<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
     try {
@@ -418,7 +421,7 @@ export default function App() {
     const result = await capture("Install Manager API", () =>
       invoke<ManagerApiInstallResult>("install_manager_api", {
         namespace,
-        image: nextConfig.managerApiImage,
+        binaryPath: nextConfig.managerApiBinaryPath,
         token,
         directorBaseUrl: nextConfig.managerApiDirectorUrl,
         installPath: nextConfig.installPath,
@@ -428,7 +431,9 @@ export default function App() {
     );
     if (result) {
       setManagerInstall(result);
-      await capture("Save Manager API config", () => invoke<AppConfig>("save_app_config", { config: nextConfig }));
+      const savedConfig = { ...nextConfig, managerApiUrl: result.url };
+      setConfig(savedConfig);
+      await capture("Save Manager API config", () => invoke<AppConfig>("save_app_config", { config: savedConfig }));
     }
     setBusy(false);
   }
@@ -646,11 +651,13 @@ export default function App() {
               />
             </label>
             <label>
-              Manager image
+              Manager binary
               <input
-                placeholder="registry.example/manager-api:tag"
-                value={config.managerApiImage}
-                onChange={(event) => setConfig((current) => ({ ...current, managerApiImage: event.target.value }))}
+                placeholder="path to Linux dune-manager-api binary"
+                value={config.managerApiBinaryPath}
+                onChange={(event) =>
+                  setConfig((current) => ({ ...current, managerApiBinaryPath: event.target.value }))
+                }
                 onBlur={() => void saveConfig()}
               />
             </label>
@@ -745,7 +752,7 @@ export default function App() {
           <section className="config-summary">
             <InfoRow label="URL" value={config.managerApiUrl || "Not configured"} />
             <InfoRow label="Install namespace" value={managerInstallNamespace || "Not configured"} />
-            <InfoRow label="Image" value={config.managerApiImage || "Not configured"} />
+            <InfoRow label="Binary" value={config.managerApiBinaryPath || "Not configured"} />
             <InfoRow label="Socket" value={managerApiConfigured ? managerSocketState : "Disabled"} />
             <InfoRow label="Namespace" value={managerStatus?.namespace} />
             <InfoRow label="Director bridge" value={managerStatus?.directorConfigured ? "Configured" : "Unavailable"} />
