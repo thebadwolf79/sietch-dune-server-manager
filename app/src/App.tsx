@@ -1267,7 +1267,9 @@ export default function App() {
                   <h2>Advanced Director</h2>
                   <ExternalLink size={19} />
                 </div>
-                <iframe title="Advanced Director" src={directorProxyUrl} />
+                <div className="director-frame">
+                  <iframe title="Advanced Director" src={directorProxyUrl} />
+                </div>
               </section>
             )}
           </>
