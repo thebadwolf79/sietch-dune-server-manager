@@ -338,6 +338,17 @@ function InfoRow({ label, value }: { label: string; value?: string | number | nu
   );
 }
 
+function StatusInfoRow({ label, value }: { label: string; value?: string | boolean | null }) {
+  return (
+    <div className="info-row">
+      <span>{label}</span>
+      <strong>
+        <StatusPill value={value} />
+      </strong>
+    </div>
+  );
+}
+
 function EmptyState({ text }: { text: string }) {
   return <div className="empty-state">{text}</div>;
 }
@@ -444,6 +455,7 @@ export default function App() {
   );
   const vmState = vm?.state.toLowerCase() ?? "";
   const vmIsRunning = vmState === "running";
+  const vmIsStarting = vmState === "starting";
   const vmIsChanging = ["starting", "stopping", "pausing", "resuming", "resetting", "saving"].includes(vmState);
   const canControlVm = Boolean(host?.isElevated && host?.hypervAvailable && vm);
   const startVmDisabledReason = busy
@@ -1148,11 +1160,12 @@ export default function App() {
           <section className="tool-required panel">
             <div>
               <HardDrive size={24} />
-              <h2>VM must be running</h2>
+              <h2>{vmIsChanging ? `VM is ${vm.state}` : "VM must be running"}</h2>
             </div>
             <p>
-              Guest SSH, Manager API, BattleGroups, Director telemetry, and logs are skipped until Hyper-V reports the
-              VM state as Running and an IP address is available.
+              {vmIsStarting
+                ? "Hyper-V is starting the VM. Guest SSH, Manager API, BattleGroups, Director telemetry, and logs will load once the VM reports Running and has an IP address."
+                : "Guest SSH, Manager API, BattleGroups, Director telemetry, and logs are skipped until Hyper-V reports the VM state as Running and an IP address is available."}
             </p>
             <button onClick={startVm} disabled={busy || !canControlVm || vmIsRunning || vmIsChanging}>
               <Play size={16} />
@@ -1187,7 +1200,7 @@ export default function App() {
               </div>
               <InfoRow label="Hyper-V" value={host?.hypervAvailable ? "Available" : "Unavailable"} />
               <InfoRow label="vmms service" value={host?.vmmsStatus} />
-              <InfoRow label="VM state" value={vm?.state} />
+              <StatusInfoRow label="VM state" value={vm?.state} />
               <InfoRow label="VM health" value={vm?.status} />
               <InfoRow label="Memory" value={vm ? formatBytes(vm.memoryAssignedBytes) : null} />
               <InfoRow label="Uptime" value={vm?.uptime} />
