@@ -446,6 +446,32 @@ export default function App() {
   const vmIsRunning = vmState === "running";
   const vmIsChanging = ["starting", "stopping", "pausing", "resuming", "resetting", "saving"].includes(vmState);
   const canControlVm = Boolean(host?.isElevated && host?.hypervAvailable && vm);
+  const startVmDisabledReason = busy
+    ? "An operation is already running"
+    : !host?.isElevated
+      ? "VM controls require the app to run elevated"
+      : !host?.hypervAvailable
+        ? "Hyper-V is unavailable"
+        : !vm
+          ? "VM was not detected"
+          : vmIsRunning
+            ? "VM is already running"
+            : vmIsChanging
+              ? "VM is changing state"
+              : "Start VM";
+  const stopVmDisabledReason = busy
+    ? "An operation is already running"
+    : !host?.isElevated
+      ? "VM controls require the app to run elevated"
+      : !host?.hypervAvailable
+        ? "Hyper-V is unavailable"
+        : !vm
+          ? "VM was not detected"
+          : !vmIsRunning
+            ? "VM is not running"
+            : vmIsChanging
+              ? "VM is changing state"
+              : "Stop VM";
   const battleGroupIsStopped =
     selectedBattleGroup?.stop === true || selectedBattleGroup?.phase.toLowerCase() === "stopped";
   const battleGroupIsRunning =
@@ -1100,11 +1126,19 @@ export default function App() {
               <div className="panel-title">
                 <h2>Host & VM</h2>
                 <div className="button-row">
-                  <button onClick={startVm} disabled={busy || !canControlVm || vmIsRunning || vmIsChanging}>
+                  <button
+                    onClick={startVm}
+                    disabled={busy || !canControlVm || vmIsRunning || vmIsChanging}
+                    title={startVmDisabledReason}
+                  >
                     <Play size={16} />
                     Start VM
                   </button>
-                  <button onClick={stopVm} disabled={busy || !canControlVm || !vmIsRunning || vmIsChanging}>
+                  <button
+                    onClick={stopVm}
+                    disabled={busy || !canControlVm || !vmIsRunning || vmIsChanging}
+                    title={stopVmDisabledReason}
+                  >
                     <Square size={16} />
                     Stop VM
                   </button>
@@ -1112,7 +1146,8 @@ export default function App() {
               </div>
               <InfoRow label="Hyper-V" value={host?.hypervAvailable ? "Available" : "Unavailable"} />
               <InfoRow label="vmms service" value={host?.vmmsStatus} />
-              <InfoRow label="VM status" value={vm?.status} />
+              <InfoRow label="VM state" value={vm?.state} />
+              <InfoRow label="VM health" value={vm?.status} />
               <InfoRow label="Memory" value={vm ? formatBytes(vm.memoryAssignedBytes) : null} />
               <InfoRow label="Uptime" value={vm?.uptime} />
               <InfoRow label="VM path" value={vm?.path} />
