@@ -1,6 +1,9 @@
+//! Validation helpers for values passed to shells, PowerShell, and Kubernetes.
+
 use crate::errors::failure;
 use crate::models::CommandResult;
 
+/// Validates a Kubernetes identifier used as a command argument.
 pub fn validate_kube_arg(value: &str, label: &str) -> CommandResult<()> {
     if value.is_empty()
         || !value
@@ -12,6 +15,7 @@ pub fn validate_kube_arg(value: &str, label: &str) -> CommandResult<()> {
     Ok(())
 }
 
+/// Validates a required single-line plain-text value.
 pub fn validate_plain_value(value: &str, label: &str) -> CommandResult<()> {
     if value.is_empty() || value.chars().any(|ch| ch.is_control()) {
         return Err(failure(format!("{label} is not configured")));
@@ -19,6 +23,7 @@ pub fn validate_plain_value(value: &str, label: &str) -> CommandResult<()> {
     Ok(())
 }
 
+/// Resolves an optional value against a fallback and validates the result.
 pub fn required_config_value(
     value: Option<String>,
     fallback: &str,

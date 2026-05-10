@@ -5,19 +5,33 @@
 //! executor boundaries, and strict command contracts that can be reused by
 //! Hyper-V now and Docker/Kubernetes providers later.
 
+/// Kubernetes-backed battlegroup inspection, patching, shell, and log operations.
 pub mod battlegroup_kubernetes;
+/// High-level battlegroup lifecycle orchestration.
 pub mod battlegroup_management;
+/// Guest bootstrap planning and sequencing.
 pub mod guest_bootstrap;
+/// SSH implementation of the guest bootstrap provider.
 pub mod guest_bootstrap_ssh;
+/// SSH implementation of guest setup operations.
 pub mod guest_ssh;
+/// Strict PowerShell implementation of Hyper-V provider traits.
 pub mod hyperv_bridge;
+/// End-to-end Hyper-V initial setup orchestration.
 pub mod hyperv_initial_setup;
+/// Hyper-V VM lifecycle orchestration.
 pub mod hyperv_lifecycle;
+/// Hyper-V VM import and preparation orchestration.
 pub mod hyperv_setup;
+/// SSH-backed Kubernetes provider.
 pub mod kubernetes_ssh;
+/// OpenSSH command runner and shell command construction.
 pub mod openssh_runner;
+/// Provider traits and shared provider data models.
 pub mod providers;
+/// Strict command execution and strict JSON parsing.
 pub mod strict_command;
+/// Declarative flow descriptions derived from the vendor scripts.
 pub mod vendor_flows;
 
 pub use battlegroup_kubernetes::*;

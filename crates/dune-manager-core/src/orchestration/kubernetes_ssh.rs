@@ -7,15 +7,20 @@ use crate::{
     validation::validate_kube_arg,
 };
 
+/// Runs commands on a remote guest and returns text or JSON output.
 pub trait RemoteCommandRunner {
+    /// Runs a single remote shell command and returns stdout/stderr text.
     fn run(&self, command: &str) -> CommandResult<String>;
+    /// Runs a multi-line remote shell script and returns stdout/stderr text.
     fn run_script(&self, script: &str) -> CommandResult<String>;
 
+    /// Runs a command and parses the output as JSON.
     fn run_json(&self, command: &str, label: &str) -> CommandResult<Value> {
         parse_json(&self.run(command)?, label)
     }
 }
 
+/// Kubernetes provider backed by `kubectl -o json` on a remote guest.
 #[derive(Debug, Clone)]
 pub struct StructuredKubectl<R> {
     runner: R,
@@ -25,6 +30,7 @@ impl<R> StructuredKubectl<R>
 where
     R: RemoteCommandRunner,
 {
+    /// Creates a structured Kubernetes provider around a remote runner.
     pub fn new(runner: R) -> Self {
         Self { runner }
     }

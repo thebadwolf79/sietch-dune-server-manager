@@ -11,14 +11,18 @@ use crate::{
     validation::validate_kube_arg,
 };
 
+/// Names a live BattleGroup custom resource.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BattlegroupRef {
+    /// Kubernetes namespace containing the BattleGroup.
     pub namespace: String,
+    /// BattleGroup resource name.
     pub name: String,
 }
 
 impl BattlegroupRef {
+    /// Validates the namespace and resource name for safe kubectl usage.
     pub fn validate(&self) -> CommandResult<()> {
         validate_kube_arg(&self.namespace, "namespace")?;
         validate_kube_arg(&self.name, "battlegroup name")?;
@@ -26,12 +30,15 @@ impl BattlegroupRef {
     }
 }
 
+/// Browser-openable URL for a service exposed from the VM.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceUrl {
+    /// Fully qualified HTTP URL.
     pub url: String,
 }
 
+/// Performs routine BattleGroup lifecycle operations through Kubernetes.
 pub struct BattlegroupManagementOrchestrator<K> {
     kubernetes: K,
 }
@@ -40,10 +47,12 @@ impl<K> BattlegroupManagementOrchestrator<K>
 where
     K: KubernetesProvider,
 {
+    /// Creates an orchestrator around a Kubernetes provider.
     pub fn new(kubernetes: K) -> Self {
         Self { kubernetes }
     }
 
+    /// Starts a BattleGroup by clearing the vendor stop flag.
     pub fn start(
         &self,
         battlegroup: &BattlegroupRef,
@@ -55,6 +64,7 @@ where
             .patch_battlegroup_stop(&battlegroup.namespace, &battlegroup.name, false)
     }
 
+    /// Starts a BattleGroup and waits for the Director NodePort to appear.
     pub fn start_and_wait_director(
         &self,
         battlegroup: &BattlegroupRef,
@@ -65,6 +75,7 @@ where
         self.wait_for_director_node_port(battlegroup, timeout_seconds, sink)
     }
 
+    /// Stops a BattleGroup by setting the vendor stop flag.
     pub fn stop(
         &self,
         battlegroup: &BattlegroupRef,
@@ -76,6 +87,7 @@ where
             .patch_battlegroup_stop(&battlegroup.namespace, &battlegroup.name, true)
     }
 
+    /// Restarts a BattleGroup by applying stop and start patches in order.
     pub fn restart(
         &self,
         battlegroup: &BattlegroupRef,
@@ -100,6 +112,7 @@ where
             .patch_battlegroup_stop(&battlegroup.namespace, &battlegroup.name, false)
     }
 
+    /// Restarts a BattleGroup and waits for the Director NodePort to appear.
     pub fn restart_and_wait_director(
         &self,
         battlegroup: &BattlegroupRef,
@@ -110,6 +123,7 @@ where
         self.wait_for_director_node_port(battlegroup, timeout_seconds, sink)
     }
 
+    /// Builds the file-browser URL for a VM IP.
     pub fn file_browser_url(&self, vm_ip: &str) -> CommandResult<ServiceUrl> {
         validate_ipv4ish(vm_ip, "VM IP")?;
         Ok(ServiceUrl {
@@ -117,6 +131,7 @@ where
         })
     }
 
+    /// Discovers and builds the Director URL for a BattleGroup, if exposed.
     pub fn director_url(
         &self,
         battlegroup: &BattlegroupRef,
@@ -132,6 +147,7 @@ where
         }))
     }
 
+    /// Returns the only BattleGroup namespace when exactly one is present.
     pub fn discover_single_battlegroup_namespace(&self) -> CommandResult<Option<String>> {
         let namespaces = self.kubernetes.list_battlegroup_namespaces()?;
         match namespaces.as_slice() {
@@ -141,6 +157,7 @@ where
         }
     }
 
+    /// Polls Kubernetes until the Director service has a NodePort or times out.
     pub fn wait_for_director_node_port(
         &self,
         battlegroup: &BattlegroupRef,
@@ -166,6 +183,7 @@ where
     }
 }
 
+/// Updates a BattleGroup from already-downloaded guest payload files.
 pub struct BattlegroupUpdateOrchestrator<B> {
     bootstrap: B,
 }
@@ -174,10 +192,12 @@ impl<B> BattlegroupUpdateOrchestrator<B>
 where
     B: GuestBootstrapProvider,
 {
+    /// Creates an update orchestrator around a guest bootstrap provider.
     pub fn new(bootstrap: B) -> Self {
         Self { bootstrap }
     }
 
+    /// Imports downloaded images and patches the live BattleGroup image revisions.
     pub fn update_from_downloads(
         &self,
         battlegroup: &BattlegroupRef,

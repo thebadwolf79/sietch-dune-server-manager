@@ -14,6 +14,7 @@ use crate::{
 const DUNE_HOME: &str = "/home/dune/.dune";
 const SERVER_APP_ID: &str = "3104830";
 
+/// SSH-backed implementation of the guest bootstrap phases.
 #[derive(Debug, Clone)]
 pub struct SshGuestBootstrapProvider<R> {
     runner: R,
@@ -23,6 +24,7 @@ impl<R> SshGuestBootstrapProvider<R>
 where
     R: RemoteCommandRunner,
 {
+    /// Creates a bootstrap provider around a remote command runner.
     pub fn new(runner: R) -> Self {
         Self { runner }
     }

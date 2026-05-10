@@ -1,3 +1,5 @@
+//! Kubernetes-backed battlegroup queries, patches, shell specs, and log exports.
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -10,37 +12,53 @@ use crate::{
 
 const BATTLEGROUP_NAMESPACE_PREFIX: &str = "funcom-seabass-";
 
+/// Pod/container pair discovered in a namespace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PodContainerRef {
+    /// Pod name.
     pub pod: String,
+    /// Container name inside the pod.
     pub container: String,
+    /// Workload role label, when present.
     pub role: String,
 }
 
+/// Candidate commands for opening a shell into a pod.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PodShellSpec {
+    /// Kubernetes namespace.
     pub namespace: String,
+    /// Pod name.
     pub pod: String,
+    /// Ordered shell command candidates.
     pub commands: Vec<Vec<String>>,
 }
 
+/// Exported log file contents.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogFile {
+    /// Relative path to use when writing the log archive.
     pub relative_path: String,
+    /// Log contents.
     pub contents: String,
 }
 
+/// Combined battlegroup resource and runtime status snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BattlegroupStatusSnapshot {
+    /// Raw live BattleGroup custom resource JSON.
     pub battlegroup: Value,
+    /// Pods and containers in the battlegroup namespace.
     pub pods: Vec<PodContainerRef>,
+    /// Director NodePort, when discovered.
     pub director_node_port: Option<u16>,
 }
 
+/// Structured battlegroup operations over a remote command runner.
 #[derive(Debug, Clone)]
 pub struct StructuredBattlegroupOps<R> {
     runner: R,
@@ -50,10 +68,12 @@ impl<R> StructuredBattlegroupOps<R>
 where
     R: RemoteCommandRunner,
 {
+    /// Creates operations backed by a remote command runner.
     pub fn new(runner: R) -> Self {
         Self { runner }
     }
 
+    /// Lists battlegroups from all Kubernetes namespaces.
     pub fn list(&self) -> CommandResult<Vec<BattlegroupRef>> {
         let value = self.runner.run_json(
             "sudo kubectl get battlegroups -A -o json",
@@ -75,6 +95,7 @@ where
         Ok(refs)
     }
 
+    /// Returns a battlegroup status snapshot.
     pub fn status(&self, battlegroup: &BattlegroupRef) -> CommandResult<BattlegroupStatusSnapshot> {
         battlegroup.validate()?;
         let bg_command = format!(
@@ -90,6 +111,7 @@ where
         })
     }
 
+    /// Patches the region-related fields in a live BattleGroup resource.
     pub fn patch_region(&self, battlegroup: &BattlegroupRef, region: &str) -> CommandResult<()> {
         battlegroup.validate()?;
         validate_region(region)?;
@@ -123,6 +145,7 @@ where
         Ok(())
     }
 
+    /// Lists pods and containers for a namespace.
     pub fn list_pods(&self, namespace: &str) -> CommandResult<Vec<PodContainerRef>> {
         validate_kube_arg(namespace, "namespace")?;
         let command = format!(
@@ -163,6 +186,7 @@ where
         Ok(pods)
     }
 
+    /// Builds command candidates for opening a shell in a pod.
     pub fn pod_shell_spec(&self, namespace: &str, pod: &str) -> CommandResult<PodShellSpec> {
         validate_kube_arg(namespace, "namespace")?;
         validate_kube_arg(pod, "pod")?;
@@ -196,11 +220,13 @@ where
         })
     }
 
+    /// Exports logs for all containers in a namespace.
     pub fn export_namespace_logs(&self, namespace: &str) -> CommandResult<Vec<LogFile>> {
         let pods = self.list_pods(namespace)?;
         self.collect_logs(namespace, &pods)
     }
 
+    /// Exports logs for all operator containers.
     pub fn export_operator_logs(&self) -> CommandResult<Vec<LogFile>> {
         let pods = self.list_pods("funcom-operators")?;
         self.collect_logs("funcom-operators", &pods)

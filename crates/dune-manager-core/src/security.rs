@@ -1,5 +1,8 @@
+//! Redaction helpers for secrets in logs, JSON, and command failures.
+
 use serde_json::Value;
 
+/// Redacts sensitive-looking lines from plain text.
 pub fn redact_text(input: &str) -> String {
     let mut output = Vec::new();
     for line in input.lines() {
@@ -20,6 +23,7 @@ pub fn redact_text(input: &str) -> String {
     output.join("\n")
 }
 
+/// Recursively redacts sensitive-looking keys and token-like strings in JSON.
 pub fn redact_json(value: &mut Value) {
     match value {
         Value::Object(map) => {

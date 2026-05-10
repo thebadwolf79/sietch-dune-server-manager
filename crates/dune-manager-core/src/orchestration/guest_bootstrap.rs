@@ -11,17 +11,25 @@ use crate::{
     },
 };
 
+/// User-selected and token-derived inputs for guest-side bootstrap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuestBootstrapPlan {
+    /// Player-facing address written into guest settings.
     pub player_ip: String,
+    /// Human-readable world name.
     pub world_name: String,
+    /// Vendor region label for the world.
     pub world_region: String,
+    /// Self-host JWT used to create the world. Treat as secret.
     pub self_host_token: String,
+    /// Lowercase host identifier decoded from the self-host token.
     pub host_id: String,
+    /// Six-letter lowercase suffix used in the unique world resource name.
     pub world_suffix: String,
 }
 
 impl GuestBootstrapPlan {
+    /// Builds a bootstrap plan from a self-host token and generated world suffix.
     pub fn from_self_host_token(
         player_ip: impl Into<String>,
         world_name: impl Into<String>,
@@ -39,10 +47,12 @@ impl GuestBootstrapPlan {
         })
     }
 
+    /// Returns the Kubernetes-safe vendor world identifier.
     pub fn world_unique_name(&self) -> String {
         format!("sh-{}-{}", self.host_id, self.world_suffix)
     }
 
+    /// Validates addresses, world naming, region choice, and token presence.
     pub fn validate(&self) -> CommandResult<()> {
         validate_ipv4ish(&self.player_ip, "player-facing IP")?;
         validate_world_name(&self.world_name)?;
@@ -59,14 +69,19 @@ impl GuestBootstrapPlan {
     }
 }
 
+/// Identifies the world resources created by guest bootstrap.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuestBootstrapResult {
+    /// Kubernetes namespace created for the BattleGroup.
     pub namespace: String,
+    /// BattleGroup resource name.
     pub battlegroup_name: String,
+    /// Vendor unique world name used for namespace and resource creation.
     pub world_unique_name: String,
 }
 
+/// Runs the native replacement for the vendor guest setup script.
 pub struct GuestBootstrapOrchestrator<P> {
     provider: P,
 }
@@ -75,10 +90,12 @@ impl<P> GuestBootstrapOrchestrator<P>
 where
     P: GuestBootstrapProvider,
 {
+    /// Creates a guest bootstrap orchestrator around a provider.
     pub fn new(provider: P) -> Self {
         Self { provider }
     }
 
+    /// Executes disk, payload, k3s, operator, world, image, and defaults setup.
     pub fn run(
         &self,
         plan: &GuestBootstrapPlan,
@@ -229,6 +246,7 @@ where
     }
 }
 
+/// Validates a vendor-supported world region label.
 pub fn validate_region(value: &str) -> CommandResult<()> {
     match value {
         "Europe Test" | "North America Test" => Ok(()),
@@ -236,6 +254,7 @@ pub fn validate_region(value: &str) -> CommandResult<()> {
     }
 }
 
+/// Validates the six-letter suffix used in generated world names.
 pub fn validate_world_suffix(value: &str) -> CommandResult<()> {
     if value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_lowercase()) {
         Ok(())
@@ -246,6 +265,7 @@ pub fn validate_world_suffix(value: &str) -> CommandResult<()> {
     }
 }
 
+/// Extracts the lowercase host id from a self-host JWT payload.
 pub fn host_id_from_self_host_token(token: &str) -> CommandResult<String> {
     let payload = token
         .split('.')
@@ -262,6 +282,7 @@ pub fn host_id_from_self_host_token(token: &str) -> CommandResult<String> {
     Ok(host_id)
 }
 
+/// Generates a six-letter lowercase suffix for a world identifier.
 pub fn random_lowercase_suffix() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -304,6 +325,7 @@ fn base64url_decode(value: &str) -> CommandResult<Vec<u8>> {
     Ok(decoded)
 }
 
+/// Validates a decoded host id for use in Kubernetes resource names.
 pub fn validate_host_id(value: &str) -> CommandResult<()> {
     if !value.is_empty()
         && value
@@ -318,6 +340,7 @@ pub fn validate_host_id(value: &str) -> CommandResult<()> {
     }
 }
 
+/// Validates a user-facing world name.
 pub fn validate_world_name(value: &str) -> CommandResult<()> {
     let trimmed = value.trim();
     if trimmed.is_empty()

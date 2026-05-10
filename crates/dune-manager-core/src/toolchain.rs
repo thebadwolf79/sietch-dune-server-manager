@@ -1,3 +1,5 @@
+//! App-owned external tool installation and discovery.
+
 use std::{
     env,
     path::{Path, PathBuf},
@@ -15,15 +17,19 @@ const STEAMCMD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/ste
 const OPENSSH_URL: &str =
     "https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip";
 
+/// External command-line tool managed under the app-owned tools directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ManagedTool {
+    /// Valve SteamCMD client.
     #[serde(rename = "steamcmd")]
     SteamCmd,
+    /// Windows OpenSSH client distribution.
     #[serde(rename = "openssh")]
     OpenSsh,
 }
 
 impl ManagedTool {
+    /// Parses a CLI/user-facing tool name.
     pub fn parse(value: &str) -> CommandResult<Self> {
         match value.to_ascii_lowercase().as_str() {
             "steamcmd" | "steam-cmd" => Ok(Self::SteamCmd),
@@ -34,6 +40,7 @@ impl ManagedTool {
         }
     }
 
+    /// Stable identifier used in tool paths and JSON output.
     pub fn id(self) -> &'static str {
         match self {
             Self::SteamCmd => "steamcmd",
@@ -41,6 +48,7 @@ impl ManagedTool {
         }
     }
 
+    /// Executable filename expected after installation.
     pub fn executable_name(self) -> &'static str {
         match self {
             Self::SteamCmd => "steamcmd.exe",
@@ -48,6 +56,7 @@ impl ManagedTool {
         }
     }
 
+    /// Default archive URL used for installation.
     pub fn default_url(self) -> &'static str {
         match self {
             Self::SteamCmd => STEAMCMD_URL,
@@ -56,42 +65,57 @@ impl ManagedTool {
     }
 }
 
+/// Installation status for one managed tool.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolStatus {
+    /// Managed tool.
     pub tool: ManagedTool,
+    /// Whether the expected executable exists.
     pub installed: bool,
+    /// Root directory for manager-owned data.
     pub tools_root: PathBuf,
+    /// Directory where the tool is installed.
     pub install_dir: PathBuf,
+    /// Expected executable path.
     pub executable: PathBuf,
 }
 
+/// Result of installing or reusing a managed tool.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolInstallResult {
+    /// Status after the install attempt.
     pub status: ToolStatus,
+    /// Source archive URL used or selected.
     pub source_url: String,
+    /// Whether the installer performed work in this call.
     pub installed_now: bool,
 }
 
+/// Manager for app-owned external command-line tools.
 #[derive(Debug, Clone)]
 pub struct Toolchain {
     root: PathBuf,
 }
 
 impl Toolchain {
+    /// Creates a toolchain rooted at a caller-provided directory.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
 
+    /// Creates a toolchain using the default root resolution.
     pub fn from_default_root() -> CommandResult<Self> {
         Ok(Self::new(default_tools_root()?))
     }
 
+    /// Returns the root directory used for manager-owned data.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    /// Returns status for one tool.
     pub fn status(&self, tool: ManagedTool) -> ToolStatus {
         let install_dir = self.install_dir(tool);
         let executable = install_dir.join(tool.executable_name());
@@ -104,6 +128,7 @@ impl Toolchain {
         }
     }
 
+    /// Returns status for all supported tools.
     pub fn status_all(&self) -> Vec<ToolStatus> {
         [ManagedTool::SteamCmd, ManagedTool::OpenSsh]
             .into_iter()
@@ -111,6 +136,7 @@ impl Toolchain {
             .collect()
     }
 
+    /// Installs one tool from its default URL or a caller-provided archive URL.
     pub fn install(
         &self,
         tool: ManagedTool,
@@ -149,6 +175,7 @@ impl Toolchain {
     }
 }
 
+/// Resolves the default manager data root for owned tools and downloads.
 pub fn default_tools_root() -> CommandResult<PathBuf> {
     if let Ok(value) = env::var("DUNE_MANAGER_HOME") {
         let trimmed = value.trim();

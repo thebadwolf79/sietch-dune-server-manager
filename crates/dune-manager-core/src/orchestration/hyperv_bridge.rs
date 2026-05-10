@@ -11,12 +11,14 @@ use crate::{
     shell::ps_single_quoted,
 };
 
+/// Hyper-V provider implemented through strict JSON PowerShell commands.
 #[derive(Debug, Clone)]
 pub struct StrictPowerShellHyperV {
     runner: StrictCommandRunner,
 }
 
 impl StrictPowerShellHyperV {
+    /// Creates a Hyper-V bridge that invokes local PowerShell.
     pub fn new() -> Self {
         Self {
             runner: StrictCommandRunner,

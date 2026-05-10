@@ -1,8 +1,11 @@
+//! Host shell helpers used by strict command providers.
+
 use std::process::Command;
 
 use crate::errors::{command_failure, failure};
 use crate::models::CommandResult;
 
+/// Runs a program and returns trimmed stdout when it exits successfully.
 pub fn run_program(program: &str, args: &[&str]) -> CommandResult<String> {
     let output = Command::new(program)
         .args(args)
@@ -19,6 +22,7 @@ pub fn run_program(program: &str, args: &[&str]) -> CommandResult<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Runs a PowerShell script with non-profile, bypassed execution policy options.
 pub fn run_powershell(script: &str) -> CommandResult<String> {
     run_program(
         "powershell",
@@ -32,6 +36,7 @@ pub fn run_powershell(script: &str) -> CommandResult<String> {
     )
 }
 
+/// Escapes a string as a single-quoted PowerShell literal.
 pub fn ps_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }

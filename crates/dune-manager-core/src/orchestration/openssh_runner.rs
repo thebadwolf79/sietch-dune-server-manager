@@ -10,16 +10,23 @@ use crate::{
     orchestration::{RemoteCommandRunner, StrictCommandSpec},
 };
 
+/// Connection settings for invoking OpenSSH against the guest VM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenSshTarget {
+    /// Path to the OpenSSH client executable.
     pub ssh_path: PathBuf,
+    /// Path to the private key file.
     pub key_path: PathBuf,
+    /// Remote username.
     pub user: String,
+    /// Remote host or IP address.
     pub host: String,
+    /// SSH connection timeout in seconds.
     pub connect_timeout_seconds: u64,
 }
 
 impl OpenSshTarget {
+    /// Creates a target with the default connection timeout.
     pub fn new(
         ssh_path: impl Into<PathBuf>,
         key_path: impl Into<PathBuf>,
@@ -35,10 +42,12 @@ impl OpenSshTarget {
         }
     }
 
+    /// Returns the `user@host` destination string.
     pub fn destination(&self) -> String {
         format!("{}@{}", self.user, self.host)
     }
 
+    /// Validates that required files and connection fields are present.
     pub fn validate(&self) -> CommandResult<()> {
         require_existing_file(&self.ssh_path, "ssh executable")?;
         require_existing_file(&self.key_path, "ssh key")?;
@@ -52,20 +61,24 @@ impl OpenSshTarget {
     }
 }
 
+/// Remote command runner backed by the OpenSSH executable.
 #[derive(Debug, Clone)]
 pub struct OpenSshRunner {
     target: OpenSshTarget,
 }
 
 impl OpenSshRunner {
+    /// Creates a runner for an OpenSSH target.
     pub fn new(target: OpenSshTarget) -> Self {
         Self { target }
     }
 
+    /// Returns the target used by this runner.
     pub fn target(&self) -> &OpenSshTarget {
         &self.target
     }
 
+    /// Builds a command spec for opening an interactive guest shell.
     pub fn interactive_shell_spec(&self) -> CommandResult<StrictCommandSpec> {
         self.target.validate()?;
         let mut args = self.base_args();
@@ -129,6 +142,7 @@ impl RemoteCommandRunner for OpenSshRunner {
     }
 }
 
+/// Returns the base OpenSSH options used for non-interactive guest commands.
 pub fn openssh_base_args(target: &OpenSshTarget) -> Vec<String> {
     vec![
         "-o".to_string(),

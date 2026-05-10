@@ -3,6 +3,7 @@ use crate::{
     orchestration::{emit_hyperv_event, OperationSink, StepAction, StepDomain, VmProvider},
 };
 
+/// Starts and stops an existing Hyper-V VM.
 pub struct HyperVVmLifecycleOrchestrator<V> {
     vm: V,
 }
@@ -11,10 +12,12 @@ impl<V> HyperVVmLifecycleOrchestrator<V>
 where
     V: VmProvider,
 {
+    /// Creates a lifecycle orchestrator around a VM provider.
     pub fn new(vm: V) -> Self {
         Self { vm }
     }
 
+    /// Starts the named VM.
     pub fn start(&self, vm_name: &str, sink: &mut impl OperationSink) -> CommandResult<()> {
         emit_hyperv_event(
             sink,
@@ -26,6 +29,7 @@ where
         self.vm.start_vm(vm_name)
     }
 
+    /// Turns off the named VM.
     pub fn stop(&self, vm_name: &str, sink: &mut impl OperationSink) -> CommandResult<()> {
         emit_hyperv_event(
             sink,

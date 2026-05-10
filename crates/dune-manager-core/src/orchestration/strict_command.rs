@@ -10,9 +10,12 @@ use crate::{
     models::CommandResult,
 };
 
+/// Host execution bridge used by an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostBridge {
+    /// Direct process invocation.
     Native,
+    /// PowerShell invocation expected to emit exactly one JSON document.
     StrictJsonPowerShell,
 }
 
@@ -25,15 +28,20 @@ impl fmt::Display for HostBridge {
     }
 }
 
+/// Concrete command request with a stable operation id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StrictCommandSpec {
+    /// Stable command id used in errors and logs.
     pub id: &'static str,
+    /// Executable path or name.
     pub program: String,
+    /// Command-line arguments.
     pub args: Vec<String>,
 }
 
 impl StrictCommandSpec {
+    /// Creates a strict command spec.
     pub fn new(
         id: &'static str,
         program: impl Into<String>,
@@ -47,10 +55,12 @@ impl StrictCommandSpec {
     }
 }
 
+/// Runs commands and optionally parses strict JSON output.
 #[derive(Debug, Clone, Default)]
 pub struct StrictCommandRunner;
 
 impl StrictCommandRunner {
+    /// Runs a command and returns trimmed stdout text.
     pub fn run_text(&self, spec: &StrictCommandSpec) -> CommandResult<String> {
         let output = Command::new(&spec.program)
             .args(&spec.args)
@@ -68,11 +78,13 @@ impl StrictCommandRunner {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// Runs a command and parses stdout as a single JSON document.
     pub fn run_json<T: DeserializeOwned>(&self, spec: &StrictCommandSpec) -> CommandResult<T> {
         parse_single_json_document(&self.run_text(spec)?, spec.id)
     }
 }
 
+/// Parses text that must contain exactly one JSON document.
 pub fn parse_single_json_document<T: DeserializeOwned>(
     text: &str,
     label: &str,
@@ -86,6 +98,7 @@ pub fn parse_single_json_document<T: DeserializeOwned>(
     Ok(value)
 }
 
+/// Builds a non-interactive PowerShell command that should emit JSON.
 pub fn powershell_json_command(id: &'static str, script: &str) -> StrictCommandSpec {
     StrictCommandSpec::new(
         id,

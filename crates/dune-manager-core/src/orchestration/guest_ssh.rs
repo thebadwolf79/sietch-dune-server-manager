@@ -10,14 +10,19 @@ use crate::{
     orchestration::{GuestNetworkConfig, GuestProvider, OpenSshRunner, OpenSshTarget},
 };
 
+/// Guest operations implemented through OpenSSH.
 #[derive(Debug, Clone)]
 pub struct OpenSshGuestProvider {
+    /// Path to the `ssh` executable.
     pub ssh_path: PathBuf,
+    /// Path to the restricted private key used for guest access.
     pub key_path: PathBuf,
+    /// Guest username.
     pub user: String,
 }
 
 impl OpenSshGuestProvider {
+    /// Creates a guest provider for the given OpenSSH executable, key, and user.
     pub fn new(
         ssh_path: impl Into<PathBuf>,
         key_path: impl Into<PathBuf>,

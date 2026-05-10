@@ -11,18 +11,25 @@ use crate::{
     },
 };
 
+/// Default virtual disk size used when importing the vendor VM.
 pub const DEFAULT_VM_DISK_BYTES: u64 = 100 * 1024 * 1024 * 1024;
 
+/// Memory presets for the imported dedicated-server VM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MemoryProfile {
+    /// 20 GiB VM profile for a small Sietch-style server.
     Sietch20Gb,
+    /// 30 GiB VM profile for Sietch plus story content.
     SietchStory30Gb,
+    /// 40 GiB VM profile for Sietch, story, and Deep Desert content.
     SietchStoryDeepDesert40Gb,
+    /// Caller-provided startup memory in bytes.
     CustomBytes(u64),
 }
 
 impl MemoryProfile {
+    /// Returns the configured memory size in bytes.
     pub fn bytes(self) -> u64 {
         match self {
             Self::Sietch20Gb => 20 * 1024 * 1024 * 1024,
@@ -33,20 +40,31 @@ impl MemoryProfile {
     }
 }
 
+/// Host-side request for importing and preparing the Hyper-V VM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HyperVVmSetupRequest {
+    /// Server package folder containing the vendor VM files.
     pub install_path: PathBuf,
+    /// Hyper-V VM name to create or replace.
     pub vm_name: String,
+    /// Destination folder where VM files are copied.
     pub destination_path: PathBuf,
+    /// External switch name to create or reuse.
     pub switch_name: String,
+    /// Host network adapter backing the external switch.
     pub adapter_name: String,
+    /// Startup memory profile for the VM.
     pub memory: MemoryProfile,
+    /// Whether an existing VM registration with the same name may be removed.
     pub replace_existing_vm: bool,
+    /// Whether an existing destination folder may be deleted first.
     pub clear_destination: bool,
+    /// Final virtual disk size in bytes.
     pub disk_size_bytes: u64,
 }
 
 impl HyperVVmSetupRequest {
+    /// Validates required paths, names, memory, and disk settings.
     pub fn validate(&self) -> CommandResult<()> {
         if self.vm_name.trim().is_empty() {
             return Err(failure("VM name is required"));
@@ -85,22 +103,32 @@ impl Default for HyperVVmSetupRequest {
     }
 }
 
+/// Structured event emitted while an orchestration flow is running.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrchestrationEvent {
+    /// Stable step identifier.
     pub step_id: &'static str,
+    /// User-facing message for the step.
     pub message: String,
+    /// Operational domain the step belongs to.
     pub domain: StepDomain,
+    /// Kind of action being performed.
     pub action: StepAction,
+    /// Provider boundary responsible for the step.
     pub provider: ProviderKind,
 }
 
+/// Receives orchestration progress events.
 pub trait OperationSink {
+    /// Emits a single orchestration event.
     fn emit(&mut self, event: OrchestrationEvent);
 }
 
+/// Operation sink that stores all events in memory.
 #[derive(Default)]
 pub struct VecOperationSink {
+    /// Events emitted so far.
     pub events: Vec<OrchestrationEvent>,
 }
 
@@ -110,15 +138,21 @@ impl OperationSink for VecOperationSink {
     }
 }
 
+/// Host-side result of importing and preparing the Hyper-V VM.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HyperVVmSetupResult {
+    /// Name of the imported VM.
     pub vm_name: String,
+    /// Destination path used for VM files.
     pub destination_path: String,
+    /// External switch connected to the VM.
     pub switch_name: String,
+    /// Vendor VM configuration file that was imported.
     pub vmcx_path: String,
 }
 
+/// Orchestrates host-side VM import, networking, disk, memory, and startup.
 pub struct HyperVVmSetupOrchestrator<H, V> {
     host: H,
     vm: V,
@@ -129,10 +163,12 @@ where
     H: HostProvider,
     V: VmProvider,
 {
+    /// Creates a VM setup orchestrator from host and VM providers.
     pub fn new(host: H, vm: V) -> Self {
         Self { host, vm }
     }
 
+    /// Imports the packaged VM and prepares it for guest bootstrap.
     pub fn import_and_prepare_vm(
         &self,
         request: &HyperVVmSetupRequest,

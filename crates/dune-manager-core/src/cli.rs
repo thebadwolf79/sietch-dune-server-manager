@@ -17,6 +17,10 @@ use crate::{
     toolchain::{ManagedTool, Toolchain},
 };
 
+/// Runs the CLI using process arguments and returns a process exit code.
+///
+/// Successful commands print pretty JSON to stdout. Failures print a redacted
+/// JSON error envelope to stderr.
 pub fn run_cli_from_env() -> i32 {
     match run_cli(std::env::args().skip(1).collect()) {
         Ok(value) => {

@@ -1,24 +1,35 @@
+//! Controlled log events produced from noisy external command output.
+
 use serde::{Deserialize, Serialize};
 
 use crate::security::redact_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+/// Severity assigned to a controlled operation-log event.
 pub enum LogLevel {
+    /// Informational event.
     Info,
+    /// Warning event.
     Warning,
+    /// Error event.
     Error,
 }
 
+/// A structured, redacted operation-log event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationLogEvent {
+    /// Logical stage or phase that produced the event.
     pub stage: String,
+    /// Severity level for display and filtering.
     pub level: LogLevel,
+    /// Redacted user-facing message.
     pub message: String,
 }
 
 impl OperationLogEvent {
+    /// Creates an informational operation-log event.
     pub fn info(stage: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             stage: stage.into(),
@@ -27,6 +38,7 @@ impl OperationLogEvent {
         }
     }
 
+    /// Creates a warning operation-log event.
     pub fn warning(stage: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             stage: stage.into(),
@@ -35,6 +47,7 @@ impl OperationLogEvent {
         }
     }
 
+    /// Creates an error operation-log event.
     pub fn error(stage: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             stage: stage.into(),
@@ -44,14 +57,19 @@ impl OperationLogEvent {
     }
 }
 
+/// Accumulates raw command output alongside controlled user-facing events.
 #[derive(Debug, Default, Clone)]
 pub struct StreamLogCapture {
+    /// Redacted raw output, preserving lines that were observed.
     pub raw: String,
+    /// Redacted controlled output made from classified events.
     pub controlled: String,
+    /// Structured events emitted from classified command output.
     pub events: Vec<OperationLogEvent>,
 }
 
 impl StreamLogCapture {
+    /// Adds one raw output line after redaction.
     pub fn push_raw(&mut self, line: &str) {
         let line = redact_text(line).trim_end().to_string();
         if line.is_empty() {
@@ -61,6 +79,7 @@ impl StreamLogCapture {
         self.raw.push('\n');
     }
 
+    /// Adds a structured event and mirrors its message into controlled text.
     pub fn push_event(&mut self, event: OperationLogEvent) {
         let message = redact_text(&event.message).trim_end().to_string();
         if message.is_empty() {
@@ -71,11 +90,13 @@ impl StreamLogCapture {
         self.events.push(OperationLogEvent { message, ..event });
     }
 
+    /// Adds a controlled informational message without raw command text.
     pub fn push_controlled(&mut self, stage: &str, message: &str) {
         self.push_event(OperationLogEvent::info(stage, message));
     }
 }
 
+/// Classifies a raw command-output line into a controlled operation event.
 pub fn classify_command_output(stage: &str, line: &str) -> Option<OperationLogEvent> {
     let redacted = redact_text(line);
     let line = redacted.trim();
