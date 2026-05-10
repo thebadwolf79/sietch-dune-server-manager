@@ -6,7 +6,7 @@ use axum::{
         OriginalUri, Path, Query, State,
     },
     http::{header, HeaderMap, Method, StatusCode},
-    response::{IntoResponse, Response},
+    response::Response,
     routing::{any, get, post},
     Json, Router,
 };
@@ -24,26 +24,31 @@ use std::{
     env,
     net::SocketAddr,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 use tokio::{net::TcpListener, time};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
 
+mod auth;
+mod clock;
+mod director_domain;
+mod errors;
 mod models;
+mod security;
+mod state;
+mod validation;
 
+use auth::authorize;
+use clock::now_unix_ms;
+use director_domain::*;
+use errors::*;
 use models::*;
+use security::{redact_json, redact_text};
+use state::AppState;
+use validation::{validate_kube_name, validate_namespace};
 
 const DEFAULT_PORT: u16 = 8787;
-
-#[derive(Clone)]
-struct AppState {
-    client: Client,
-    namespace: String,
-    token: Option<String>,
-    director_base_url: Option<String>,
-    http: reqwest::Client,
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -631,38 +636,6 @@ async fn director_ui_proxy(
     .await
 }
 
-fn director_capabilities_list() -> Vec<DirectorPathCapability> {
-    const PATHS: &[(&str, &str)] = &[
-        ("GET", "/v0/igwoBattlegroup"),
-        ("GET", "/v0/getPodset"),
-        ("GET", "/v0/battlegroup"),
-        ("GET", "/v0/players"),
-        ("GET", "/v0/players/online"),
-        ("GET", "/v0/players/intransit"),
-        ("GET", "/v0/players/graceperiod"),
-        ("GET", "/v0/players/completion"),
-        ("GET", "/v0/players/queued"),
-        ("POST", "/v0/BattlegroupUpdateServerGroupConfig"),
-        ("POST", "/v0/BattlegroupClearMapConfigOverrides"),
-        ("GET", "/v0/BattlegroupFetchFlsReportSettings"),
-        ("GET", "/v0/BattlegroupFetchCharacterTransferRules"),
-        ("POST", "/v0/BattlegroupUpdateFlsReportSettings"),
-        ("POST", "/v0/BattlegroupUpdateCharacterTransferSettings"),
-        ("POST", "/v0/BattlegroupClearFlsReportOverrides"),
-        ("POST", "/v0/BattlegroupClearCharacterTransferOverrides"),
-    ];
-    PATHS
-        .iter()
-        .map(|(method, path)| DirectorPathCapability { method, path })
-        .collect()
-}
-
-fn is_allowed_director_api(method: &str, path: &str) -> bool {
-    director_capabilities_list()
-        .iter()
-        .any(|item| item.method == method && item.path == path)
-}
-
 async fn director_get_json(state: &AppState, path: &str) -> Result<Value, ApiError> {
     let base_url = resolve_director_base_url(state).await?;
     let value = state
@@ -826,190 +799,6 @@ async fn discover_director_base_url(state: &AppState) -> Result<String, ApiError
     Err(ApiError::bad_gateway(
         "DIRECTOR_BASE_URL is not configured and Director service discovery failed",
     ))
-}
-
-fn query_token(query: Option<&str>) -> Option<&str> {
-    query.and_then(|query| {
-        query.split('&').find_map(|part| {
-            let (key, value) = part.split_once('=')?;
-            (key == "token").then_some(value)
-        })
-    })
-}
-
-fn director_query(query: Option<&str>) -> Option<String> {
-    query.map(|query| {
-        query
-            .split('&')
-            .filter(|part| !part.starts_with("token="))
-            .collect::<Vec<_>>()
-            .join("&")
-    })
-}
-
-fn validate_director_map_name(value: &str) -> Result<(), ApiError> {
-    if value.is_empty()
-        || !value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
-    {
-        return Err(ApiError::bad_request("invalid Director map name"));
-    }
-    Ok(())
-}
-
-fn is_safe_static_path(value: &str) -> bool {
-    !value.is_empty()
-        && !value.contains("..")
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/'))
-}
-
-fn director_player_summary(value: &Value) -> DirectorPlayerSummary {
-    let mut summary = DirectorPlayerSummary {
-        login_requests_total: value_i64(value, "numLoginRequestsTotal"),
-        travel_requests_total: value_i64(value, "numTravelRequestsTotal"),
-        ..Default::default()
-    };
-    for map in director_all_map_values(value) {
-        for server in director_server_values(map) {
-            summary.active += value_i64(server, "numPlayersInGame");
-            summary.online += value_i64(server, "numPlayersOnline");
-            summary.in_transit += value_i64(server, "numPlayersInTransit");
-            summary.grace_period += value_i64(server, "numPlayersInGracePeriod");
-            summary.completion += value_i64(server, "numPlayersWithCompletion");
-            summary.queued += value_i64(server, "numPlayersInQueue");
-        }
-        if director_server_values(map).is_empty() {
-            summary.active += value_i64(map, "numPlayersInGame");
-            summary.online += value_i64(map, "numPlayersOnline");
-            summary.in_transit += value_i64(map, "numPlayersInTransit");
-            summary.grace_period += value_i64(map, "numPlayersInGracePeriod");
-            summary.completion += value_i64(map, "numPlayersWithCompletion");
-            summary.queued += value_i64(map, "numPlayersInQueue");
-        }
-    }
-    summary
-}
-
-fn director_map_summaries(value: &Value) -> Vec<DirectorMapSummary> {
-    let mut maps = Vec::new();
-    collect_director_maps(value, "singleServerMaps", "Single", &mut maps);
-    collect_director_maps(value, "dimensionMaps", "Dimension", &mut maps);
-    collect_director_maps(value, "instancedMaps", "Instanced", &mut maps);
-    maps.sort_by(|left, right| left.name.cmp(&right.name));
-    maps
-}
-
-fn collect_director_maps(
-    value: &Value,
-    key: &str,
-    kind: &str,
-    output: &mut Vec<DirectorMapSummary>,
-) {
-    let Some(items) = value.get(key).and_then(Value::as_object) else {
-        return;
-    };
-    for (name, map) in items {
-        let servers = director_server_values(map)
-            .into_iter()
-            .map(director_server_summary)
-            .collect::<Vec<_>>();
-        let players = if servers.is_empty() {
-            value_i64(map, "numPlayersInGame")
-        } else {
-            servers.iter().map(|server| server.players).sum()
-        };
-        let online = if servers.is_empty() {
-            value_i64(map, "numPlayersOnline")
-        } else {
-            servers.iter().map(|server| server.online).sum()
-        };
-        let queued = if servers.is_empty() {
-            value_i64(map, "numPlayersInQueue")
-        } else {
-            servers.iter().filter_map(|server| server.queued).sum()
-        };
-        output.push(DirectorMapSummary {
-            name: name.clone(),
-            kind: kind.to_string(),
-            players,
-            online,
-            queued,
-            servers,
-            has_override: !map.get("webOverrideCfg").unwrap_or(&Value::Null).is_null(),
-        });
-    }
-}
-
-fn director_all_map_values(value: &Value) -> Vec<&Value> {
-    ["singleServerMaps", "dimensionMaps", "instancedMaps"]
-        .iter()
-        .flat_map(|key| {
-            value
-                .get(*key)
-                .and_then(Value::as_object)
-                .map(|items| items.values().collect::<Vec<_>>())
-                .unwrap_or_default()
-        })
-        .collect()
-}
-
-fn director_server_values(map: &Value) -> Vec<&Value> {
-    if let Some(items) = map.get("serversByDimension").and_then(Value::as_object) {
-        return items.values().collect();
-    }
-    if let Some(items) = map.get("instances").and_then(Value::as_array) {
-        return items.iter().collect();
-    }
-    if let Some(items) = map.get("instances").and_then(Value::as_object) {
-        return items.values().collect();
-    }
-    if map.get("partition").is_some() {
-        return vec![map];
-    }
-    Vec::new()
-}
-
-fn director_server_summary(value: &Value) -> DirectorServerSummary {
-    let partition = &value["partition"];
-    let status_code = value_i64(value, "status");
-    let heartbeat_seconds_ago = value["lastServerState"]["reportTimestamp"]
-        .as_i64()
-        .map(|timestamp| (now_unix_ms() as i64 / 1000).saturating_sub(timestamp));
-    DirectorServerSummary {
-        label: partition["label"]
-            .as_str()
-            .or_else(|| value["lastServerState"]["displayName"].as_str())
-            .unwrap_or_default()
-            .to_string(),
-        server_id: partition["serverId"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        partition_id: partition["partitionId"].as_i64(),
-        dimension_index: partition["dimensionIndex"].as_i64(),
-        players: value_i64(value, "numPlayersInGame"),
-        online: value_i64(value, "numPlayersOnline"),
-        queued: value.get("numPlayersInQueue").and_then(Value::as_i64),
-        status: match status_code {
-            1 => "Allocating",
-            2 => "Running But Not Ready",
-            3 => "Running",
-            _ => "Not Available",
-        }
-        .to_string(),
-        heartbeat_seconds_ago,
-        has_override: !value
-            .get("webOverrideCfg")
-            .unwrap_or(&Value::Null)
-            .is_null(),
-    }
-}
-
-fn value_i64(value: &Value, key: &str) -> i64 {
-    value.get(key).and_then(Value::as_i64).unwrap_or_default()
 }
 
 async fn telemetry(
@@ -1349,177 +1138,4 @@ fn unique_strings(values: impl Iterator<Item = String>) -> Vec<String> {
         }
     }
     output
-}
-
-fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-    query_token: Option<&str>,
-) -> Result<(), ApiError> {
-    let Some(expected) = state.token.as_deref() else {
-        return Ok(());
-    };
-
-    let bearer = headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .or(query_token)
-        .or_else(|| cookie_token(headers));
-
-    match bearer {
-        Some(actual) if constant_time_eq(actual.as_bytes(), expected.as_bytes()) => Ok(()),
-        _ => Err(ApiError::unauthorized()),
-    }
-}
-
-fn cookie_token(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| {
-            value.split(';').find_map(|part| {
-                let (key, token) = part.trim().split_once('=')?;
-                (key == "dune_manager_token").then_some(token)
-            })
-        })
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.iter()
-        .zip(right.iter())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
-}
-
-fn validate_kube_name(value: &str) -> Result<(), ApiError> {
-    if value.is_empty()
-        || !value
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.')
-    {
-        return Err(ApiError::bad_request("invalid Kubernetes resource name"));
-    }
-    Ok(())
-}
-
-fn validate_namespace(state: &AppState, namespace: &str) -> Result<(), ApiError> {
-    validate_kube_name(namespace)?;
-    if namespace != state.namespace {
-        return Err(ApiError::bad_request(format!(
-            "manager API is scoped to namespace {}",
-            state.namespace
-        )));
-    }
-    Ok(())
-}
-
-fn now_unix_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
-}
-
-fn redact_json(value: Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, child)| {
-                    let lower = key.to_ascii_lowercase();
-                    if lower.contains("token")
-                        || lower.contains("secret")
-                        || lower.contains("password")
-                        || lower.contains("apikey")
-                        || lower.contains("auth")
-                    {
-                        (key, Value::String("<redacted>".to_string()))
-                    } else {
-                        (key, redact_json(child))
-                    }
-                })
-                .collect::<serde_json::Map<_, _>>(),
-        ),
-        Value::Array(items) => Value::Array(items.into_iter().map(redact_json).collect()),
-        Value::String(text) if looks_like_jwt(&text) => Value::String("<redacted>".to_string()),
-        other => other,
-    }
-}
-
-fn redact_text(input: &str) -> String {
-    input
-        .lines()
-        .map(|line| {
-            let lower = line.to_ascii_lowercase();
-            if lower.contains("token")
-                || lower.contains("secret")
-                || lower.contains("password")
-                || lower.contains("apikey")
-                || lower.contains("auth")
-            {
-                "<redacted>".to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn looks_like_jwt(value: &str) -> bool {
-    let mut parts = value.split('.');
-    matches!(
-        (parts.next(), parts.next(), parts.next(), parts.next()),
-        (Some(a), Some(b), Some(c), None) if a.len() > 8 && b.len() > 8 && c.len() > 8
-    )
-}
-
-type ApiResponse<T> = Result<Json<T>, ApiError>;
-
-#[derive(Debug)]
-struct ApiError {
-    status: StatusCode,
-    message: String,
-}
-
-impl ApiError {
-    fn bad_request(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: message.into(),
-        }
-    }
-
-    fn bad_gateway(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_GATEWAY,
-            message: message.into(),
-        }
-    }
-
-    fn unauthorized() -> Self {
-        Self {
-            status: StatusCode::UNAUTHORIZED,
-            message: "unauthorized".to_string(),
-        }
-    }
-}
-
-impl From<anyhow::Error> for ApiError {
-    fn from(error: anyhow::Error) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: error.to_string(),
-        }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let body = Json(json!({ "error": self.message }));
-        (self.status, body).into_response()
-    }
 }
