@@ -12,8 +12,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AppHeader, AppSidebar, StatusStrip } from "./components/appShell";
-import { EmptyState, InfoRow, StatusPill } from "./components/primitives";
 import { BattleGroupsPanel } from "./views/battlegroups";
+import { ConfigView } from "./views/config";
 import { DirectorView } from "./views/director";
 import { EnvironmentPanel } from "./views/environment";
 import { HostVmPanels, VmRequiredNotice } from "./views/hostVm";
@@ -828,294 +828,28 @@ export default function App() {
         )}
 
         {managerToolsInstalled && activeView === "config" && (
-          <>
-            <section className="panel">
-              <div className="panel-title">
-                <h2>Live Config</h2>
-                <SlidersHorizontal size={19} />
-              </div>
-              {!battleGroupDetail ? (
-                <EmptyState text="No live BattleGroup detail loaded." />
-              ) : (
-                <>
-                  <section className="config-summary">
-                    <InfoRow label="Title" value={battleGroupDetail.title} />
-                    <InfoRow label="Database" value={battleGroupDetail.databasePhase || "Unknown"} />
-                    <InfoRow
-                      label="Server group"
-                      value={battleGroupDetail.serverGroupPhase || battleGroupDetail.phase}
-                    />
-                    <InfoRow label="Gateway" value={battleGroupDetail.gatewayPhase || "Unknown"} />
-                    <InfoRow label="Director" value={battleGroupDetail.directorPhase || "Unknown"} />
-                    <InfoRow label="Stop flag" value={battleGroupDetail.stop ? "true" : "false"} />
-                  </section>
-                  <div className="image-list">
-                    <strong>Images</strong>
-                    {[battleGroupDetail.serverImage, ...battleGroupDetail.utilityImages]
-                      .filter(Boolean)
-                      .map((image) => (
-                        <span className="mono chip" key={image}>
-                          {image}
-                        </span>
-                      ))}
-                  </div>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Map</th>
-                          <th>Replicas</th>
-                          <th>Memory</th>
-                          <th>Scaling</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {battleGroupDetail.serverSets.map((set) => (
-                          <tr key={set.map}>
-                            <td>
-                              <strong>{set.map}</strong>
-                            </td>
-                            <td>{set.replicas}</td>
-                            <td>{set.memoryLimit || "Unset"}</td>
-                            <td>{set.dedicatedScaling ? "Dedicated" : "Fixed"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-            </section>
-            {directorAvailable && (
-              <section className="panel">
-                <div className="panel-title">
-                  <h2>Director Config</h2>
-                  <Map size={19} />
-                </div>
-                <section className="native-config-grid">
-                  <div className="native-config-box">
-                    <div className="mini-title">
-                      <strong>FLS Report Settings</strong>
-                      <span>{directorFlsConfig?.webOverrideConfig ? "Override active" : "Base config"}</span>
-                    </div>
-                    <label>
-                      Heartbeat update seconds
-                      <input
-                        type="number"
-                        min="1"
-                        value={flsDraft.heartbeatSeconds}
-                        onChange={(event) => setFlsDraft({ ...flsDraft, heartbeatSeconds: event.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Settings update seconds
-                      <input
-                        type="number"
-                        min="1"
-                        value={flsDraft.settingsSeconds}
-                        onChange={(event) => setFlsDraft({ ...flsDraft, settingsSeconds: event.target.value })}
-                      />
-                    </label>
-                    <div className="button-row">
-                      <button onClick={saveFlsConfig} disabled={busy || !flsDraft.heartbeatSeconds || !flsDraft.settingsSeconds}>
-                        Update
-                      </button>
-                      <button onClick={clearFlsConfig} disabled={busy}>
-                        Clear Override
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="native-config-box">
-                    <div className="mini-title">
-                      <strong>Character Transfer</strong>
-                      <span>{directorTransferConfig?.webOverrideConfig ? "Override active" : "Base config"}</span>
-                    </div>
-                    <div className="form-grid">
-                      <label>
-                        Incoming
-                        <select
-                          value={transferDraft.incoming}
-                          onChange={(event) => setTransferDraft({ ...transferDraft, incoming: event.target.value })}
-                        >
-                          <option value="0">Default</option>
-                          <option value="10">Deny all incoming</option>
-                          <option value="20">Accept private</option>
-                          <option value="30">Accept official</option>
-                          <option value="40">Accept all</option>
-                        </select>
-                      </label>
-                      <label>
-                        Export timeout
-                        <input
-                          type="number"
-                          min="1"
-                          value={transferDraft.exportTimeout}
-                          onChange={(event) => setTransferDraft({ ...transferDraft, exportTimeout: event.target.value })}
-                        />
-                      </label>
-                      <label>
-                        Import timeout
-                        <input
-                          type="number"
-                          min="1"
-                          value={transferDraft.importTimeout}
-                          onChange={(event) => setTransferDraft({ ...transferDraft, importTimeout: event.target.value })}
-                        />
-                      </label>
-                      <label>
-                        Validate timeout
-                        <input
-                          type="number"
-                          min="1"
-                          value={transferDraft.validateTimeout}
-                          onChange={(event) => setTransferDraft({ ...transferDraft, validateTimeout: event.target.value })}
-                        />
-                      </label>
-                    </div>
-                    <div className="toggle-grid">
-                      <label><input type="checkbox" checked={transferDraft.deleteOrigin} onChange={(event) => setTransferDraft({ ...transferDraft, deleteOrigin: event.target.checked })} /> Delete origin</label>
-                      <label><input type="checkbox" checked={transferDraft.outgoing} onChange={(event) => setTransferDraft({ ...transferDraft, outgoing: event.target.checked })} /> Outgoing</label>
-                      <label><input type="checkbox" checked={transferDraft.freeFrom} onChange={(event) => setTransferDraft({ ...transferDraft, freeFrom: event.target.checked })} /> Free from</label>
-                      <label><input type="checkbox" checked={transferDraft.freeTo} onChange={(event) => setTransferDraft({ ...transferDraft, freeTo: event.target.checked })} /> Free to</label>
-                      <label><input type="checkbox" checked={transferDraft.worldClosed} onChange={(event) => setTransferDraft({ ...transferDraft, worldClosed: event.target.checked })} /> World closed</label>
-                      <label><input type="checkbox" checked={transferDraft.worldClosingSoon} onChange={(event) => setTransferDraft({ ...transferDraft, worldClosingSoon: event.target.checked })} /> Closing soon</label>
-                    </div>
-                    <div className="button-row">
-                      <button onClick={saveTransferConfig} disabled={busy || !transferDraft.exportTimeout || !transferDraft.importTimeout || !transferDraft.validateTimeout}>
-                        Update
-                      </button>
-                      <button onClick={clearTransferConfig} disabled={busy}>
-                        Clear Override
-                      </button>
-                    </div>
-                  </div>
-                </section>
-              </section>
-            )}
-            {directorAvailable && selectedDirectorMapSummary && (
-              <section className="panel">
-                <div className="panel-title">
-                  <h2>Map Override</h2>
-                  <SlidersHorizontal size={19} />
-                </div>
-                <section className="native-config-box">
-                  <div className="form-grid">
-                    <label>
-                      Map
-                      <select
-                        value={selectedDirectorMapSummary.name}
-                        onChange={(event) => setSelectedDirectorMap(event.target.value)}
-                      >
-                        {directorMaps.map((map) => (
-                          <option value={map.name} key={`${map.kind}-option-${map.name}`}>
-                            {map.name} ({map.kind})
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label>
-                      Player hard cap
-                      <input
-                        type="number"
-                        min="1"
-                        value={mapOverrideDraft.playerHardCap}
-                        onChange={(event) =>
-                          setMapOverrideDraft({ ...mapOverrideDraft, playerHardCap: event.target.value })
-                        }
-                        placeholder="leave empty for null"
-                      />
-                    </label>
-                    {selectedDirectorMapSummary.kind === "Instanced" && (
-                      <>
-                        <label>
-                          Scaling throttle
-                          <input
-                            type="number"
-                            min="0"
-                            value={mapOverrideDraft.throttlingSeconds}
-                            onChange={(event) =>
-                              setMapOverrideDraft({ ...mapOverrideDraft, throttlingSeconds: event.target.value })
-                            }
-                            placeholder="seconds"
-                          />
-                        </label>
-                        <label>
-                          Min servers
-                          <input
-                            type="number"
-                            min="0"
-                            value={mapOverrideDraft.minServers}
-                            onChange={(event) =>
-                              setMapOverrideDraft({ ...mapOverrideDraft, minServers: event.target.value })
-                            }
-                          />
-                        </label>
-                        <label>
-                          Extra servers
-                          <input
-                            type="number"
-                            min="0"
-                            value={mapOverrideDraft.extraServers}
-                            onChange={(event) =>
-                              setMapOverrideDraft({ ...mapOverrideDraft, extraServers: event.target.value })
-                            }
-                          />
-                        </label>
-                      </>
-                    )}
-                  </div>
-                  <div className="toggle-grid">
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={mapOverrideDraft.updatePlayerCountOnFls}
-                        onChange={(event) =>
-                          setMapOverrideDraft({ ...mapOverrideDraft, updatePlayerCountOnFls: event.target.checked })
-                        }
-                      />
-                      Update player count on FLS
-                    </label>
-                    {selectedDirectorMapSummary.kind === "Dimension" && (
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={mapOverrideDraft.enforceSameHomeDimension}
-                          onChange={(event) =>
-                            setMapOverrideDraft({ ...mapOverrideDraft, enforceSameHomeDimension: event.target.checked })
-                          }
-                        />
-                        Enforce same home dimension
-                      </label>
-                    )}
-                    {selectedDirectorMapSummary.kind === "Instanced" && (
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={mapOverrideDraft.automaticScaling}
-                          onChange={(event) =>
-                            setMapOverrideDraft({ ...mapOverrideDraft, automaticScaling: event.target.checked })
-                          }
-                        />
-                        Automatic scaling
-                      </label>
-                    )}
-                  </div>
-                  <div className="button-row">
-                    <button onClick={saveMapOverride} disabled={busy}>
-                      Update Override
-                    </button>
-                    <button
-                      onClick={() => clearMapOverride(selectedDirectorMapSummary.name)}
-                      disabled={busy || !selectedDirectorMapSummary.hasOverride}
-                    >
-                      Clear Override
-                    </button>
-                  </div>
-                </section>
-              </section>
-            )}
-          </>
+          <ConfigView
+            battleGroupDetail={battleGroupDetail}
+            directorAvailable={directorAvailable}
+            directorFlsConfig={directorFlsConfig}
+            directorTransferConfig={directorTransferConfig}
+            directorMaps={directorMaps}
+            selectedDirectorMapSummary={selectedDirectorMapSummary}
+            flsDraft={flsDraft}
+            transferDraft={transferDraft}
+            mapOverrideDraft={mapOverrideDraft}
+            busy={busy}
+            onFlsDraftChange={setFlsDraft}
+            onTransferDraftChange={setTransferDraft}
+            onMapOverrideDraftChange={setMapOverrideDraft}
+            onSaveFlsConfig={saveFlsConfig}
+            onClearFlsConfig={clearFlsConfig}
+            onSaveTransferConfig={saveTransferConfig}
+            onClearTransferConfig={clearTransferConfig}
+            onSelectMap={setSelectedDirectorMap}
+            onSaveMapOverride={saveMapOverride}
+            onClearMapOverride={clearMapOverride}
+          />
         )}
 
         {directorAvailable && activeView === "director" && (
