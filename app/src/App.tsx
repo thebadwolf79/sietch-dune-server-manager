@@ -223,6 +223,34 @@ type DirectorMapSummary = {
   hasOverride: boolean;
 };
 
+type FlsDraft = {
+  heartbeatSeconds: string;
+  settingsSeconds: string;
+};
+
+type TransferDraft = {
+  deleteOrigin: boolean;
+  incoming: string;
+  outgoing: boolean;
+  exportTimeout: string;
+  importTimeout: string;
+  freeFrom: boolean;
+  freeTo: boolean;
+  validateTimeout: string;
+  worldClosed: boolean;
+  worldClosingSoon: boolean;
+};
+
+type MapOverrideDraft = {
+  playerHardCap: string;
+  updatePlayerCountOnFls: boolean;
+  enforceSameHomeDimension: boolean;
+  automaticScaling: boolean;
+  throttlingSeconds: string;
+  minServers: string;
+  extraServers: string;
+};
+
 type ViewKey =
   | "overview"
   | "host"
@@ -335,6 +363,25 @@ function valueAt(value: unknown, path: string[]) {
   return JSON.stringify(current);
 }
 
+function numberAt(value: unknown, path: string[], fallback = "") {
+  const found = valueAt(value, path);
+  return found === null ? fallback : String(found);
+}
+
+function boolAt(value: unknown, path: string[], fallback = false) {
+  let current = value;
+  for (const key of path) {
+    if (!current || typeof current !== "object" || !(key in current)) return fallback;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return typeof current === "boolean" ? current : fallback;
+}
+
+function nullableNumber(value: string) {
+  const trimmed = value.trim();
+  return trimmed ? Number(trimmed) : null;
+}
+
 function generateToken() {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -366,6 +413,29 @@ export default function App() {
   const [directorMaps, setDirectorMaps] = useState<DirectorMapSummary[]>([]);
   const [directorFlsConfig, setDirectorFlsConfig] = useState<Record<string, unknown> | null>(null);
   const [directorTransferConfig, setDirectorTransferConfig] = useState<Record<string, unknown> | null>(null);
+  const [selectedDirectorMap, setSelectedDirectorMap] = useState("");
+  const [flsDraft, setFlsDraft] = useState<FlsDraft>({ heartbeatSeconds: "", settingsSeconds: "" });
+  const [transferDraft, setTransferDraft] = useState<TransferDraft>({
+    deleteOrigin: true,
+    incoming: "0",
+    outgoing: false,
+    exportTimeout: "",
+    importTimeout: "",
+    freeFrom: false,
+    freeTo: false,
+    validateTimeout: "",
+    worldClosed: false,
+    worldClosingSoon: false
+  });
+  const [mapOverrideDraft, setMapOverrideDraft] = useState<MapOverrideDraft>({
+    playerHardCap: "",
+    updatePlayerCountOnFls: false,
+    enforceSameHomeDimension: false,
+    automaticScaling: false,
+    throttlingSeconds: "",
+    minServers: "",
+    extraServers: ""
+  });
   const [activeView, setActiveView] = useState<ViewKey>("overview");
 
   const selectedBattleGroup = useMemo(
@@ -421,13 +491,8 @@ export default function App() {
     { key: "config", label: "Config", icon: SlidersHorizontal, disabled: !managerToolsInstalled },
     { key: "logs", label: "Logs", icon: Terminal, disabled: !managerToolsInstalled }
   ];
-  const managerBaseUrl = config.managerApiUrl.trim().replace(/\/$/, "");
-  const directorProxyUrl =
-    managerBaseUrl && config.managerApiToken
-      ? `${managerBaseUrl}/director?token=${encodeURIComponent(config.managerApiToken)}`
-      : managerBaseUrl
-        ? `${managerBaseUrl}/director`
-        : "";
+  const selectedDirectorMapSummary =
+    directorMaps.find((map) => map.name === selectedDirectorMap) ?? directorMaps[0] ?? null;
 
   async function capture<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
     try {
@@ -558,6 +623,126 @@ export default function App() {
     if (maps) setDirectorMaps(maps);
     if (flsConfig) setDirectorFlsConfig(flsConfig);
     if (transferConfig) setDirectorTransferConfig(transferConfig);
+  }
+
+  async function saveFlsConfig() {
+    setBusy(true);
+    await capture("Update Director FLS config", () =>
+      managerRequest<Record<string, unknown>>("/api/director/config/fls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          FlsServerHeartbeatUpdateFrequencySeconds: Number(flsDraft.heartbeatSeconds),
+          FlsServerSettingsUpdateFrequencySeconds: Number(flsDraft.settingsSeconds)
+        })
+      })
+    );
+    await loadDirectorData();
+    setBusy(false);
+  }
+
+  async function clearFlsConfig() {
+    setBusy(true);
+    await capture("Clear Director FLS overrides", () =>
+      managerRequest<Record<string, unknown>>("/api/director/config/fls", { method: "DELETE" })
+    );
+    await loadDirectorData();
+    setBusy(false);
+  }
+
+  async function saveTransferConfig() {
+    setBusy(true);
+    await capture("Update Director character transfer config", () =>
+      managerRequest<Record<string, unknown>>("/api/director/config/character-transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ShouldDeleteOriginCharactersDuringTransfers: transferDraft.deleteOrigin,
+          IncomingCharacterTransfers: Number(transferDraft.incoming),
+          AcceptOutgoingCharacterTransfers: transferDraft.outgoing,
+          ExportCharacterTimeout: Number(transferDraft.exportTimeout),
+          ImportCharacterTimeout: Number(transferDraft.importTimeout),
+          FreeToTransferCharactersFrom: transferDraft.freeFrom,
+          FreeToTransferCharactersTo: transferDraft.freeTo,
+          ValidateBeforeImportCharacterTimeout: Number(transferDraft.validateTimeout),
+          ForceIsWorldClosed: transferDraft.worldClosed,
+          ForceIsWorldClosingSoon: transferDraft.worldClosingSoon
+        })
+      })
+    );
+    await loadDirectorData();
+    setBusy(false);
+  }
+
+  async function clearTransferConfig() {
+    setBusy(true);
+    await capture("Clear Director character transfer overrides", () =>
+      managerRequest<Record<string, unknown>>("/api/director/config/character-transfer", { method: "DELETE" })
+    );
+    await loadDirectorData();
+    setBusy(false);
+  }
+
+  async function saveMapOverride() {
+    if (!selectedDirectorMapSummary) return;
+    const mapName = selectedDirectorMapSummary.name;
+    const config =
+      selectedDirectorMapSummary.kind === "Dimension"
+        ? {
+            MapName: mapName,
+            DimensionServerGroupConfig: {
+              EnforceSameHomeDimensionForAll: mapOverrideDraft.enforceSameHomeDimension,
+              PlayerHardCap: nullableNumber(mapOverrideDraft.playerHardCap),
+              ShouldUpdatePlayerCountOnFls: mapOverrideDraft.updatePlayerCountOnFls,
+              DimensionOverrides: null
+            }
+          }
+        : selectedDirectorMapSummary.kind === "Instanced"
+          ? {
+              MapName: mapName,
+              ClassicalInstancingGroupConfig: {
+                PlayerHardCap: nullableNumber(mapOverrideDraft.playerHardCap),
+                ShouldUpdatePlayerCountOnFls: mapOverrideDraft.updatePlayerCountOnFls,
+                EnableAutomaticInstanceScaling: mapOverrideDraft.automaticScaling,
+                InstanceScalingThrottlingSeconds: nullableNumber(mapOverrideDraft.throttlingSeconds),
+                MinServers: nullableNumber(mapOverrideDraft.minServers),
+                NumExtraServers: nullableNumber(mapOverrideDraft.extraServers)
+              }
+            }
+          : {
+              MapName: mapName,
+              SingleServerConfig: {
+                PlayerHardCap: nullableNumber(mapOverrideDraft.playerHardCap),
+                ShouldUpdatePlayerCountOnFls: mapOverrideDraft.updatePlayerCountOnFls
+              }
+            };
+
+    setBusy(true);
+    await capture("Update Director map override", () =>
+      managerRequest<Record<string, unknown>>(
+        `/api/director/config/maps/${encodeURIComponent(mapName)}/override`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(config)
+        }
+      )
+    );
+    await loadDirectorData();
+    setBusy(false);
+  }
+
+  async function clearMapOverride(mapName = selectedDirectorMapSummary?.name) {
+    if (!mapName) return;
+    setBusy(true);
+    await capture("Clear Director map override", () =>
+      managerRequest<Record<string, unknown>>(
+        `/api/director/config/maps/${encodeURIComponent(mapName)}/override`,
+        { method: "DELETE" }
+      )
+    );
+    await loadDirectorData();
+    setBusy(false);
   }
 
   async function startVm() {
@@ -766,6 +951,36 @@ export default function App() {
       setActiveView("manager");
     }
   }, [activeViewRequiresDirector, activeViewRequiresManager, directorAvailable, managerToolsInstalled]);
+
+  useEffect(() => {
+    if (!directorFlsConfig) return;
+    setFlsDraft({
+      heartbeatSeconds: numberAt(directorFlsConfig, ["config", "flsServerHeartbeatUpdateFrequencySeconds"]),
+      settingsSeconds: numberAt(directorFlsConfig, ["config", "flsServerSettingsUpdateFrequencySeconds"])
+    });
+  }, [directorFlsConfig]);
+
+  useEffect(() => {
+    if (!directorTransferConfig) return;
+    setTransferDraft({
+      deleteOrigin: boolAt(directorTransferConfig, ["config", "shouldDeleteOriginCharactersDuringTransfers"], true),
+      incoming: numberAt(directorTransferConfig, ["config", "incomingCharacterTransfers"], "0"),
+      outgoing: boolAt(directorTransferConfig, ["config", "acceptOutgoingCharacterTransfers"]),
+      exportTimeout: numberAt(directorTransferConfig, ["config", "exportCharacterTimeout"]),
+      importTimeout: numberAt(directorTransferConfig, ["config", "importCharacterTimeout"]),
+      freeFrom: boolAt(directorTransferConfig, ["config", "freeToTransferCharactersFrom"]),
+      freeTo: boolAt(directorTransferConfig, ["config", "freeToTransferCharactersTo"]),
+      validateTimeout: numberAt(directorTransferConfig, ["config", "validateBeforeImportCharacterTimeout"]),
+      worldClosed: boolAt(directorTransferConfig, ["config", "forceIsWorldClosed"]),
+      worldClosingSoon: boolAt(directorTransferConfig, ["config", "forceIsWorldClosingSoon"])
+    });
+  }, [directorTransferConfig]);
+
+  useEffect(() => {
+    if (!selectedDirectorMap && directorMaps.length > 0) {
+      setSelectedDirectorMap(directorMaps[0].name);
+    }
+  }, [directorMaps, selectedDirectorMap]);
 
   const pods = workloads?.pods.items ?? [];
   const services = workloads?.services.items ?? [];
@@ -1178,35 +1393,227 @@ export default function App() {
                   <h2>Director Config</h2>
                   <Map size={19} />
                 </div>
-                <section className="config-summary">
-                  <InfoRow
-                    label="FLS heartbeat"
-                    value={valueAt(directorFlsConfig, ["config", "flsServerHeartbeatUpdateFrequencySeconds"])}
-                  />
-                  <InfoRow
-                    label="FLS settings"
-                    value={valueAt(directorFlsConfig, ["config", "flsServerSettingsUpdateFrequencySeconds"])}
-                  />
-                  <InfoRow
-                    label="Incoming transfers"
-                    value={valueAt(directorTransferConfig, ["config", "incomingCharacterTransfers"])}
-                  />
-                  <InfoRow
-                    label="Outgoing transfers"
-                    value={valueAt(directorTransferConfig, ["config", "acceptOutgoingCharacterTransfers"])}
-                  />
-                  <InfoRow
-                    label="World closed"
-                    value={valueAt(directorTransferConfig, ["config", "forceIsWorldClosed"])}
-                  />
-                  <InfoRow
-                    label="World closing soon"
-                    value={valueAt(directorTransferConfig, ["config", "forceIsWorldClosingSoon"])}
-                  />
+                <section className="native-config-grid">
+                  <div className="native-config-box">
+                    <div className="mini-title">
+                      <strong>FLS Report Settings</strong>
+                      <span>{directorFlsConfig?.webOverrideConfig ? "Override active" : "Base config"}</span>
+                    </div>
+                    <label>
+                      Heartbeat update seconds
+                      <input
+                        type="number"
+                        min="1"
+                        value={flsDraft.heartbeatSeconds}
+                        onChange={(event) => setFlsDraft({ ...flsDraft, heartbeatSeconds: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Settings update seconds
+                      <input
+                        type="number"
+                        min="1"
+                        value={flsDraft.settingsSeconds}
+                        onChange={(event) => setFlsDraft({ ...flsDraft, settingsSeconds: event.target.value })}
+                      />
+                    </label>
+                    <div className="button-row">
+                      <button onClick={saveFlsConfig} disabled={busy || !flsDraft.heartbeatSeconds || !flsDraft.settingsSeconds}>
+                        Update
+                      </button>
+                      <button onClick={clearFlsConfig} disabled={busy}>
+                        Clear Override
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="native-config-box">
+                    <div className="mini-title">
+                      <strong>Character Transfer</strong>
+                      <span>{directorTransferConfig?.webOverrideConfig ? "Override active" : "Base config"}</span>
+                    </div>
+                    <div className="form-grid">
+                      <label>
+                        Incoming
+                        <select
+                          value={transferDraft.incoming}
+                          onChange={(event) => setTransferDraft({ ...transferDraft, incoming: event.target.value })}
+                        >
+                          <option value="0">Default</option>
+                          <option value="10">Deny all incoming</option>
+                          <option value="20">Accept private</option>
+                          <option value="30">Accept official</option>
+                          <option value="40">Accept all</option>
+                        </select>
+                      </label>
+                      <label>
+                        Export timeout
+                        <input
+                          type="number"
+                          min="1"
+                          value={transferDraft.exportTimeout}
+                          onChange={(event) => setTransferDraft({ ...transferDraft, exportTimeout: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        Import timeout
+                        <input
+                          type="number"
+                          min="1"
+                          value={transferDraft.importTimeout}
+                          onChange={(event) => setTransferDraft({ ...transferDraft, importTimeout: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        Validate timeout
+                        <input
+                          type="number"
+                          min="1"
+                          value={transferDraft.validateTimeout}
+                          onChange={(event) => setTransferDraft({ ...transferDraft, validateTimeout: event.target.value })}
+                        />
+                      </label>
+                    </div>
+                    <div className="toggle-grid">
+                      <label><input type="checkbox" checked={transferDraft.deleteOrigin} onChange={(event) => setTransferDraft({ ...transferDraft, deleteOrigin: event.target.checked })} /> Delete origin</label>
+                      <label><input type="checkbox" checked={transferDraft.outgoing} onChange={(event) => setTransferDraft({ ...transferDraft, outgoing: event.target.checked })} /> Outgoing</label>
+                      <label><input type="checkbox" checked={transferDraft.freeFrom} onChange={(event) => setTransferDraft({ ...transferDraft, freeFrom: event.target.checked })} /> Free from</label>
+                      <label><input type="checkbox" checked={transferDraft.freeTo} onChange={(event) => setTransferDraft({ ...transferDraft, freeTo: event.target.checked })} /> Free to</label>
+                      <label><input type="checkbox" checked={transferDraft.worldClosed} onChange={(event) => setTransferDraft({ ...transferDraft, worldClosed: event.target.checked })} /> World closed</label>
+                      <label><input type="checkbox" checked={transferDraft.worldClosingSoon} onChange={(event) => setTransferDraft({ ...transferDraft, worldClosingSoon: event.target.checked })} /> Closing soon</label>
+                    </div>
+                    <div className="button-row">
+                      <button onClick={saveTransferConfig} disabled={busy || !transferDraft.exportTimeout || !transferDraft.importTimeout || !transferDraft.validateTimeout}>
+                        Update
+                      </button>
+                      <button onClick={clearTransferConfig} disabled={busy}>
+                        Clear Override
+                      </button>
+                    </div>
+                  </div>
                 </section>
-                <p className="subtle-line">
-                  Full override editing is available through the authenticated Advanced Director console.
-                </p>
+              </section>
+            )}
+            {directorAvailable && selectedDirectorMapSummary && (
+              <section className="panel">
+                <div className="panel-title">
+                  <h2>Map Override</h2>
+                  <SlidersHorizontal size={19} />
+                </div>
+                <section className="native-config-box">
+                  <div className="form-grid">
+                    <label>
+                      Map
+                      <select
+                        value={selectedDirectorMapSummary.name}
+                        onChange={(event) => setSelectedDirectorMap(event.target.value)}
+                      >
+                        {directorMaps.map((map) => (
+                          <option value={map.name} key={`${map.kind}-option-${map.name}`}>
+                            {map.name} ({map.kind})
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Player hard cap
+                      <input
+                        type="number"
+                        min="1"
+                        value={mapOverrideDraft.playerHardCap}
+                        onChange={(event) =>
+                          setMapOverrideDraft({ ...mapOverrideDraft, playerHardCap: event.target.value })
+                        }
+                        placeholder="leave empty for null"
+                      />
+                    </label>
+                    {selectedDirectorMapSummary.kind === "Instanced" && (
+                      <>
+                        <label>
+                          Scaling throttle
+                          <input
+                            type="number"
+                            min="0"
+                            value={mapOverrideDraft.throttlingSeconds}
+                            onChange={(event) =>
+                              setMapOverrideDraft({ ...mapOverrideDraft, throttlingSeconds: event.target.value })
+                            }
+                            placeholder="seconds"
+                          />
+                        </label>
+                        <label>
+                          Min servers
+                          <input
+                            type="number"
+                            min="0"
+                            value={mapOverrideDraft.minServers}
+                            onChange={(event) =>
+                              setMapOverrideDraft({ ...mapOverrideDraft, minServers: event.target.value })
+                            }
+                          />
+                        </label>
+                        <label>
+                          Extra servers
+                          <input
+                            type="number"
+                            min="0"
+                            value={mapOverrideDraft.extraServers}
+                            onChange={(event) =>
+                              setMapOverrideDraft({ ...mapOverrideDraft, extraServers: event.target.value })
+                            }
+                          />
+                        </label>
+                      </>
+                    )}
+                  </div>
+                  <div className="toggle-grid">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={mapOverrideDraft.updatePlayerCountOnFls}
+                        onChange={(event) =>
+                          setMapOverrideDraft({ ...mapOverrideDraft, updatePlayerCountOnFls: event.target.checked })
+                        }
+                      />
+                      Update player count on FLS
+                    </label>
+                    {selectedDirectorMapSummary.kind === "Dimension" && (
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={mapOverrideDraft.enforceSameHomeDimension}
+                          onChange={(event) =>
+                            setMapOverrideDraft({ ...mapOverrideDraft, enforceSameHomeDimension: event.target.checked })
+                          }
+                        />
+                        Enforce same home dimension
+                      </label>
+                    )}
+                    {selectedDirectorMapSummary.kind === "Instanced" && (
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={mapOverrideDraft.automaticScaling}
+                          onChange={(event) =>
+                            setMapOverrideDraft({ ...mapOverrideDraft, automaticScaling: event.target.checked })
+                          }
+                        />
+                        Automatic scaling
+                      </label>
+                    )}
+                  </div>
+                  <div className="button-row">
+                    <button onClick={saveMapOverride} disabled={busy}>
+                      Update Override
+                    </button>
+                    <button
+                      onClick={() => clearMapOverride(selectedDirectorMapSummary.name)}
+                      disabled={busy || !selectedDirectorMapSummary.hasOverride}
+                    >
+                      Clear Override
+                    </button>
+                  </div>
+                </section>
               </section>
             )}
           </>
@@ -1218,12 +1625,10 @@ export default function App() {
               <div className="panel-title">
                 <h2>Director Maps</h2>
                 <div className="button-row">
-                  {directorProxyUrl && (
-                    <a className="button-link" href={directorProxyUrl} target="_blank" rel="noreferrer">
-                      <ExternalLink size={16} />
-                      Advanced Director
-                    </a>
-                  )}
+                  <button onClick={loadDirectorData} disabled={busy}>
+                    <RefreshCw size={16} />
+                    Reload
+                  </button>
                   <Map size={19} />
                 </div>
               </div>
@@ -1252,7 +1657,23 @@ export default function App() {
                           <td>{map.players}</td>
                           <td>{map.queued}</td>
                           <td>{map.servers.length}</td>
-                          <td>{map.hasOverride ? "Yes" : "No"}</td>
+                          <td>
+                            <div className="button-row">
+                              <StatusPill value={map.hasOverride ? "Active" : "None"} />
+                              <button
+                                onClick={() => {
+                                  setSelectedDirectorMap(map.name);
+                                  setActiveView("config");
+                                }}
+                                disabled={busy}
+                              >
+                                Edit
+                              </button>
+                              <button onClick={() => clearMapOverride(map.name)} disabled={busy || !map.hasOverride}>
+                                Clear
+                              </button>
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1261,14 +1682,48 @@ export default function App() {
               )}
             </section>
 
-            {directorProxyUrl && (
-              <section className="panel director-console">
+            {directorMaps.length > 0 && (
+              <section className="panel">
                 <div className="panel-title">
-                  <h2>Advanced Director</h2>
-                  <ExternalLink size={19} />
+                  <h2>Server Runtime</h2>
+                  <Activity size={19} />
                 </div>
-                <div className="director-frame">
-                  <iframe title="Advanced Director" src={directorProxyUrl} />
+                <div className="map-card-grid">
+                  {directorMaps.map((map) => (
+                    <article className="runtime-map" key={`${map.kind}-runtime-${map.name}`}>
+                      <div className="mini-title">
+                        <strong>{map.name}</strong>
+                        <span>{map.kind}</span>
+                      </div>
+                      <div className="runtime-stats">
+                        <span>{map.players} players</span>
+                        <span>{map.online} online</span>
+                        <span>{map.queued} queued</span>
+                      </div>
+                      <div className="runtime-servers">
+                        {map.servers.length === 0 ? (
+                          <EmptyState text="No server rows reported." />
+                        ) : (
+                          map.servers.map((server) => (
+                            <div key={`${map.name}-${server.partitionId}-${server.dimensionIndex}-${server.serverId}`}>
+                              <div>
+                                <strong>{server.label || "Unnamed"}</strong>
+                                <span className="mono">{server.serverId || "No server id"}</span>
+                              </div>
+                              <StatusPill value={server.status} />
+                              <span>{server.players} players</span>
+                              <span>{server.queued ?? "N/A"} queued</span>
+                              <span>
+                                {server.heartbeatSecondsAgo === null || server.heartbeatSecondsAgo === undefined
+                                  ? "No heartbeat"
+                                  : `${server.heartbeatSecondsAgo}s ago`}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </article>
+                  ))}
                 </div>
               </section>
             )}

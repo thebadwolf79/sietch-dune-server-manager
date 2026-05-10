@@ -73,7 +73,8 @@ body::after {
 
 button,
 .button-link,
-input {
+input,
+select {
   font: inherit;
   font-size: 14px;
 }
@@ -539,7 +540,8 @@ h2 {
   font-size: 14px;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 38px;
   padding: 0 10px;
@@ -549,7 +551,14 @@ input {
   background: rgba(6, 9, 8, 0.78);
 }
 
-input:focus {
+input[type="checkbox"] {
+  width: 16px;
+  min-height: 16px;
+  accent-color: var(--teal);
+}
+
+input:focus,
+select:focus {
   outline: 2px solid rgba(94, 216, 200, 0.34);
   border-color: var(--teal);
 }
@@ -792,34 +801,96 @@ tr:hover {
   font-weight: 700;
 }
 
-.director-console {
-  padding: 0;
+.native-config-grid,
+.map-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
-.director-console .panel-title {
-  margin: 0;
-  padding: 14px;
-  border-bottom: 1px solid rgba(217, 168, 87, 0.16);
+.native-config-box,
+.runtime-map {
+  padding: 12px;
+  border: 1px solid rgba(217, 168, 87, 0.18);
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.16)),
+    rgba(8, 11, 10, 0.54);
 }
 
-.director-frame {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  height: min(760px, calc(100vh - 188px));
-  min-height: 620px;
-  border-radius: 0 0 8px 8px;
-  background: #0b0e0d;
-  contain: layout paint;
+.mini-title,
+.runtime-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
-.director-frame iframe {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  background: #0b0e0d;
-  color-scheme: dark;
+.mini-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #fff8e7;
+}
+
+.mini-title span,
+.runtime-stats span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.form-grid label,
+.native-config-box > label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.native-config-box > label {
+  margin-bottom: 10px;
+}
+
+.toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 8px 0 12px;
+}
+
+.toggle-grid label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.runtime-servers {
+  display: grid;
+  gap: 8px;
+}
+
+.runtime-servers > div {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(217, 168, 87, 0.12);
+}
+
+.runtime-servers strong,
+.runtime-servers span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .empty-state {
@@ -879,10 +950,18 @@ tr:hover {
 
   .status-strip,
   .metric-grid,
+  .native-config-grid,
+  .map-card-grid,
+  .form-grid,
+  .toggle-grid,
   .grid.two,
   .config-summary,
   .settings-grid,
   .detected-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-servers > div {
     grid-template-columns: 1fr;
   }
 }
