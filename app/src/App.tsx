@@ -4,6 +4,7 @@ import { AppHeader, AppSidebar, StatusStrip } from "./components/appShell";
 import { useDashboardDerivedState } from "./hooks/useDashboardDerivedState";
 import { useManagerTelemetry } from "./hooks/useManagerTelemetry";
 import { BattleGroupsPanel } from "./views/battlegroups";
+import type { BattleGroupLifecycle } from "./views/battlegroups";
 import { ConfigView } from "./views/config";
 import { DirectorView } from "./views/director";
 import { EnvironmentPanel } from "./views/environment";
@@ -57,6 +58,7 @@ export default function App() {
   const [guest, setGuest] = useState<GuestConnection | null>(null);
   const [battleGroups, setBattleGroups] = useState<BattleGroupSummary[]>([]);
   const [battleGroupDetail, setBattleGroupDetail] = useState<BattleGroupDetail | null>(null);
+  const [battleGroupLifecycle, setBattleGroupLifecycle] = useState<BattleGroupLifecycle | null>(null);
   const [selectedNamespace, setSelectedNamespace] = useState<string>("");
   const [workloads, setWorkloads] = useState<Workloads | null>(null);
   const [errors, setErrors] = useState<CommandFailure[]>([]);
@@ -186,6 +188,7 @@ export default function App() {
       setManagerTelemetry(null);
       setBattleGroups([]);
       setBattleGroupDetail(null);
+      setBattleGroupLifecycle(null);
       setWorkloads(null);
       setDirectorPlayers(null);
       setDirectorPlayerLists(null);
@@ -495,8 +498,17 @@ export default function App() {
 
   async function setBattleGroupRunning(running: boolean) {
     if (!selectedBattleGroup) return;
-    setBusy(true);
-    await capture(running ? "Start battlegroup" : "Stop battlegroup", () =>
+    const action = running ? "start" : "stop";
+    const target = running ? "running" : "stopped";
+    const requestedAt = Date.now();
+    setBattleGroupLifecycle({
+      action,
+      target,
+      requestedAt,
+      status: running ? "Start requested" : "Stop requested",
+      lastPhase: selectedBattleGroup.phase
+    });
+    const detail = await capture(running ? "Start battlegroup" : "Stop battlegroup", () =>
       managerRequest<BattleGroupDetail>(
         `/api/battlegroups/${encodeURIComponent(selectedBattleGroup.namespace)}/${encodeURIComponent(
           selectedBattleGroup.name
@@ -504,14 +516,21 @@ export default function App() {
         { method: "POST" }
       )
     );
-    await refresh();
-    setBusy(false);
+    if (detail) setBattleGroupDetail(detail);
+    await pollBattleGroupLifecycle(selectedBattleGroup, target, requestedAt, action);
   }
 
   async function restartBattleGroup() {
     if (!selectedBattleGroup) return;
-    setBusy(true);
-    await capture("Restart battlegroup", () =>
+    const requestedAt = Date.now();
+    setBattleGroupLifecycle({
+      action: "restart",
+      target: "running",
+      requestedAt,
+      status: "Restart requested",
+      lastPhase: selectedBattleGroup.phase
+    });
+    const detail = await capture("Restart battlegroup", () =>
       managerRequest<BattleGroupDetail>(
         `/api/battlegroups/${encodeURIComponent(selectedBattleGroup.namespace)}/${encodeURIComponent(
           selectedBattleGroup.name
@@ -519,8 +538,67 @@ export default function App() {
         { method: "POST" }
       )
     );
-    await refresh();
-    setBusy(false);
+    if (detail) setBattleGroupDetail(detail);
+    await pollBattleGroupLifecycle(selectedBattleGroup, "running", requestedAt, "restart");
+  }
+
+  async function pollBattleGroupLifecycle(
+    group: BattleGroupSummary,
+    target: "running" | "stopped",
+    requestedAt: number,
+    action: BattleGroupLifecycle["action"]
+  ) {
+    for (let index = 0; index < 80; index += 1) {
+      await delay(index === 0 ? 750 : 3000);
+      const detail = await capture("BattleGroup lifecycle", () =>
+        managerRequest<BattleGroupDetail>(
+          `/api/battlegroups/${encodeURIComponent(group.namespace)}/${encodeURIComponent(group.name)}`
+        )
+      );
+      const groups = await capture("BattleGroup list", () => managerRequest<BattleGroupSummary[]>("/api/battlegroups"));
+      if (groups) setBattleGroups(groups);
+      if (detail) {
+        setBattleGroupDetail(detail);
+        setBattleGroupLifecycle({
+          action,
+          target,
+          requestedAt,
+          status: lifecycleStatusText(action, detail),
+          lastPhase: detail.phase
+        });
+        await loadWorkloads(group.namespace);
+        if (isBattleGroupSettled(detail, target)) {
+          setBattleGroupLifecycle(null);
+          if (target === "running") {
+            await loadDirectorData();
+          }
+          return;
+        }
+      }
+    }
+    setBattleGroupLifecycle((current) =>
+      current
+        ? {
+            ...current,
+            status: "Still waiting for a settled phase"
+          }
+        : current
+    );
+  }
+
+  function isBattleGroupSettled(detail: BattleGroupDetail, target: "running" | "stopped") {
+    const phase = detail.phase.toLowerCase();
+    if (target === "stopped") {
+      return detail.stop || ["stopped", "suspended"].includes(phase);
+    }
+    return !detail.stop && ["healthy", "running", "ready"].includes(phase);
+  }
+
+  function lifecycleStatusText(action: BattleGroupLifecycle["action"], detail: BattleGroupDetail) {
+    const phase = detail.phase || "Unknown";
+    if (action === "restart") return `Restarting, current phase ${phase}`;
+    if (action === "start") return `Starting, current phase ${phase}`;
+    return `Stopping, current phase ${phase}`;
   }
 
   async function exportLiveConfig() {
@@ -790,6 +868,8 @@ export default function App() {
           <BattleGroupsPanel
             battleGroups={battleGroups}
             selectedBattleGroup={selectedBattleGroup}
+            battleGroupDetail={battleGroupDetail}
+            lifecycle={battleGroupLifecycle}
             busy={busy}
             canUseManager={canUseManager}
             battleGroupIsStopped={battleGroupIsStopped}

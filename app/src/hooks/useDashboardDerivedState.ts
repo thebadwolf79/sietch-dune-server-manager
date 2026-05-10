@@ -84,7 +84,7 @@ export function useDashboardDerivedState({
     selectedBattleGroup?.stop === true || selectedBattleGroup?.phase.toLowerCase() === "stopped";
   const battleGroupIsRunning =
     selectedBattleGroup?.stop === false &&
-    ["running", "ready", "starting"].includes(selectedBattleGroup?.phase.toLowerCase() ?? "");
+    ["running", "ready", "starting", "healthy"].includes(selectedBattleGroup?.phase.toLowerCase() ?? "");
   const canUseGuest = Boolean(vmIsRunning && guest?.connected && guest?.sudo && guest?.kubectl);
   const managerApiConfigured = config.managerApiUrl.trim().length > 0;
   const managerReadiness = managerStatus ? "Ready" : managerApiConfigured ? "Offline" : "Disabled";

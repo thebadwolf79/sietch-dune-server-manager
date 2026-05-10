@@ -198,22 +198,31 @@ pub fn battlegroup_detail_from_object(
             .unwrap_or_default()
             .to_string(),
         stop: data["spec"]["stop"].as_bool().unwrap_or(false),
-        database_phase: data["status"]["database"]["phase"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        server_group_phase: data["status"]["serverGroup"]["phase"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        gateway_phase: data["status"]["serverGateway"]["phase"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
-        director_phase: data["status"]["director"]["phase"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string(),
+        database_phase: string_at_paths(
+            &data,
+            &[&["status", "database", "phase"], &["status", "databasePhase"]],
+        ),
+        server_group_phase: string_at_paths(
+            &data,
+            &[
+                &["status", "serverGroup", "phase"],
+                &["status", "serverGroupPhase"],
+            ],
+        ),
+        gateway_phase: string_at_paths(
+            &data,
+            &[
+                &["status", "serverGateway", "phase"],
+                &["status", "utilities", "serverGateway", "phase"],
+            ],
+        ),
+        director_phase: string_at_paths(
+            &data,
+            &[
+                &["status", "director", "phase"],
+                &["status", "utilities", "director", "phase"],
+            ],
+        ),
         server_image,
         utility_images: unique_strings(utility_images.into_iter()),
         server_sets,
@@ -298,4 +307,17 @@ fn unique_strings(values: impl Iterator<Item = String>) -> Vec<String> {
         }
     }
     output
+}
+
+fn string_at_paths(data: &Value, paths: &[&[&str]]) -> String {
+    for path in paths {
+        let mut current = data;
+        for key in *path {
+            current = &current[*key];
+        }
+        if let Some(value) = current.as_str().filter(|value| !value.is_empty()) {
+            return value.to_string();
+        }
+    }
+    String::new()
 }

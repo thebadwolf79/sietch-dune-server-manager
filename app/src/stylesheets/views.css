@@ -178,6 +178,37 @@
   margin-top: 12px;
 }
 
+.lifecycle-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(94, 216, 200, 0.24);
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(94, 216, 200, 0.1), rgba(217, 168, 87, 0.055)),
+    rgba(5, 10, 10, 0.62);
+}
+
+.subsystem-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.subsystem-grid > div {
+  display: grid;
+  gap: 7px;
+  min-height: 64px;
+  padding: 10px;
+  border: 1px solid rgba(217, 168, 87, 0.14);
+  border-radius: 6px;
+  background: rgba(6, 9, 8, 0.56);
+}
+
+.subsystem-grid span:first-child {
+  color: var(--muted);
+  font-weight: 750;
+}
+
 .native-tabs,
 .detail-toolbar {
   display: flex;
