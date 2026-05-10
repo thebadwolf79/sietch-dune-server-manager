@@ -480,6 +480,11 @@ export default function App() {
     setBusy(true);
     setErrors([]);
     setSnapshotPath("");
+    const nextManagerStatus = managerApiConfigured
+      ? await capture("Manager API status", () => managerRequest<ManagerApiStatus>("/api/status"))
+      : null;
+    setManagerStatus(nextManagerStatus);
+
     const nextHost = await capture("Host status", () => invoke<HostStatus>("get_host_status"));
     setHost(nextHost);
 
