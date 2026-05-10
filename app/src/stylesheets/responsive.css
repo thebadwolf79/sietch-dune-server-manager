@@ -12,8 +12,16 @@
   .grid.two,
   .config-summary,
   .settings-grid,
-  .detected-grid {
+  .detected-grid,
+  .setup-console,
+  .setup-grid,
+  .setup-flow-grid,
+  .setup-hero {
     grid-template-columns: 1fr;
+  }
+
+  .setup-side {
+    position: static;
   }
 
   .runtime-servers > div {

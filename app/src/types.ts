@@ -24,3 +24,15 @@ export type {
   Workloads
 } from "./domain/manager";
 export type { NavItem, ViewKey } from "./domain/navigation";
+export type {
+  GuestBootstrapRequest,
+  NetworkAdapterOption,
+  SetupCommandResult,
+  SetupPersistedState,
+  SetupSelections,
+  SetupState,
+  SteamCmdDetection,
+  VmDestinationStatus,
+  VmImportOptions,
+  VmSwitchOption
+} from "./domain/setup";

@@ -162,11 +162,18 @@ pub fn copy_to_guest(
 
     let key = prepare_key(app, install_path)?;
     let key_str = key.to_string_lossy().to_string();
-    let target = format!("{ssh_user}@{ip}:{destination}");
-    let scp = scp_path(app)?;
-    run_program(
-        &scp,
-        &[
+    let destination_host = format!("{ssh_user}@{ip}");
+    let ssh_path = read_app_config(app)
+        .map(|config| config.ssh_path)
+        .unwrap_or_default();
+    if ssh_path.is_empty() {
+        return Err(failure("SSH path is not configured"));
+    }
+    let bytes = fs::read(source_path)
+        .map_err(|err| failure(format!("Failed to read {}: {err}", source_path.display())))?;
+    let remote_command = format!("cat > {}", sh_single_quoted(destination));
+    let mut child = Command::new(&ssh_path)
+        .args([
             "-o",
             "BatchMode=yes",
             "-o",
@@ -179,10 +186,28 @@ pub fn copy_to_guest(
             "ConnectTimeout=6",
             "-i",
             &key_str,
-            source,
-            &target,
-        ],
-    )?;
+            &destination_host,
+            &remote_command,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| failure(format!("Failed to run SSH upload: {err}")))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(&bytes)
+            .map_err(|err| failure(format!("Failed to send upload over SSH: {err}")))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|err| failure(format!("Failed to wait for SSH upload: {err}")))?;
+
+    if !output.status.success() {
+        return Err(command_failure("SSH upload exited with an error", output));
+    }
     Ok(())
 }
 
@@ -212,19 +237,6 @@ pub fn discover_ip_from_logs(install_path: &str) -> Option<String> {
     None
 }
 
-fn scp_path(app: &AppHandle) -> CommandResult<String> {
-    let ssh_path = read_app_config(app)
-        .map(|config| config.ssh_path)
-        .unwrap_or_default();
-    if ssh_path.is_empty() {
-        return Err(failure("SSH path is not configured"));
-    }
-
-    let path = Path::new(&ssh_path);
-    let scp = path
-        .parent()
-        .map(|parent| parent.join("scp.exe"))
-        .filter(|candidate| candidate.exists())
-        .unwrap_or_else(|| PathBuf::from("scp.exe"));
-    Ok(scp.to_string_lossy().to_string())
+fn sh_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }

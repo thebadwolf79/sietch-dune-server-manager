@@ -1,4 +1,15 @@
-import { Activity, Database, HardDrive, Map, RadioTower, Server, SlidersHorizontal, Terminal, Users } from "lucide-react";
+import {
+  Activity,
+  Database,
+  HardDrive,
+  Map,
+  RadioTower,
+  Server,
+  SlidersHorizontal,
+  Terminal,
+  Users,
+  Wrench
+} from "lucide-react";
 import { useMemo } from "react";
 import type {
   AppConfig,
@@ -50,18 +61,19 @@ export function useDashboardDerivedState({
   const selectedDirectorMapSummary =
     directorMaps.find((map) => map.name === selectedDirectorMap) ?? directorMaps[0] ?? null;
   const vmState = vm?.state.toLowerCase() ?? "";
+  const vmExists = Boolean(vm && !["missing", "not found"].includes(vmState));
   const vmIsRunning = vmState === "running";
   const vmIsStarting = vmState === "starting";
   const vmIsChanging = ["starting", "stopping", "pausing", "resuming", "resetting", "saving"].includes(vmState);
-  const canControlVm = Boolean(host?.isElevated && host?.hypervAvailable && vm);
+  const canControlVm = Boolean(host?.isElevated && host?.hypervAvailable && vmExists);
   const startVmDisabledReason = busy
     ? "An operation is already running"
     : !host?.isElevated
       ? "VM controls require the app to run elevated"
       : !host?.hypervAvailable
         ? "Hyper-V is unavailable"
-        : !vm
-          ? "VM was not detected"
+          : !vmExists
+            ? "VM was not detected"
           : vmIsRunning
             ? "VM is already running"
             : vmIsChanging
@@ -73,7 +85,7 @@ export function useDashboardDerivedState({
       ? "VM controls require the app to run elevated"
       : !host?.hypervAvailable
         ? "Hyper-V is unavailable"
-        : !vm
+        : !vmExists
           ? "VM was not detected"
           : !vmIsRunning
             ? "VM is not running"
@@ -86,6 +98,7 @@ export function useDashboardDerivedState({
     selectedBattleGroup?.stop === false &&
     ["running", "ready", "starting", "healthy"].includes(selectedBattleGroup?.phase.toLowerCase() ?? "");
   const canUseGuest = Boolean(vmIsRunning && guest?.connected && guest?.sudo && guest?.kubectl);
+  const canReachGuestForInstall = Boolean((guest?.connected && guest?.sudo) || config.vmIp.trim());
   const managerApiConfigured = config.managerApiUrl.trim().length > 0;
   const managerReadiness = managerStatus ? "Ready" : managerApiConfigured ? "Offline" : "Disabled";
   const managerTelemetryState = managerApiConfigured ? managerSocketState : "disabled";
@@ -93,13 +106,14 @@ export function useDashboardDerivedState({
   const managerToolsInstalled = canUseManager;
   const directorAvailable = Boolean(managerToolsInstalled && managerStatus?.directorConfigured);
   const managerInstallNamespace = config.managerApiNamespace.trim() || selectedBattleGroup?.namespace || "";
-  const canInstallManagerApi = Boolean(canUseGuest && managerInstallNamespace && config.managerApiBinaryPath.trim());
+  const canInstallManagerApi = Boolean(canReachGuestForInstall && config.managerApiBinaryPath.trim());
   const managerRequiredViews = ["battlegroups", "workloads", "config", "logs", "players", "director"];
   const directorRequiredViews = ["players", "director"];
   const activeViewRequiresManager = managerRequiredViews.includes(activeView);
   const activeViewRequiresDirector = directorRequiredViews.includes(activeView);
   const viewLabels: Record<ViewKey, string> = {
     overview: "Overview",
+    setup: "Setup",
     host: "Host & VM",
     manager: "Manager API",
     players: "Players",
@@ -116,6 +130,7 @@ export function useDashboardDerivedState({
       : selectedBattleGroup?.title || selectedBattleGroup?.name || "No battlegroup selected";
   const navItems: NavItem[] = [
     { key: "overview", label: "Overview", icon: Server },
+    { key: "setup", label: "Setup", icon: Wrench },
     { key: "host", label: "Host & VM", icon: HardDrive },
     { key: "manager", label: "Manager API", icon: RadioTower },
     { key: "players", label: "Players", icon: Users, disabled: !directorAvailable },

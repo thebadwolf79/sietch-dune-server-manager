@@ -40,6 +40,10 @@ Desktop.ini
 .tmp/
 .playwright-mcp/
 app/default-config.json
+app/steamcmd/
+app/dune-server/
+app/vm/
+vm/
 *.pem
 *.key
 sshKey
@@ -47,3 +51,4 @@ codex_vm_ed25519_dropbear
 codex_vm_ed25519_dropbear.pub
 snapshots/
 keys/
+initial-setup-log.txt

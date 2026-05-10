@@ -12,6 +12,7 @@ export type AppConfig = {
   installPath: string;
   vmName: string;
   vmIp: string;
+  steamcmdPath: string;
   sshUser: string;
   sshPath: string;
   managerApiUrl: string;

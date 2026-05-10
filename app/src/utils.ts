@@ -4,6 +4,7 @@ export const defaultConfig: AppConfig = {
   installPath: "",
   vmName: "",
   vmIp: "",
+  steamcmdPath: "",
   sshUser: "",
   sshPath: "",
   managerApiUrl: "",

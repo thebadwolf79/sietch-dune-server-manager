@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
 import { AppHeader, AppSidebar, StatusStrip } from "./components/appShell";
 import { useDashboardDerivedState } from "./hooks/useDashboardDerivedState";
@@ -17,6 +18,7 @@ import {
 } from "./views/managerApi";
 import { LogsPanel } from "./views/logs";
 import { PlayersPanel } from "./views/players";
+import { SetupView } from "./views/setup";
 import { WorkloadsPanel } from "./views/workloads";
 import type {
   AppConfig,
@@ -27,6 +29,7 @@ import type {
   DirectorPlayerLists,
   DirectorPlayerSummary,
   FlsDraft,
+  GuestBootstrapRequest,
   GuestConnection,
   HostStatus,
   ManagerApiInstallResult,
@@ -35,8 +38,11 @@ import type {
   ManagerSelfStatus,
   ManagerWorkloads,
   MapOverrideDraft,
+  SetupCommandResult,
+  SetupState,
   TransferDraft,
   ViewKey,
+  VmImportOptions,
   VmStatus,
   Workloads
 } from "./types";
@@ -53,6 +59,11 @@ import {
 } from "./utils";
 import { isBattleGroupSettled, lifecycleStatusText } from "./domain/lifecycle";
 
+type SetupOutputEvent = {
+  stage: string;
+  line: string;
+};
+
 export default function App() {
   const [config, setConfig] = useState<AppConfig>(defaultConfig);
   const [host, setHost] = useState<HostStatus | null>(null);
@@ -65,6 +76,7 @@ export default function App() {
   const [workloads, setWorkloads] = useState<Workloads | null>(null);
   const [errors, setErrors] = useState<CommandFailure[]>([]);
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [snapshotPath, setSnapshotPath] = useState<string>("");
   const [configSaved, setConfigSaved] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
@@ -76,6 +88,10 @@ export default function App() {
   const [directorFlsConfig, setDirectorFlsConfig] = useState<Record<string, unknown> | null>(null);
   const [directorTransferConfig, setDirectorTransferConfig] = useState<Record<string, unknown> | null>(null);
   const [directorLoading, setDirectorLoading] = useState(false);
+  const [setupState, setSetupState] = useState<SetupState | null>(null);
+  const [vmImportOptions, setVmImportOptions] = useState<VmImportOptions | null>(null);
+  const [setupLog, setSetupLog] = useState<SetupCommandResult | null>(null);
+  const [setupOperation, setSetupOperation] = useState("");
   const [selectedDirectorMap, setSelectedDirectorMap] = useState("");
   const [flsDraft, setFlsDraft] = useState<FlsDraft>({ heartbeatSeconds: "", settingsSeconds: "" });
   const [transferDraft, setTransferDraft] = useState<TransferDraft>({
@@ -100,6 +116,7 @@ export default function App() {
     extraServers: ""
   });
   const [activeView, setActiveView] = useState<ViewKey>("overview");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const {
     managerStatus,
     setManagerStatus,
@@ -153,9 +170,41 @@ export default function App() {
       return await fn();
     } catch (error) {
       const commandError = asError(error);
+      if (isSetupLabel(label)) {
+        appendSetupLog({
+          ok: false,
+          stage: label.toLowerCase().replace(/\s+/g, "-"),
+          message: `${label}: ${commandError.message}`,
+          stdout: [commandError.stdout, commandError.stderr].filter(Boolean).join("\n")
+        });
+        return null;
+      }
       setErrors((current) => [{ ...commandError, message: `${label}: ${commandError.message}` }, ...current]);
       return null;
     }
+  }
+
+  function isSetupLabel(label: string) {
+    return [
+      "Install SteamCMD",
+      "Install server package",
+      "Detect VM import options",
+      "Import VM",
+      "Guest bootstrap",
+      "Install Manager API"
+    ].includes(label);
+  }
+
+  function appendSetupLog(entry: SetupCommandResult) {
+    setSetupLog((current) => {
+      if (!current) return entry;
+      const header = `--- ${entry.message} ---`;
+      const nextStdout = [current.stdout, header, entry.stdout].filter(Boolean).join("\n");
+      return {
+        ...entry,
+        stdout: nextStdout
+      };
+    });
   }
 
   async function managerRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -174,7 +223,7 @@ export default function App() {
   }
 
   async function refresh() {
-    setBusy(true);
+    setRefreshing(true);
     setErrors([]);
     setSnapshotPath("");
 
@@ -199,7 +248,7 @@ export default function App() {
       setDirectorMaps([]);
       setDirectorFlsConfig(null);
       setDirectorTransferConfig(null);
-      setBusy(false);
+      setRefreshing(false);
       return;
     }
 
@@ -207,7 +256,7 @@ export default function App() {
     if (!ip) {
       setGuest(null);
       setManagerStatus(null);
-      setBusy(false);
+      setRefreshing(false);
       return;
     }
 
@@ -256,7 +305,7 @@ export default function App() {
     if (managerApiConfigured) {
       await loadDirectorData();
     }
-    setBusy(false);
+    setRefreshing(false);
   }
 
   async function loadWorkloads(_namespace: string) {
@@ -665,6 +714,13 @@ export default function App() {
     };
 
     setBusy(true);
+    setSetupOperation("Installing Manager API");
+    appendSetupLog({
+      ok: false,
+      stage: "manager-api",
+      message: "Installing Manager API",
+      stdout: `Namespace: ${namespace}`
+    });
     setConfig(nextConfig);
     const result = await capture("Install Manager API", () =>
       invoke<ManagerApiInstallResult>("install_manager_api", {
@@ -679,10 +735,186 @@ export default function App() {
     );
     if (result) {
       setManagerInstall(result);
-      const savedConfig = { ...nextConfig, managerApiUrl: result.url };
+      appendSetupLog({
+        ok: true,
+        stage: "manager-api",
+        message: "Manager API installed",
+        stdout: `URL: ${result.url}`
+      });
+      const savedConfig = { ...nextConfig, managerApiNamespace: result.namespace, managerApiUrl: result.url };
       setConfig(savedConfig);
       await capture("Save Manager API config", () => invoke<AppConfig>("save_app_config", { config: savedConfig }));
     }
+    setSetupOperation("");
+    setBusy(false);
+  }
+
+  async function refreshSetupState() {
+    const state = await capture("Setup state", () => invoke<SetupState>("detect_setup_state"));
+    if (state) setSetupState(state);
+  }
+
+  async function detectSteamCmd() {
+    setBusy(true);
+    const state = await capture("SteamCMD detection", () => invoke<SetupState>("detect_setup_state"));
+    if (state) setSetupState(state);
+    setBusy(false);
+  }
+
+  async function installSteamCmd(installDir: string) {
+    setBusy(true);
+    setSetupOperation("Installing SteamCMD");
+    appendSetupLog({
+      ok: false,
+      stage: "steamcmd",
+      message: "Installing SteamCMD",
+      stdout: `Destination: ${installDir}`
+    });
+    const detected = await capture("Install SteamCMD", () => invoke("install_steamcmd", { installDir }));
+    if (detected) {
+      appendSetupLog({
+        ok: true,
+        stage: "steamcmd",
+        message: "SteamCMD installed",
+        stdout: `SteamCMD is ready at ${installDir}`
+      });
+      await refreshSetupState();
+      const loaded = await capture("Reload config", () => invoke<AppConfig>("get_app_config"));
+      if (loaded) setConfig(loaded);
+    }
+    setSetupOperation("");
+    setBusy(false);
+  }
+
+  async function installServerApp(steamcmdPath: string, installDir: string) {
+    setBusy(true);
+    setSetupOperation("Installing server package");
+    appendSetupLog({
+      ok: false,
+      stage: "server-app",
+      message: "Installing server package",
+      stdout: `Destination: ${installDir}`
+    });
+    const result = await capture("Install server package", () =>
+      invoke<SetupCommandResult>("install_server_app", { steamcmdPath, installDir })
+    );
+    if (result) appendSetupLog(result);
+    const loaded = await capture("Reload config", () => invoke<AppConfig>("get_app_config"));
+    if (loaded) setConfig(loaded);
+    await refreshSetupState();
+    setSetupOperation("");
+    setBusy(false);
+  }
+
+  async function detectVmOptions(installPath: string) {
+    setBusy(true);
+    appendSetupLog({
+      ok: false,
+      stage: "vm-import",
+      message: "Detecting VM import options",
+      stdout: `Server package: ${installPath}`
+    });
+    const options = await capture("Detect VM import options", () =>
+      invoke<VmImportOptions>("detect_vm_import_options", { installPath: installPath || null })
+    );
+    if (options) {
+      setVmImportOptions(options);
+      appendSetupLog({
+        ok: true,
+        stage: "vm-import",
+        message: "VM import options detected",
+        stdout: options.existingVm
+          ? `Existing VM detected: ${options.existingVmState || "state unknown"}`
+          : `Suggested destination: ${options.suggestedDestination || "none"}`
+      });
+    }
+    setBusy(false);
+  }
+
+  async function importVm(
+    installPath: string,
+    destinationPath: string,
+    memoryGb: number,
+    switchName: string,
+    physicalAdapterName: string,
+    clearDestination: boolean
+  ) {
+    setBusy(true);
+    setSetupOperation("Importing VM");
+    appendSetupLog({
+      ok: false,
+      stage: "vm-import",
+      message: "Importing VM",
+      stdout: `Destination: ${destinationPath}`
+    });
+    const result = await capture("Import VM", () =>
+      invoke<SetupCommandResult>("run_vm_import_stage", {
+        installPath,
+        destinationPath,
+        memoryGb,
+        switchName,
+        physicalAdapterName,
+        clearDestination
+      })
+    );
+    if (result) appendSetupLog(result);
+    const loaded = await capture("Reload config", () => invoke<AppConfig>("get_app_config"));
+    if (loaded) setConfig(loaded);
+    await refreshSetupState();
+    await refresh();
+    setSetupOperation("");
+    setBusy(false);
+  }
+
+  async function bootstrapGuest(request: GuestBootstrapRequest) {
+    setBusy(true);
+    setSetupOperation("Bootstrapping guest VM");
+    if (setupState) {
+      void invoke("save_setup_state", {
+        state: {
+          ...setupState.persisted,
+          selections: {
+            ...setupState.persisted.selections,
+            serverInstallDir: request.installPath,
+            staticIp: request.staticIp,
+            staticCidr: request.staticCidr,
+            staticGateway: request.staticGateway,
+            staticDns: request.staticDns,
+            manualPlayerIp: request.playerIp,
+            worldName: request.worldName,
+            worldRegion: request.region,
+            bootstrapProfileId: request.profileId
+          }
+        }
+      });
+    }
+    appendSetupLog({
+      ok: false,
+      stage: "guest-bootstrap",
+      message: "Bootstrapping guest VM",
+      stdout: `Guest IP: ${request.ip}\nPlayer-facing IP: ${request.playerIp}\nWorld: ${request.worldName}\nRegion: ${request.region}\nProfile: ${request.profileId}`
+    });
+    const result = await capture("Guest bootstrap", () =>
+      invoke<SetupCommandResult>("run_guest_bootstrap_stage", {
+        request
+      })
+    );
+    if (result) {
+      appendSetupLog(result);
+      const loaded = await capture("Reload config", () => invoke<AppConfig>("get_app_config"));
+      if (loaded) setConfig(loaded);
+      await refreshSetupState();
+      setSetupOperation("");
+      setBusy(false);
+      void refresh();
+      return;
+    } else {
+      setSetupOperation("");
+      setBusy(false);
+      void refreshSetupState();
+      return;
+    }
+    setSetupOperation("");
     setBusy(false);
   }
 
@@ -697,10 +929,47 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
+    const unlisten = listen<SetupOutputEvent>("setup-output", ({ payload }) => {
+      if (disposed) return;
+      setSetupLog((current) => {
+        const rawLine = payload.line.trimEnd();
+        if (!rawLine) return current;
+        if (!current) {
+          return {
+            ok: false,
+            stage: payload.stage,
+            message: "Running setup command",
+            stdout: rawLine
+          };
+        }
+        const nextLine = current.stage === payload.stage ? rawLine : `[${payload.stage}] ${rawLine}`;
+        const stdout = current.stdout ? `${current.stdout}\n${nextLine}` : nextLine;
+        return { ...current, stdout };
+      });
+    });
+
+    return () => {
+      disposed = true;
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
+
+  useEffect(() => {
     if (configLoaded) {
       void refresh();
+      void refreshSetupState();
     }
-  }, [configLoaded, config.vmName, config.installPath, config.sshUser]);
+  }, [
+    configLoaded,
+    config.vmName,
+    config.installPath,
+    config.sshUser,
+    config.vmIp,
+    config.managerApiUrl,
+    config.managerApiToken,
+    config.managerApiNamespace
+  ]);
 
   useEffect(() => {
     if (activeViewRequiresManager && !managerToolsInstalled) {
@@ -756,11 +1025,17 @@ export default function App() {
   );
 
   return (
-    <main className="app-shell">
-      <AppSidebar navItems={navItems} activeView={activeView} onSelect={setActiveView} />
+    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      <AppSidebar
+        navItems={navItems}
+        activeView={activeView}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
+        onSelect={setActiveView}
+      />
 
       <section className="content">
-        <AppHeader title={pageTitle} subtitle={pageSubtitle} busy={busy} onRefresh={refresh} />
+        <AppHeader title={pageTitle} subtitle={pageSubtitle} busy={busy || refreshing} onRefresh={refresh} />
 
         <StatusStrip
           admin={host?.isElevated ?? false}
@@ -770,6 +1045,25 @@ export default function App() {
           battleGroupPhase={selectedBattleGroup?.phase}
           managerReadiness={managerReadiness}
         />
+
+        {activeView === "setup" && (
+          <SetupView
+            config={config}
+            setupState={setupState}
+            vmImportOptions={vmImportOptions}
+            setupLog={setupLog}
+            busy={busy}
+            setupOperation={setupOperation}
+            canInstallManagerApi={canInstallManagerApi}
+            onRefreshSetup={refreshSetupState}
+            onInstallSteamCmd={installSteamCmd}
+            onInstallServerApp={installServerApp}
+            onDetectVmOptions={detectVmOptions}
+            onImportVm={importVm}
+            onBootstrapGuest={bootstrapGuest}
+            onInstallManagerApi={installManagerApi}
+          />
+        )}
 
         {(activeView === "overview" || activeView === "config") && (
           <EnvironmentPanel
@@ -787,13 +1081,22 @@ export default function App() {
             {errors.map((error, index) => (
               <div key={`${error.message}-${index}`}>
                 <strong>{error.message}</strong>
-                {error.stderr && <pre>{error.stderr}</pre>}
+                {(error.stdout || error.stderr) && (
+                  <div className="error-output">
+                    {(error.stdout || error.stderr || "")
+                      .split(/\r?\n/)
+                      .filter(Boolean)
+                      .map((line, lineIndex) => (
+                        <span key={`${error.message}-${index}-${lineIndex}`}>{line}</span>
+                      ))}
+                  </div>
+                )}
               </div>
             ))}
           </section>
         )}
 
-        {vm && !vmIsRunning && (
+        {activeView !== "setup" && vm && !vmIsRunning && (
           <VmRequiredNotice
             vm={vm}
             busy={busy}

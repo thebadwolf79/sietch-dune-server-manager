@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub vm_ip: String,
     pub ssh_user: String,
     pub ssh_path: String,
+    pub steamcmd_path: String,
     pub manager_api_url: String,
     pub manager_api_token: String,
     pub manager_api_namespace: String,
@@ -25,6 +26,7 @@ impl Default for AppConfig {
             vm_ip: String::new(),
             ssh_user: String::new(),
             ssh_path: String::new(),
+            steamcmd_path: String::new(),
             manager_api_url: String::new(),
             manager_api_token: String::new(),
             manager_api_namespace: String::new(),
@@ -42,4 +44,5 @@ pub struct DetectedConfig {
     pub vm_name: Option<String>,
     pub vm_ip: Option<String>,
     pub ssh_path: Option<String>,
+    pub steamcmd_path: Option<String>,
 }

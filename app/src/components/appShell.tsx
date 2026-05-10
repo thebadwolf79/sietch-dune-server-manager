@@ -1,22 +1,39 @@
-import { Activity, Database, HardDrive, RefreshCw, Server, ShieldCheck, Terminal, RadioTower } from "lucide-react";
+import {
+  Activity,
+  Database,
+  HardDrive,
+  PanelLeftClose,
+  PanelLeftOpen,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+  Terminal,
+  RadioTower
+} from "lucide-react";
 import type { NavItem, ViewKey } from "../types";
 import { StatusLamp } from "./primitives";
 
 type SidebarProps = {
   navItems: NavItem[];
   activeView: ViewKey;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   onSelect: (view: ViewKey) => void;
 };
 
-export function AppSidebar({ navItems, activeView, onSelect }: SidebarProps) {
+export function AppSidebar({ navItems, activeView, collapsed, onToggleCollapsed, onSelect }: SidebarProps) {
+  const ToggleIcon = collapsed ? PanelLeftOpen : PanelLeftClose;
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
       <div className="brand">
         <Server size={26} />
         <div>
           <strong>Dune Dedicated</strong>
           <span>Server Manager</span>
         </div>
+        <button type="button" className="sidebar-toggle" onClick={onToggleCollapsed} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
+          <ToggleIcon size={16} />
+        </button>
       </div>
       <nav>
         {navItems.map((item) => {

@@ -184,3 +184,17 @@ pre {
   font-size: 14px;
 }
 
+.error-output {
+  display: grid;
+  gap: 3px;
+  max-height: 260px;
+  margin-top: 8px;
+  overflow: auto;
+  font-family: "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
+  font-size: 14px;
+}
+
+.error-output span {
+  overflow-wrap: anywhere;
+}
+

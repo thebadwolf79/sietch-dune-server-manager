@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 
 export type ViewKey =
   | "overview"
+  | "setup"
   | "host"
   | "manager"
   | "players"

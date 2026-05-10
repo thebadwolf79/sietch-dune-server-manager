@@ -10,6 +10,7 @@ pub fn redact_text(input: &str) -> String {
             || lower.contains("apikey")
             || lower.contains("api_key")
             || lower.contains("serviceauth")
+            || looks_like_jwt(line.trim())
         {
             output.push("<redacted>".to_string());
         } else {

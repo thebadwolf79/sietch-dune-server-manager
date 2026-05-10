@@ -82,6 +82,23 @@ foreach ($root in $libraryRoots | Select-Object -Unique) {
   }
 }
 $ssh = (Get-Command ssh.exe).Source
+$steamcmd = (Get-Command steamcmd.exe).Source
+if (-not $steamcmd) {
+  $steamcmdCandidates = @()
+  foreach ($steamPath in $steamInstallPaths | Where-Object { $_ }) {
+    $steamcmdCandidates += (Join-Path $steamPath 'steamcmd\steamcmd.exe')
+    $steamcmdCandidates += (Join-Path $steamPath 'steamcmd.exe')
+  }
+  $steamcmdCandidates += (Join-Path $env:ProgramFiles 'SteamCMD\steamcmd.exe')
+  $steamcmdCandidates += (Join-Path ${env:ProgramFiles(x86)} 'SteamCMD\steamcmd.exe')
+  $steamcmdCandidates += (Join-Path $env:LOCALAPPDATA 'SteamCMD\steamcmd.exe')
+  foreach ($candidate in $steamcmdCandidates | Where-Object { $_ } | Select-Object -Unique) {
+    if (Test-Path $candidate) {
+      $steamcmd = (Resolve-Path $candidate).Path
+      break
+    }
+  }
+}
 $vmName = $null
 $vmIp = $null
 if (Get-Command Get-VM) {
@@ -97,6 +114,7 @@ if (Get-Command Get-VM) {
   vmName = $vmName
   vmIp = $vmIp
   sshPath = $ssh
+  steamcmdPath = $steamcmd
 } | ConvertTo-Json -Compress
 "#;
     run_powershell(script)
@@ -147,6 +165,7 @@ fn normalize_config(mut config: AppConfig) -> AppConfig {
     config.vm_ip = config.vm_ip.trim().to_string();
     config.ssh_user = config.ssh_user.trim().to_string();
     config.ssh_path = config.ssh_path.trim().to_string();
+    config.steamcmd_path = config.steamcmd_path.trim().to_string();
     config.manager_api_url = config
         .manager_api_url
         .trim()

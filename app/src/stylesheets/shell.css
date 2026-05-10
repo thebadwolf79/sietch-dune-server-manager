@@ -5,6 +5,10 @@
   min-height: 100vh;
 }
 
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 76px 1fr;
+}
+
 .app-shell::before {
   position: fixed;
   inset: 14px;
@@ -30,6 +34,9 @@
   box-shadow:
     inset -1px 0 0 rgba(255, 255, 255, 0.06),
     18px 0 42px rgba(0, 0, 0, 0.32);
+  transition:
+    width 160ms ease,
+    padding 160ms ease;
 }
 
 .brand {
@@ -39,6 +46,49 @@
   min-height: 58px;
   padding: 8px 8px 17px;
   border-bottom: 1px solid rgba(217, 168, 87, 0.22);
+}
+
+.sidebar-toggle {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  margin-left: auto;
+  padding: 0;
+}
+
+.sidebar.collapsed {
+  padding: 18px 10px;
+}
+
+.sidebar.collapsed .brand {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.sidebar.collapsed .brand > div,
+.sidebar.collapsed nav button span {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-toggle {
+  position: absolute;
+  top: 70px;
+  left: 21px;
+  margin-left: 0;
+}
+
+.sidebar.collapsed nav {
+  margin-top: 58px;
+}
+
+.sidebar.collapsed nav button {
+  justify-content: center;
+  min-height: 42px;
+  padding: 0;
+}
+
+.sidebar.collapsed nav button::before {
+  left: 2px;
 }
 
 .brand svg {

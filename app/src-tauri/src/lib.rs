@@ -5,6 +5,7 @@ mod config_store;
 mod errors;
 mod models;
 mod security;
+mod setup;
 mod shell;
 mod ssh;
 mod validation;
@@ -75,14 +76,16 @@ fn get_host_status(app: AppHandle) -> CommandResult<HostStatus> {
         r#"
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 $vmms = Get-Service -Name vmms -ErrorAction SilentlyContinue
+$ssh = {ssh}
+$install = {install}
 [pscustomobject]@{{
   user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
   isElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   hypervAvailable = [bool](Get-Command Get-VM -ErrorAction SilentlyContinue)
   vmmsStatus = if ($vmms) {{ $vmms.Status.ToString() }} else {{ $null }}
-  sshAvailable = Test-Path {ssh}
-  defaultInstallPathExists = Test-Path {install}
-  defaultInstallPath = {install}
+  sshAvailable = if ($ssh) {{ Test-Path $ssh }} else {{ $false }}
+  defaultInstallPathExists = if ($install) {{ Test-Path $install }} else {{ $false }}
+  defaultInstallPath = $install
 }} | ConvertTo-Json -Compress
 "#,
         ssh = ps_single_quoted(&config.ssh_path),
@@ -93,22 +96,45 @@ $vmms = Get-Service -Name vmms -ErrorAction SilentlyContinue
 
 #[tauri::command]
 fn get_vm_status(app: AppHandle, vm_name: Option<String>) -> CommandResult<VmStatus> {
-    let vm_name = configured_vm_name(&app, vm_name)?;
+    let config = read_app_config(&app).unwrap_or_default();
+    let vm_name = vm_name
+        .or_else(|| {
+            let configured = config.vm_name.trim().to_string();
+            (!configured.is_empty()).then_some(configured)
+        })
+        .unwrap_or_default();
     let script = format!(
         r#"
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'SilentlyContinue'
 $vmName = {vm_name}
-$vm = Get-VM -Name $vmName
-$ips = @((Get-VMNetworkAdapter -VMName $vmName).IPAddresses | Where-Object {{ $_ -match '^\d+\.\d+\.\d+\.\d+$' }})
+$vm = $null
+if ($vmName) {{ $vm = Get-VM -Name $vmName -ErrorAction SilentlyContinue }}
+if (-not $vm) {{
+  $vm = Get-VM -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -match 'dune|awakening' -or $_.Path -match 'DuneAwakeningServer' }} | Select-Object -First 1
+}}
+if ($vm) {{
+  $ips = @((Get-VMNetworkAdapter -VMName $vm.Name).IPAddresses | Where-Object {{ $_ -match '^\d+\.\d+\.\d+\.\d+$' }})
+  [pscustomobject]@{{
+    name = $vm.Name
+    state = $vm.State.ToString()
+    status = $vm.Status
+    memoryAssignedBytes = [uint64]$vm.MemoryAssigned
+    uptime = $vm.Uptime.ToString()
+    path = $vm.Path
+    configurationLocation = $vm.ConfigurationLocation
+    ipAddresses = $ips
+  }} | ConvertTo-Json -Compress
+  exit 0
+}}
 [pscustomobject]@{{
-  name = $vm.Name
-  state = $vm.State.ToString()
-  status = $vm.Status
-  memoryAssignedBytes = [uint64]$vm.MemoryAssigned
-  uptime = $vm.Uptime.ToString()
-  path = $vm.Path
-  configurationLocation = $vm.ConfigurationLocation
-  ipAddresses = $ips
+  name = $vmName
+  state = 'Missing'
+  status = 'VM not found'
+  memoryAssignedBytes = [uint64]0
+  uptime = ''
+  path = ''
+  configurationLocation = ''
+  ipAddresses = @()
 }} | ConvertTo-Json -Compress
 "#,
         vm_name = ps_single_quoted(&vm_name)
@@ -182,6 +208,40 @@ fn connect_guest(
     })
 }
 
+fn discover_battlegroup_namespace(
+    app: &AppHandle,
+    install_path: &str,
+    ip: &str,
+    ssh_user: &str,
+) -> CommandResult<String> {
+    let output = run_ssh(
+        app,
+        install_path,
+        ip,
+        ssh_user,
+        r#"set -eu
+if [ -s /home/dune/.dune/.manager-bootstrap-world-name ]; then
+  world=$(cat /home/dune/.dune/.manager-bootstrap-world-name)
+  printf 'funcom-seabass-%s\n' "$world"
+  exit 0
+fi
+sudo kubectl get ns --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | awk '/^funcom-seabass-/ { print; exit }'
+"#,
+    )?;
+    let namespace = output
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("funcom-seabass-"))
+        .unwrap_or_default()
+        .to_string();
+    if namespace.is_empty() {
+        return Err(failure(
+            "Could not discover the battlegroup namespace. Complete guest bootstrap first.",
+        ));
+    }
+    Ok(namespace)
+}
+
 
 #[tauri::command]
 fn install_manager_api(
@@ -194,11 +254,10 @@ fn install_manager_api(
     ip: Option<String>,
     ssh_user: Option<String>,
 ) -> CommandResult<ManagerApiInstallResult> {
-    let namespace = namespace.trim().to_string();
+    let mut namespace = namespace.trim().to_string();
     let binary_path = binary_path.trim().to_string();
     let token = token.trim().to_string();
     let director_base_url = director_base_url.trim().trim_end_matches('/').to_string();
-    validate_kube_arg(&namespace, "namespace")?;
     validate_plain_value(&binary_path, "Manager API binary")?;
     validate_plain_value(&token, "Manager API token")?;
     if !director_base_url.is_empty() {
@@ -206,6 +265,10 @@ fn install_manager_api(
     }
 
     let (install_path, ip, ssh_user) = resolve_connection(&app, install_path, ip, ssh_user)?;
+    if namespace.is_empty() {
+        namespace = discover_battlegroup_namespace(&app, &install_path, &ip, &ssh_user)?;
+    }
+    validate_kube_arg(&namespace, "namespace")?;
     let upload_path = format!("/home/{ssh_user}/dune-manager-api");
     copy_to_guest(
         &app,
@@ -289,6 +352,7 @@ rc-service dune-manager-api restart
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             get_app_config,
             save_app_config,
@@ -305,6 +369,16 @@ pub fn run() {
             battlegroups::stop_battlegroup,
             battlegroups::restart_battlegroup,
             battlegroups::export_live_config,
+            setup::detect_setup_state,
+            setup::detect_steamcmd,
+            setup::install_steamcmd,
+            setup::install_server_app,
+            setup::detect_vm_import_options,
+            setup::inspect_vm_destination,
+            setup::run_vm_import_stage,
+            setup::run_guest_bootstrap_stage,
+            setup::save_setup_state,
+            setup::clear_setup_state,
             install_manager_api
         ])
         .run(tauri::generate_context!())
