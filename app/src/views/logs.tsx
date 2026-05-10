@@ -1,5 +1,5 @@
 import { Download, RefreshCw, Terminal } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { EmptyState } from "../components/primitives";
 import type { KubeItem, ManagerLogResponse } from "../types";
@@ -42,6 +42,7 @@ export function LogsPanel({ pods, busy, onLoadLogs }: LogsPanelProps) {
   const [filter, setFilter] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [logResponse, setLogResponse] = useState<ManagerLogResponse | null>(null);
+  const loadingRef = useRef(false);
   const selectedPodItem = pods.find((pod) => pod.metadata?.name === selectedPod) ?? pods[0] ?? null;
   const containers = useMemo(() => {
     const values = selectedPodItem?.status?.containers;
@@ -50,9 +51,14 @@ export function LogsPanel({ pods, busy, onLoadLogs }: LogsPanelProps) {
 
   async function load() {
     const podName = selectedPodItem?.metadata?.name;
-    if (!podName) return;
-    const response = await onLoadLogs(podName, selectedContainer, Number(tail) || 300);
-    if (response) setLogResponse(response);
+    if (!podName || loadingRef.current) return;
+    loadingRef.current = true;
+    try {
+      const response = await onLoadLogs(podName, selectedContainer, Number(tail) || 300);
+      if (response) setLogResponse(response);
+    } finally {
+      loadingRef.current = false;
+    }
   }
 
   function exportLogs() {
@@ -80,7 +86,8 @@ export function LogsPanel({ pods, busy, onLoadLogs }: LogsPanelProps) {
   }, [containers, selectedContainer]);
 
   useEffect(() => {
-    if (!autoRefresh) return;
+    if (!autoRefresh || !selectedPodItem?.metadata?.name) return;
+    void load();
     const interval = window.setInterval(() => void load(), 4000);
     return () => window.clearInterval(interval);
   }, [autoRefresh, selectedPodItem?.metadata?.name, selectedContainer, tail]);
@@ -158,12 +165,38 @@ function visibleLines(lines: string[], filter: string) {
 }
 
 function LogOutput({ lines }: { lines: string[] }) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  function scrollToBottom() {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTop = viewport.scrollHeight;
+  }
+
+  function updateStickiness() {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 28;
+  }
+
+  useEffect(() => {
+    scrollToBottom();
+  }, []);
+
+  useEffect(() => {
+    if (stickToBottomRef.current) {
+      requestAnimationFrame(scrollToBottom);
+    }
+  }, [lines]);
+
   if (lines.length === 0) {
     return <div className="log-output empty-log">No log lines returned.</div>;
   }
 
   return (
-    <div className="log-output" role="log" aria-live="polite">
+    <div className="log-output" role="log" aria-live="polite" ref={viewportRef} onScroll={updateStickiness}>
       {lines.map((line, index) => (
         <div className="log-line" key={`${index}-${line.slice(0, 32)}`}>
           {parseAnsiLine(line).map((segment, segmentIndex) => (
