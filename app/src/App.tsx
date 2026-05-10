@@ -2,25 +2,25 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   Activity,
   Database,
-  Download,
-  ExternalLink,
   HardDrive,
   Map,
-  PackagePlus,
   RadioTower,
-  Play,
-  RefreshCw,
-  RotateCcw,
   Server,
-  ShieldCheck,
   SlidersHorizontal,
-  Square,
   Terminal,
-  Users,
-  Wifi
+  Users
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { EmptyState, InfoRow, Metric, StatusInfoRow, StatusLamp, StatusPill } from "./components/primitives";
+import { AppHeader, AppSidebar, StatusStrip } from "./components/appShell";
+import { EmptyState, InfoRow, StatusPill } from "./components/primitives";
+import { BattleGroupsPanel } from "./views/battlegroups";
+import { DirectorView } from "./views/director";
+import { EnvironmentPanel } from "./views/environment";
+import { HostVmPanels, VmRequiredNotice } from "./views/hostVm";
+import { DirectorUnavailableNotice, ManagerApiPanel, ManagerToolsRequiredNotice } from "./views/managerApi";
+import { LogsPanel } from "./views/logs";
+import { PlayersPanel } from "./views/players";
+import { WorkloadsPanel } from "./views/workloads";
 import type {
   AppConfig,
   BattleGroupDetail,
@@ -47,13 +47,10 @@ import {
   boolAt,
   defaultConfig,
   delay,
-  formatBytes,
   generateToken,
   managerWorkloadsToUi,
   nullableNumber,
-  numberAt,
-  valueAt,
-  vmHealthLabel
+  numberAt
 } from "./utils";
 
 export default function App() {
@@ -713,100 +710,29 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <Server size={26} />
-          <div>
-            <strong>Dune Dedicated</strong>
-            <span>Server Manager</span>
-          </div>
-        </div>
-        <nav>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.key}
-                className={`${activeView === item.key ? "active" : ""} ${item.disabled ? "disabled" : ""}`}
-                disabled={item.disabled}
-                onClick={() => setActiveView(item.key)}
-              >
-                <Icon size={16} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-      </aside>
+      <AppSidebar navItems={navItems} activeView={activeView} onSelect={setActiveView} />
 
       <section className="content">
-        <header className="topbar">
-          <div>
-            <h1>{pageTitle}</h1>
-            <p>{pageSubtitle}</p>
-          </div>
-          <button className="primary" onClick={refresh} disabled={busy}>
-            <RefreshCw size={17} />
-            Refresh
-          </button>
-        </header>
+        <AppHeader title={pageTitle} subtitle={pageSubtitle} busy={busy} onRefresh={refresh} />
 
-        <section className="status-strip">
-          <div>
-            <ShieldCheck size={18} />
-            <span>Admin</span>
-            <StatusLamp label="Admin" value={host?.isElevated ?? false} />
-          </div>
-          <div>
-            <HardDrive size={18} />
-            <span>VM</span>
-            <StatusLamp label="VM" value={vm?.state} />
-          </div>
-          <div>
-            <Terminal size={18} />
-            <span>SSH</span>
-            <StatusLamp label="SSH" value={guest?.connected ?? false} />
-          </div>
-          <div>
-            <Database size={18} />
-            <span>k3s</span>
-            <StatusLamp label="k3s" value={guest?.kubectl ?? false} />
-          </div>
-          <div>
-            <Activity size={18} />
-            <span>BattleGroup</span>
-            <StatusLamp label="BattleGroup" value={selectedBattleGroup?.phase} />
-          </div>
-          <div>
-            <RadioTower size={18} />
-            <span>Manager API</span>
-            <StatusLamp label="Manager API" value={managerReadiness} />
-          </div>
-        </section>
+        <StatusStrip
+          admin={host?.isElevated ?? false}
+          vmState={vm?.state}
+          sshConnected={guest?.connected ?? false}
+          kubectlReady={guest?.kubectl ?? false}
+          battleGroupPhase={selectedBattleGroup?.phase}
+          managerReadiness={managerReadiness}
+        />
 
         {(activeView === "overview" || activeView === "config") && (
-          <section className="settings-band">
-            <div className="panel-title">
-              <h2>Detected Environment</h2>
-              <button onClick={detectEnvironment} disabled={busy}>
-                <RefreshCw size={16} />
-                Detect
-              </button>
-            </div>
-            <div className="detected-grid">
-              <InfoRow label="Server install path" value={config.installPath || "Not found"} />
-              <InfoRow label="VM name" value={config.vmName || "Not found"} />
-              <InfoRow label="VM IP" value={config.vmIp || vm?.ipAddresses?.[0] || "Not found"} />
-              <InfoRow label="SSH user" value={config.sshUser || "Not found"} />
-              <InfoRow label="SSH path" value={config.sshPath || "Not found"} />
-              <InfoRow label="Manager API URL" value={config.managerApiUrl || "Not installed"} />
-              <InfoRow label="Manager namespace" value={managerInstallNamespace || "Not detected"} />
-              <InfoRow label="Manager binary" value={config.managerApiBinaryPath || "Not found"} />
-              <InfoRow label="Director internal URL" value={config.managerApiDirectorUrl || "Not detected"} />
-              <InfoRow label="Manager token" value={config.managerApiToken ? "Stored" : "Will be generated on install"} />
-            </div>
-            {configSaved && <p className="success-line">Saved to app config.json</p>}
-          </section>
+          <EnvironmentPanel
+            config={config}
+            vm={vm}
+            managerInstallNamespace={managerInstallNamespace}
+            configSaved={configSaved}
+            busy={busy}
+            onDetect={detectEnvironment}
+          />
         )}
 
         {errors.length > 0 && (
@@ -821,264 +747,84 @@ export default function App() {
         )}
 
         {vm && !vmIsRunning && (
-          <section className="tool-required panel">
-            <div>
-              <HardDrive size={24} />
-              <h2>{vmIsChanging ? `VM is ${vm.state}` : "VM must be running"}</h2>
-            </div>
-            <p>
-              {vmIsStarting
-                ? "Hyper-V is starting the VM. Guest SSH, Manager API, BattleGroups, Director telemetry, and logs will load once the VM reports Running and has an IP address."
-                : "Guest SSH, Manager API, BattleGroups, Director telemetry, and logs are skipped until Hyper-V reports the VM state as Running and an IP address is available."}
-            </p>
-            <button onClick={startVm} disabled={busy || !canControlVm || vmIsRunning || vmIsChanging}>
-              <Play size={16} />
-              Start VM
-            </button>
-          </section>
+          <VmRequiredNotice
+            vm={vm}
+            busy={busy}
+            canControlVm={canControlVm}
+            vmIsRunning={vmIsRunning}
+            vmIsChanging={vmIsChanging}
+            vmIsStarting={vmIsStarting}
+            onStart={startVm}
+          />
         )}
 
         {(activeView === "overview" || activeView === "host") && (
-          <section className="grid two">
-            <article className="panel">
-              <div className="panel-title">
-                <h2>Host & VM</h2>
-                <div className="button-row">
-                  <button
-                    onClick={startVm}
-                    disabled={busy || !canControlVm || vmIsRunning || vmIsChanging}
-                    title={startVmDisabledReason}
-                  >
-                    <Play size={16} />
-                    Start VM
-                  </button>
-                  <button
-                    onClick={stopVm}
-                    disabled={busy || !canControlVm || !vmIsRunning || vmIsChanging}
-                    title={stopVmDisabledReason}
-                  >
-                    <Square size={16} />
-                    Stop VM
-                  </button>
-                </div>
-              </div>
-              <InfoRow label="Hyper-V" value={host?.hypervAvailable ? "Available" : "Unavailable"} />
-              <InfoRow label="vmms service" value={host?.vmmsStatus} />
-              <StatusInfoRow label="VM state" value={vm?.state} />
-              <InfoRow label="Hyper-V health" value={vmHealthLabel(vm?.state, vm?.status)} />
-              <InfoRow label="Memory" value={vm ? formatBytes(vm.memoryAssignedBytes) : null} />
-              <InfoRow label="Uptime" value={vm?.uptime} />
-              <InfoRow label="VM path" value={vm?.path} />
-            </article>
-
-            <article className="panel">
-              <div className="panel-title">
-                <h2>Guest Connection</h2>
-                <Wifi size={19} />
-              </div>
-              <InfoRow label="IP" value={guest?.ip ?? vm?.ipAddresses?.[0]} />
-              <InfoRow label="SSH user" value={guest?.sshUser} />
-              <InfoRow label="Hostname" value={guest?.hostname} />
-              <InfoRow label="Kernel" value={guest?.kernel} />
-              <InfoRow label="Passwordless sudo" value={guest?.sudo ? "Ready" : "Unavailable"} />
-              <InfoRow label="kubectl" value={guest?.kubectl ? "Ready" : "Unavailable"} />
-            </article>
-          </section>
+          <HostVmPanels
+            host={host}
+            vm={vm}
+            guest={guest}
+            busy={busy}
+            canControlVm={canControlVm}
+            vmIsRunning={vmIsRunning}
+            vmIsChanging={vmIsChanging}
+            startVmDisabledReason={startVmDisabledReason}
+            stopVmDisabledReason={stopVmDisabledReason}
+            onStart={startVm}
+            onStop={stopVm}
+          />
         )}
 
         {(activeView === "overview" || activeView === "manager") && (
-          <section className="panel">
-            <div className="panel-title">
-              <h2>Manager API</h2>
-              <div className="button-row">
-                <button onClick={installManagerApi} disabled={busy || !canInstallManagerApi}>
-                  <PackagePlus size={16} />
-                  Install Tool
-                </button>
-                <RadioTower size={19} />
-              </div>
-            </div>
-            <section className="config-summary">
-              <InfoRow label="URL" value={config.managerApiUrl || "Not configured"} />
-              <InfoRow label="Install namespace" value={managerInstallNamespace || "Not configured"} />
-              <InfoRow label="Binary" value={config.managerApiBinaryPath || "Not configured"} />
-              <InfoRow label="API" value={managerReadiness} />
-              <InfoRow label="Telemetry socket" value={managerTelemetryState} />
-              <InfoRow label="Namespace" value={managerStatus?.namespace} />
-              <InfoRow label="Director bridge" value={managerStatus?.directorConfigured ? "Configured" : "Unavailable"} />
-              <InfoRow
-                label="Telemetry"
-                value={
-                  managerTelemetry?.payload
-                    ? `${managerTelemetry.payload.pods?.length ?? 0} pods, ${
-                        managerTelemetry.payload.services?.length ?? 0
-                      } services`
-                    : "No events yet"
-                }
-              />
-              <InfoRow
-                label="Snapshot counts"
-                value={
-                  managerStatus
-                    ? `${managerStatus.battlegroups} battlegroups, ${managerStatus.pods} pods, ${managerStatus.services} services`
-                    : "Unknown"
-                }
-              />
-            </section>
-            {managerInstall && (
-              <p className="success-line">
-                Installed {managerInstall.deployment} in {managerInstall.namespace}
-              </p>
-            )}
-            {managerError && <p className="subtle-line">{managerError}</p>}
-          </section>
+          <ManagerApiPanel
+            config={config}
+            managerInstallNamespace={managerInstallNamespace}
+            managerReadiness={managerReadiness}
+            managerTelemetryState={managerTelemetryState}
+            managerStatus={managerStatus}
+            managerTelemetry={managerTelemetry}
+            managerInstall={managerInstall}
+            managerError={managerError}
+            busy={busy}
+            canInstallManagerApi={canInstallManagerApi}
+            onInstall={installManagerApi}
+          />
         )}
 
         {!managerToolsInstalled && (activeView === "overview" || activeView === "manager" || activeViewRequiresManager) && (
-          <section className="tool-required panel">
-            <div>
-              <RadioTower size={24} />
-              <h2>Manager tools must be installed</h2>
-            </div>
-            <p>
-              BattleGroups, live config, pods, services, logs, and server actions are hidden until the Manager API is
-              installed and reachable.
-            </p>
-            <button onClick={installManagerApi} disabled={busy || !canInstallManagerApi}>
-              <PackagePlus size={16} />
-              Install Tool
-            </button>
-          </section>
+          <ManagerToolsRequiredNotice
+            busy={busy}
+            canInstallManagerApi={canInstallManagerApi}
+            onInstall={installManagerApi}
+          />
         )}
 
         {managerToolsInstalled && !directorAvailable && (activeView === "overview" || activeView === "manager") && (
-          <section className="tool-required panel">
-            <div>
-              <Map size={24} />
-              <h2>Director bridge is unavailable</h2>
-            </div>
-            <p>
-              Native player telemetry, map runtime state, and the advanced Director console need the Manager API to
-              detect and reach the internal Director service.
-            </p>
-            <button onClick={refresh} disabled={busy}>
-              <RefreshCw size={16} />
-              Refresh
-            </button>
-          </section>
+          <DirectorUnavailableNotice busy={busy} onRefresh={refresh} />
         )}
 
         {directorAvailable && (activeView === "overview" || activeView === "players") && (
-          <section className="panel">
-            <div className="panel-title">
-              <h2>Players</h2>
-              <Users size={19} />
-            </div>
-            {!directorPlayers ? (
-              <EmptyState text="No Director player telemetry loaded." />
-            ) : (
-              <div className="metric-grid">
-                <Metric label="Active" value={directorPlayers.active} />
-                <Metric label="Online" value={directorPlayers.online} />
-                <Metric label="In Transit" value={directorPlayers.inTransit} />
-                <Metric label="Grace Period" value={directorPlayers.gracePeriod} />
-                <Metric label="Completion" value={directorPlayers.completion} />
-                <Metric label="Queued" value={directorPlayers.queued} />
-                <Metric label="Login Requests" value={directorPlayers.loginRequestsTotal} />
-                <Metric label="Travel Requests" value={directorPlayers.travelRequestsTotal} />
-              </div>
-            )}
-          </section>
+          <PlayersPanel players={directorPlayers} />
         )}
 
         {managerToolsInstalled && (activeView === "overview" || activeView === "battlegroups") && (
-            <section className="panel">
-              <div className="panel-title">
-                <h2>BattleGroups</h2>
-                <div className="button-row">
-                  <button
-                    onClick={() => setBattleGroupRunning(true)}
-                    disabled={busy || !selectedBattleGroup || !canUseManager || !battleGroupIsStopped}
-                  >
-                    <Play size={16} />
-                    Start
-                  </button>
-                  <button
-                    onClick={() => setBattleGroupRunning(false)}
-                    disabled={busy || !selectedBattleGroup || !canUseManager || battleGroupIsStopped}
-                  >
-                    <Square size={16} />
-                    Stop
-                  </button>
-                  <button
-                    onClick={restartBattleGroup}
-                    disabled={busy || !selectedBattleGroup || !canUseManager || !battleGroupIsRunning}
-                  >
-                    <RotateCcw size={16} />
-                    Restart
-                  </button>
-                  <button onClick={exportLiveConfig} disabled={busy || !selectedBattleGroup || !canUseManager}>
-                    <Download size={16} />
-                    Export
-                  </button>
-                </div>
-              </div>
-              {battleGroups.length === 0 ? (
-                <EmptyState text="No BattleGroups were found." />
-              ) : (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Title</th>
-                        <th>Phase</th>
-                        <th>Server Sets</th>
-                        <th>Image</th>
-                        <th>Services</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {battleGroups.map((group) => (
-                        <tr
-                          key={group.namespace}
-                          className={group.namespace === selectedBattleGroup?.namespace ? "selected" : ""}
-                          onClick={() => {
-                            setSelectedNamespace(group.namespace);
-                            void loadBattleGroupDetail(group);
-                            void loadWorkloads(group.namespace);
-                          }}
-                        >
-                          <td>
-                            <strong>{group.title || group.name}</strong>
-                            <span>{group.namespace}</span>
-                          </td>
-                          <td>
-                            <StatusPill value={group.phase} />
-                          </td>
-                          <td>{group.serverSets}</td>
-                          <td className="mono">{group.serverImage}</td>
-                          <td>
-                            <div className="link-row">
-                              {group.fileBrowserUrl && (
-                                <a href={group.fileBrowserUrl} target="_blank" rel="noreferrer">
-                                  Files <ExternalLink size={14} />
-                                </a>
-                              )}
-                              {group.directorUrl && (
-                                <a href={group.directorUrl} target="_blank" rel="noreferrer">
-                                  Director <ExternalLink size={14} />
-                                </a>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {snapshotPath && <p className="success-line">Snapshot exported to {snapshotPath}</p>}
-            </section>
+          <BattleGroupsPanel
+            battleGroups={battleGroups}
+            selectedBattleGroup={selectedBattleGroup}
+            busy={busy}
+            canUseManager={canUseManager}
+            battleGroupIsStopped={battleGroupIsStopped}
+            battleGroupIsRunning={battleGroupIsRunning}
+            snapshotPath={snapshotPath}
+            onStart={() => setBattleGroupRunning(true)}
+            onStop={() => setBattleGroupRunning(false)}
+            onRestart={restartBattleGroup}
+            onExport={exportLiveConfig}
+            onSelect={(group) => {
+              setSelectedNamespace(group.namespace);
+              void loadBattleGroupDetail(group);
+              void loadWorkloads(group.namespace);
+            }}
+          />
         )}
 
         {managerToolsInstalled && activeView === "config" && (
@@ -1373,178 +1119,24 @@ export default function App() {
         )}
 
         {directorAvailable && activeView === "director" && (
-          <>
-            <section className="panel">
-              <div className="panel-title">
-                <h2>Director Maps</h2>
-                <div className="button-row">
-                  <button onClick={loadDirectorData} disabled={busy}>
-                    <RefreshCw size={16} />
-                    Reload
-                  </button>
-                  <Map size={19} />
-                </div>
-              </div>
-              {directorMaps.length === 0 ? (
-                <EmptyState text="No Director map data loaded." />
-              ) : (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Map</th>
-                        <th>Kind</th>
-                        <th>Players</th>
-                        <th>Queue</th>
-                        <th>Servers</th>
-                        <th>Override</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {directorMaps.map((map) => (
-                        <tr key={`${map.kind}-${map.name}`}>
-                          <td>
-                            <strong>{map.name}</strong>
-                          </td>
-                          <td>{map.kind}</td>
-                          <td>{map.players}</td>
-                          <td>{map.queued}</td>
-                          <td>{map.servers.length}</td>
-                          <td>
-                            <div className="button-row">
-                              <StatusPill value={map.hasOverride ? "Active" : "None"} />
-                              <button
-                                onClick={() => {
-                                  setSelectedDirectorMap(map.name);
-                                  setActiveView("config");
-                                }}
-                                disabled={busy}
-                              >
-                                Edit
-                              </button>
-                              <button onClick={() => clearMapOverride(map.name)} disabled={busy || !map.hasOverride}>
-                                Clear
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </section>
-
-            {directorMaps.length > 0 && (
-              <section className="panel">
-                <div className="panel-title">
-                  <h2>Server Runtime</h2>
-                  <Activity size={19} />
-                </div>
-                <div className="map-card-grid">
-                  {directorMaps.map((map) => (
-                    <article className="runtime-map" key={`${map.kind}-runtime-${map.name}`}>
-                      <div className="mini-title">
-                        <strong>{map.name}</strong>
-                        <span>{map.kind}</span>
-                      </div>
-                      <div className="runtime-stats">
-                        <span>{map.players} players</span>
-                        <span>{map.online} online</span>
-                        <span>{map.queued} queued</span>
-                      </div>
-                      <div className="runtime-servers">
-                        {map.servers.length === 0 ? (
-                          <EmptyState text="No server rows reported." />
-                        ) : (
-                          map.servers.map((server) => (
-                            <div key={`${map.name}-${server.partitionId}-${server.dimensionIndex}-${server.serverId}`}>
-                              <div>
-                                <strong>{server.label || "Unnamed"}</strong>
-                                <span className="mono">{server.serverId || "No server id"}</span>
-                              </div>
-                              <StatusPill value={server.status} />
-                              <span>{server.players} players</span>
-                              <span>{server.queued ?? "N/A"} queued</span>
-                              <span>
-                                {server.heartbeatSecondsAgo === null || server.heartbeatSecondsAgo === undefined
-                                  ? "No heartbeat"
-                                  : `${server.heartbeatSecondsAgo}s ago`}
-                              </span>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
-          </>
+          <DirectorView
+            directorMaps={directorMaps}
+            busy={busy}
+            onReload={loadDirectorData}
+            onEditMap={(mapName) => {
+              setSelectedDirectorMap(mapName);
+              setActiveView("config");
+            }}
+            onClearMapOverride={clearMapOverride}
+          />
         )}
 
         {managerToolsInstalled && (activeView === "overview" || activeView === "workloads") && (
-            <section className="grid two">
-              <article className="panel">
-                <div className="panel-title">
-                  <h2>Pods</h2>
-                  <span>{pods.length}</span>
-                </div>
-                {pods.length === 0 ? (
-                  <EmptyState text="No pod data loaded." />
-                ) : (
-                  <div className="compact-list">
-                    {pods.map((pod) => {
-                      const status = String(pod.status?.phase ?? "Unknown");
-                      return (
-                        <div key={pod.metadata?.name}>
-                          <strong>{pod.metadata?.name}</strong>
-                          <StatusPill value={status} />
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </article>
-
-              <article className="panel">
-                <div className="panel-title">
-                  <h2>Services</h2>
-                  <span>{services.length}</span>
-                </div>
-                {services.length === 0 ? (
-                  <EmptyState text="No service data loaded." />
-                ) : (
-                  <div className="compact-list">
-                    {services.map((service) => {
-                      const ports = Array.isArray(service.spec?.ports)
-                        ? service.spec?.ports
-                            .map((port: Record<string, unknown>) =>
-                              port.nodePort ? `${port.port}:${port.nodePort}` : String(port.port)
-                            )
-                            .join(", ")
-                        : "";
-                      return (
-                        <div key={service.metadata?.name}>
-                          <strong>{service.metadata?.name}</strong>
-                          <span>{ports}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </article>
-            </section>
+          <WorkloadsPanel pods={pods} services={services} />
         )}
 
         {managerToolsInstalled && activeView === "logs" && (
-          <section className="panel">
-            <div className="panel-title">
-              <h2>Logs</h2>
-              <Terminal size={19} />
-            </div>
-            <EmptyState text="Log export and streaming will live here once the manager log endpoints are wired." />
-          </section>
+          <LogsPanel />
         )}
       </section>
     </main>
