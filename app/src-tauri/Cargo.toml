@@ -1,0 +1,22 @@
+[package]
+name = "dune-dedicated-server-manager"
+version = "0.1.0"
+description = "Dedicated server manager for Dune Awakening"
+edition = "2021"
+
+[lib]
+name = "dune_dedicated_server_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+thiserror = "1"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
