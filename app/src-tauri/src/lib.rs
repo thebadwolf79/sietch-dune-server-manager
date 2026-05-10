@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::io::Write;
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager};
@@ -41,6 +42,9 @@ struct AppConfig {
     ssh_path: String,
     manager_api_url: String,
     manager_api_token: String,
+    manager_api_namespace: String,
+    manager_api_image: String,
+    manager_api_director_url: String,
 }
 
 impl Default for AppConfig {
@@ -53,6 +57,9 @@ impl Default for AppConfig {
             ssh_path: String::new(),
             manager_api_url: String::new(),
             manager_api_token: String::new(),
+            manager_api_namespace: String::new(),
+            manager_api_image: String::new(),
+            manager_api_director_url: String::new(),
         }
     }
 }
@@ -135,6 +142,15 @@ struct WorkloadList {
 #[serde(rename_all = "camelCase")]
 struct ConfigSnapshot {
     file_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagerApiInstallResult {
+    namespace: String,
+    deployment: String,
+    service: String,
+    image: String,
 }
 
 fn failure(message: impl Into<String>) -> CommandFailure {
@@ -269,6 +285,13 @@ fn validate_kube_arg(value: &str, label: &str) -> CommandResult<()> {
     Ok(())
 }
 
+fn validate_plain_value(value: &str, label: &str) -> CommandResult<()> {
+    if value.is_empty() || value.chars().any(|ch| ch.is_control()) {
+        return Err(failure(format!("{label} is not configured")));
+    }
+    Ok(())
+}
+
 fn ps_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -302,6 +325,13 @@ fn normalize_config(mut config: AppConfig) -> AppConfig {
         .trim_end_matches('/')
         .to_string();
     config.manager_api_token = config.manager_api_token.trim().to_string();
+    config.manager_api_namespace = config.manager_api_namespace.trim().to_string();
+    config.manager_api_image = config.manager_api_image.trim().to_string();
+    config.manager_api_director_url = config
+        .manager_api_director_url
+        .trim()
+        .trim_end_matches('/')
+        .to_string();
     config
 }
 
@@ -481,6 +511,64 @@ fn run_ssh(
             remote_command,
         ],
     )
+}
+
+fn run_ssh_with_stdin(
+    app: &AppHandle,
+    install_path: &str,
+    ip: &str,
+    ssh_user: &str,
+    remote_command: &str,
+    stdin_text: &str,
+) -> CommandResult<String> {
+    let key = prepare_key(app, install_path)?;
+    let destination = format!("{ssh_user}@{ip}");
+    let key_str = key.to_string_lossy().to_string();
+    let ssh_path = read_app_config(app)
+        .map(|config| config.ssh_path)
+        .unwrap_or_default();
+    if ssh_path.is_empty() {
+        return Err(failure("SSH path is not configured"));
+    }
+
+    let mut child = Command::new(&ssh_path)
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "PreferredAuthentications=publickey",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=NUL",
+            "-o",
+            "ConnectTimeout=6",
+            "-i",
+            &key_str,
+            &destination,
+            remote_command,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| failure(format!("Failed to run SSH: {err}")))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(stdin_text.as_bytes())
+            .map_err(|err| failure(format!("Failed to send SSH stdin: {err}")))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|err| failure(format!("Failed to wait for SSH: {err}")))?;
+
+    if !output.status.success() {
+        return Err(command_failure("SSH command exited with an error", output));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn discover_ip_from_logs(install_path: &str) -> Option<String> {
@@ -987,6 +1075,179 @@ fn export_live_config(
     })
 }
 
+fn yaml_string(value: &str) -> CommandResult<String> {
+    serde_json::to_string(value)
+        .map_err(|err| failure(format!("Failed to quote manifest value: {err}")))
+}
+
+fn manager_api_manifest(
+    namespace: &str,
+    image: &str,
+    token: &str,
+    director_base_url: &str,
+) -> CommandResult<String> {
+    Ok(format!(
+        r#"apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dune-manager-api
+  namespace: {namespace}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dune-manager-api-auth
+  namespace: {namespace}
+type: Opaque
+stringData:
+  token: {token}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dune-manager-api
+  namespace: {namespace}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["igw.funcom.com"]
+    resources: ["battlegroups", "battlegroupdirectors", "battlegroupstats", "databases", "databasedeployments", "filebrowsers", "messagequeues", "servergateways", "servergroups", "serversets", "serverstats", "textrouters"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dune-manager-api
+  namespace: {namespace}
+subjects:
+  - kind: ServiceAccount
+    name: dune-manager-api
+    namespace: {namespace}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dune-manager-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dune-manager-api
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dune-manager-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dune-manager-api
+    spec:
+      serviceAccountName: dune-manager-api
+      containers:
+        - name: api
+          image: {image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8787
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: MANAGER_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dune-manager-api-auth
+                  key: token
+            - name: DIRECTOR_BASE_URL
+              value: {director_base_url}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dune-manager-api
+  namespace: {namespace}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dune-manager-api
+  ports:
+    - name: http
+      port: 8787
+      targetPort: http
+"#,
+        namespace = namespace,
+        image = yaml_string(image)?,
+        token = yaml_string(token)?,
+        director_base_url = yaml_string(director_base_url)?,
+    ))
+}
+
+#[tauri::command]
+fn install_manager_api(
+    app: AppHandle,
+    namespace: String,
+    image: String,
+    token: String,
+    director_base_url: String,
+    install_path: Option<String>,
+    ip: Option<String>,
+    ssh_user: Option<String>,
+) -> CommandResult<ManagerApiInstallResult> {
+    let namespace = namespace.trim().to_string();
+    let image = image.trim().to_string();
+    let token = token.trim().to_string();
+    let director_base_url = director_base_url.trim().trim_end_matches('/').to_string();
+    validate_kube_arg(&namespace, "namespace")?;
+    validate_plain_value(&image, "Manager API image")?;
+    validate_plain_value(&token, "Manager API token")?;
+    if !director_base_url.is_empty() {
+        validate_plain_value(&director_base_url, "Director base URL")?;
+    }
+
+    let (install_path, ip, ssh_user) = resolve_connection(&app, install_path, ip, ssh_user)?;
+    let manifest = manager_api_manifest(&namespace, &image, &token, &director_base_url)?;
+    run_ssh_with_stdin(
+        &app,
+        &install_path,
+        &ip,
+        &ssh_user,
+        "sudo kubectl apply -f -",
+        &manifest,
+    )?;
+    run_ssh(
+        &app,
+        &install_path,
+        &ip,
+        &ssh_user,
+        &format!(
+            "sudo kubectl rollout status deployment/dune-manager-api -n {namespace} --timeout=60s"
+        ),
+    )?;
+
+    Ok(ManagerApiInstallResult {
+        namespace,
+        deployment: "dune-manager-api".to_string(),
+        service: "dune-manager-api".to_string(),
+        image,
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -1003,7 +1264,8 @@ pub fn run() {
             start_battlegroup,
             stop_battlegroup,
             restart_battlegroup,
-            export_live_config
+            export_live_config,
+            install_manager_api
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

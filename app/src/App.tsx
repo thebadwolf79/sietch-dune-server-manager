@@ -5,6 +5,7 @@ import {
   Download,
   ExternalLink,
   HardDrive,
+  PackagePlus,
   RadioTower,
   Play,
   RefreshCw,
@@ -43,6 +44,9 @@ type AppConfig = {
   sshPath: string;
   managerApiUrl: string;
   managerApiToken: string;
+  managerApiNamespace: string;
+  managerApiImage: string;
+  managerApiDirectorUrl: string;
 };
 
 type VmStatus = {
@@ -140,6 +144,13 @@ type TelemetryEnvelope = {
   };
 };
 
+type ManagerApiInstallResult = {
+  namespace: string;
+  deployment: string;
+  service: string;
+  image: string;
+};
+
 const defaultConfig: AppConfig = {
   installPath: "",
   vmName: "",
@@ -147,7 +158,10 @@ const defaultConfig: AppConfig = {
   sshUser: "",
   sshPath: "",
   managerApiUrl: "",
-  managerApiToken: ""
+  managerApiToken: "",
+  managerApiNamespace: "",
+  managerApiImage: "",
+  managerApiDirectorUrl: ""
 };
 
 function formatBytes(bytes: number) {
@@ -191,6 +205,12 @@ function EmptyState({ text }: { text: string }) {
   return <div className="empty-state">{text}</div>;
 }
 
+function generateToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export default function App() {
   const [config, setConfig] = useState<AppConfig>(defaultConfig);
   const [host, setHost] = useState<HostStatus | null>(null);
@@ -211,6 +231,7 @@ export default function App() {
     "disabled"
   );
   const [managerError, setManagerError] = useState("");
+  const [managerInstall, setManagerInstall] = useState<ManagerApiInstallResult | null>(null);
 
   const selectedBattleGroup = useMemo(
     () => battleGroups.find((group) => group.namespace === selectedNamespace) ?? battleGroups[0],
@@ -225,8 +246,10 @@ export default function App() {
   const battleGroupIsRunning =
     selectedBattleGroup?.stop === false &&
     ["running", "ready", "starting"].includes(selectedBattleGroup?.phase.toLowerCase() ?? "");
-  const canUseGuest = vmIsRunning && guest?.connected && guest?.kubectl;
+  const canUseGuest = Boolean(vmIsRunning && guest?.connected && guest?.sudo && guest?.kubectl);
   const managerApiConfigured = config.managerApiUrl.trim().length > 0;
+  const managerInstallNamespace = config.managerApiNamespace.trim() || selectedBattleGroup?.namespace || "";
+  const canInstallManagerApi = Boolean(canUseGuest && managerInstallNamespace && config.managerApiImage.trim());
 
   async function capture<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
     try {
@@ -377,6 +400,35 @@ export default function App() {
       setConfig(saved);
       setConfigSaved(true);
       window.setTimeout(() => setConfigSaved(false), 2200);
+    }
+    setBusy(false);
+  }
+
+  async function installManagerApi() {
+    const namespace = managerInstallNamespace;
+    const token = config.managerApiToken || generateToken();
+    const nextConfig = {
+      ...config,
+      managerApiNamespace: namespace,
+      managerApiToken: token
+    };
+
+    setBusy(true);
+    setConfig(nextConfig);
+    const result = await capture("Install Manager API", () =>
+      invoke<ManagerApiInstallResult>("install_manager_api", {
+        namespace,
+        image: nextConfig.managerApiImage,
+        token,
+        directorBaseUrl: nextConfig.managerApiDirectorUrl,
+        installPath: nextConfig.installPath,
+        ip: guest?.ip ?? nextConfig.vmIp,
+        sshUser: nextConfig.sshUser
+      })
+    );
+    if (result) {
+      setManagerInstall(result);
+      await capture("Save Manager API config", () => invoke<AppConfig>("save_app_config", { config: nextConfig }));
     }
     setBusy(false);
   }
@@ -583,6 +635,37 @@ export default function App() {
               />
             </label>
             <label>
+              Manager namespace
+              <input
+                placeholder={selectedBattleGroup?.namespace || "namespace"}
+                value={config.managerApiNamespace}
+                onChange={(event) =>
+                  setConfig((current) => ({ ...current, managerApiNamespace: event.target.value }))
+                }
+                onBlur={() => void saveConfig()}
+              />
+            </label>
+            <label>
+              Manager image
+              <input
+                placeholder="registry.example/manager-api:tag"
+                value={config.managerApiImage}
+                onChange={(event) => setConfig((current) => ({ ...current, managerApiImage: event.target.value }))}
+                onBlur={() => void saveConfig()}
+              />
+            </label>
+            <label>
+              Director internal URL
+              <input
+                placeholder="http://director-service:11717"
+                value={config.managerApiDirectorUrl}
+                onChange={(event) =>
+                  setConfig((current) => ({ ...current, managerApiDirectorUrl: event.target.value }))
+                }
+                onBlur={() => void saveConfig()}
+              />
+            </label>
+            <label>
               Manager API token
               <input
                 type="password"
@@ -651,10 +734,18 @@ export default function App() {
         <section className="panel">
           <div className="panel-title">
             <h2>Manager API</h2>
-            <RadioTower size={19} />
+            <div className="button-row">
+              <button onClick={installManagerApi} disabled={busy || !canInstallManagerApi}>
+                <PackagePlus size={16} />
+                Install Tool
+              </button>
+              <RadioTower size={19} />
+            </div>
           </div>
           <section className="config-summary">
             <InfoRow label="URL" value={config.managerApiUrl || "Not configured"} />
+            <InfoRow label="Install namespace" value={managerInstallNamespace || "Not configured"} />
+            <InfoRow label="Image" value={config.managerApiImage || "Not configured"} />
             <InfoRow label="Socket" value={managerApiConfigured ? managerSocketState : "Disabled"} />
             <InfoRow label="Namespace" value={managerStatus?.namespace} />
             <InfoRow label="Director bridge" value={managerStatus?.directorConfigured ? "Configured" : "Unavailable"} />
@@ -677,6 +768,11 @@ export default function App() {
               }
             />
           </section>
+          {managerInstall && (
+            <p className="success-line">
+              Installed {managerInstall.deployment} in {managerInstall.namespace}
+            </p>
+          )}
           {managerError && <p className="subtle-line">{managerError}</p>}
         </section>
 
