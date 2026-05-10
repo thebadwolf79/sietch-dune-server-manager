@@ -360,11 +360,12 @@ async fn status(
     let battlegroups = list_battlegroups(&state).await?.len();
     let pods = list_pods(&state).await?.len();
     let services = list_services(&state).await?.len();
+    let director_configured = resolve_director_base_url(&state).await.is_ok();
 
     Ok(Json(StatusResponse {
         namespace: state.namespace.clone(),
         auth_enabled: state.token.is_some(),
-        director_configured: state.director_base_url.is_some(),
+        director_configured,
         battlegroups,
         pods,
         services,
@@ -511,7 +512,7 @@ async fn director_capabilities(
 ) -> ApiResponse<DirectorCapabilities> {
     authorize(&state, &headers, None)?;
     Ok(Json(DirectorCapabilities {
-        configured: state.director_base_url.is_some(),
+        configured: resolve_director_base_url(&state).await.is_ok(),
         api_paths: director_capabilities_list(),
         ui_proxy_path: "/director",
     }))
@@ -833,7 +834,7 @@ fn is_allowed_director_api(method: &str, path: &str) -> bool {
 }
 
 async fn director_get_json(state: &AppState, path: &str) -> Result<Value, ApiError> {
-    let base_url = director_base_url(state)?;
+    let base_url = resolve_director_base_url(state).await?;
     let value = state
         .http
         .get(format!("{base_url}{path}"))
@@ -923,7 +924,7 @@ async fn proxy_director_request(
     query: Option<String>,
     body: Bytes,
 ) -> Result<reqwest::Response, ApiError> {
-    let base_url = director_base_url(state)?;
+    let base_url = resolve_director_base_url(state).await?;
     let mut url = format!("{base_url}{path}");
     if let Some(query) = query.filter(|value| !value.is_empty()) {
         url.push('?');
@@ -945,11 +946,56 @@ async fn proxy_director_request(
         .map_err(ApiError::from)
 }
 
-fn director_base_url(state: &AppState) -> Result<&str, ApiError> {
-    state
-        .director_base_url
-        .as_deref()
-        .ok_or_else(|| ApiError::bad_gateway("DIRECTOR_BASE_URL is not configured"))
+async fn resolve_director_base_url(state: &AppState) -> Result<String, ApiError> {
+    if let Some(url) = state.director_base_url.as_deref() {
+        return Ok(url.to_string());
+    }
+    discover_director_base_url(state).await
+}
+
+async fn discover_director_base_url(state: &AppState) -> Result<String, ApiError> {
+    let services: Api<Service> = Api::namespaced(state.client.clone(), &state.namespace);
+    let list = services
+        .list(&ListParams::default())
+        .await
+        .context("failed to list services for Director discovery")?;
+
+    for service in list {
+        let name = service.metadata.name.clone().unwrap_or_default();
+        let Some(spec) = service.spec else {
+            continue;
+        };
+        let Some(ports) = spec.ports else {
+            continue;
+        };
+        for port in ports {
+            let is_director = port.port == 11717
+                || port
+                    .name
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("director")
+                || name.contains("director");
+            if !is_director {
+                continue;
+            }
+            if let Some(node_port) = port.node_port {
+                return Ok(format!("http://127.0.0.1:{node_port}"));
+            }
+            if let Some(cluster_ip) = spec.cluster_ip.as_deref().filter(|value| !value.is_empty()) {
+                return Ok(format!("http://{cluster_ip}:{}", port.port));
+            }
+            if !name.is_empty() {
+                return Ok(format!(
+                    "http://{name}.{}.svc.cluster.local:{}",
+                    state.namespace, port.port
+                ));
+            }
+        }
+    }
+    Err(ApiError::bad_gateway(
+        "DIRECTOR_BASE_URL is not configured and Director service discovery failed",
+    ))
 }
 
 fn query_token(query: Option<&str>) -> Option<&str> {
