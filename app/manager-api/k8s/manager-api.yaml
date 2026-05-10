@@ -14,8 +14,10 @@ rules:
     resources: ["pods", "pods/log", "services", "events"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["igw.funcom.com"]
+    resources: ["battlegroups"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["igw.funcom.com"]
     resources:
-      - battlegroups
       - battlegroupdirectors
       - battlegroupstats
       - databases

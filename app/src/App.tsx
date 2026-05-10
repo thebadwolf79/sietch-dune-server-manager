@@ -126,6 +126,36 @@ type Workloads = {
   };
 };
 
+type ManagerPodSummary = {
+  name: string;
+  phase: string;
+  ready: boolean;
+  restarts: number;
+  nodeName?: string | null;
+  createdAt?: string | null;
+};
+
+type ManagerServicePortSummary = {
+  name?: string | null;
+  port: number;
+  targetPort?: string | null;
+  nodePort?: number | null;
+  protocol?: string | null;
+};
+
+type ManagerServiceSummary = {
+  name: string;
+  serviceType?: string | null;
+  clusterIp?: string | null;
+  externalIps: string[];
+  ports: ManagerServicePortSummary[];
+};
+
+type ManagerWorkloads = {
+  pods: ManagerPodSummary[];
+  services: ManagerServiceSummary[];
+};
+
 type ManagerApiStatus = {
   namespace: string;
   authEnabled: boolean;
@@ -251,6 +281,7 @@ export default function App() {
     ["running", "ready", "starting"].includes(selectedBattleGroup?.phase.toLowerCase() ?? "");
   const canUseGuest = Boolean(vmIsRunning && guest?.connected && guest?.sudo && guest?.kubectl);
   const managerApiConfigured = config.managerApiUrl.trim().length > 0;
+  const canUseManager = managerApiConfigured && managerSocketState === "connected";
   const managerInstallNamespace = config.managerApiNamespace.trim() || selectedBattleGroup?.namespace || "";
   const canInstallManagerApi = Boolean(canUseGuest && managerInstallNamespace && config.managerApiBinaryPath.trim());
 
@@ -262,6 +293,43 @@ export default function App() {
       setErrors((current) => [{ ...commandError, message: `${label}: ${commandError.message}` }, ...current]);
       return null;
     }
+  }
+
+  async function managerRequest<T>(path: string, init?: RequestInit): Promise<T> {
+    const baseUrl = config.managerApiUrl.trim().replace(/\/$/, "");
+    if (!baseUrl) throw new Error("Manager API URL is not configured");
+    const headers = new Headers(init?.headers);
+    if (config.managerApiToken) {
+      headers.set("Authorization", `Bearer ${config.managerApiToken}`);
+    }
+    const response = await fetch(`${baseUrl}${path}`, { ...init, headers });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(body || `Manager API returned ${response.status}`);
+    }
+    return (await response.json()) as T;
+  }
+
+  function managerWorkloadsToUi(value: ManagerWorkloads): Workloads {
+    return {
+      pods: {
+        items: value.pods.map((pod) => ({
+          metadata: { name: pod.name, creationTimestamp: pod.createdAt ?? undefined },
+          status: { phase: pod.phase, ready: pod.ready, restarts: pod.restarts }
+        }))
+      },
+      services: {
+        items: value.services.map((service) => ({
+          metadata: { name: service.name },
+          spec: {
+            type: service.serviceType,
+            clusterIP: service.clusterIp,
+            externalIPs: service.externalIps,
+            ports: service.ports
+          }
+        }))
+      }
+    };
   }
 
   async function refresh() {
@@ -285,13 +353,9 @@ export default function App() {
       void invoke<AppConfig>("save_app_config", { config: updatedConfig });
     }
 
-    const nextBattleGroups = await capture("BattleGroups", () =>
-      invoke<BattleGroupSummary[]>("get_battlegroups", {
-        installPath: config.installPath,
-        ip: nextGuest?.ip ?? ip,
-        sshUser: config.sshUser
-      })
-    );
+    const nextBattleGroups = managerApiConfigured
+      ? await capture("Manager BattleGroups", () => managerRequest<BattleGroupSummary[]>("/api/battlegroups"))
+      : null;
     if (nextBattleGroups) {
       setBattleGroups(nextBattleGroups);
       const nextSelected = nextBattleGroups.some((group) => group.namespace === selectedNamespace)
@@ -300,36 +364,22 @@ export default function App() {
       setSelectedNamespace(nextSelected);
       const group = nextBattleGroups.find((candidate) => candidate.namespace === nextSelected);
       if (group) {
-        await Promise.all([
-          loadWorkloads(group.namespace, nextGuest?.ip ?? ip),
-          loadBattleGroupDetail(group, nextGuest?.ip ?? ip)
-        ]);
+        await Promise.all([loadWorkloads(group.namespace), loadBattleGroupDetail(group)]);
       }
     }
     setBusy(false);
   }
 
-  async function loadWorkloads(namespace: string, ip?: string) {
-    const nextWorkloads = await capture("Workloads", () =>
-      invoke<Workloads>("get_workloads", {
-        namespace,
-        installPath: config.installPath,
-        ip: ip ?? guest?.ip ?? config.vmIp,
-        sshUser: config.sshUser
-      })
-    );
-    setWorkloads(nextWorkloads);
+  async function loadWorkloads(_namespace: string) {
+    const nextWorkloads = await capture("Manager workloads", () => managerRequest<ManagerWorkloads>("/api/workloads"));
+    setWorkloads(nextWorkloads ? managerWorkloadsToUi(nextWorkloads) : null);
   }
 
-  async function loadBattleGroupDetail(group: BattleGroupSummary, ip?: string) {
+  async function loadBattleGroupDetail(group: BattleGroupSummary) {
     const detail = await capture("BattleGroup detail", () =>
-      invoke<BattleGroupDetail>("get_battlegroup_detail", {
-        namespace: group.namespace,
-        name: group.name,
-        installPath: config.installPath,
-        ip: ip ?? guest?.ip ?? config.vmIp,
-        sshUser: config.sshUser
-      })
+      managerRequest<BattleGroupDetail>(
+        `/api/battlegroups/${encodeURIComponent(group.namespace)}/${encodeURIComponent(group.name)}`
+      )
     );
     setBattleGroupDetail(detail);
   }
@@ -352,13 +402,12 @@ export default function App() {
     if (!selectedBattleGroup) return;
     setBusy(true);
     await capture(running ? "Start battlegroup" : "Stop battlegroup", () =>
-      invoke(running ? "start_battlegroup" : "stop_battlegroup", {
-        namespace: selectedBattleGroup.namespace,
-        name: selectedBattleGroup.name,
-        installPath: config.installPath,
-        ip: guest?.ip ?? config.vmIp,
-        sshUser: config.sshUser
-      })
+      managerRequest<BattleGroupDetail>(
+        `/api/battlegroups/${encodeURIComponent(selectedBattleGroup.namespace)}/${encodeURIComponent(
+          selectedBattleGroup.name
+        )}/${running ? "start" : "stop"}`,
+        { method: "POST" }
+      )
     );
     await refresh();
     setBusy(false);
@@ -368,13 +417,12 @@ export default function App() {
     if (!selectedBattleGroup) return;
     setBusy(true);
     await capture("Restart battlegroup", () =>
-      invoke("restart_battlegroup", {
-        namespace: selectedBattleGroup.namespace,
-        name: selectedBattleGroup.name,
-        installPath: config.installPath,
-        ip: guest?.ip ?? config.vmIp,
-        sshUser: config.sshUser
-      })
+      managerRequest<BattleGroupDetail>(
+        `/api/battlegroups/${encodeURIComponent(selectedBattleGroup.namespace)}/${encodeURIComponent(
+          selectedBattleGroup.name
+        )}/restart`,
+        { method: "POST" }
+      )
     );
     await refresh();
     setBusy(false);
@@ -384,15 +432,22 @@ export default function App() {
     if (!selectedBattleGroup) return;
     setBusy(true);
     const snapshot = await capture("Export live config", () =>
-      invoke<{ filePath: string }>("export_live_config", {
-        namespace: selectedBattleGroup.namespace,
-        name: selectedBattleGroup.name,
-        installPath: config.installPath,
-        ip: guest?.ip ?? config.vmIp,
-        sshUser: config.sshUser
-      })
+      managerRequest<Record<string, unknown>>(
+        `/api/battlegroups/${encodeURIComponent(selectedBattleGroup.namespace)}/${encodeURIComponent(
+          selectedBattleGroup.name
+        )}/raw`
+      )
     );
-    if (snapshot) setSnapshotPath(snapshot.filePath);
+    if (snapshot) {
+      const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${selectedBattleGroup.name}-live.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setSnapshotPath(`${selectedBattleGroup.name}-live.json`);
+    }
     setBusy(false);
   }
 
@@ -789,26 +844,26 @@ export default function App() {
             <div className="button-row">
               <button
                 onClick={() => setBattleGroupRunning(true)}
-                disabled={busy || !selectedBattleGroup || !canUseGuest || !battleGroupIsStopped}
+                disabled={busy || !selectedBattleGroup || !canUseManager || !battleGroupIsStopped}
               >
                 <Play size={16} />
                 Start
               </button>
               <button
                 onClick={() => setBattleGroupRunning(false)}
-                disabled={busy || !selectedBattleGroup || !canUseGuest || battleGroupIsStopped}
+                disabled={busy || !selectedBattleGroup || !canUseManager || battleGroupIsStopped}
               >
                 <Square size={16} />
                 Stop
               </button>
               <button
                 onClick={restartBattleGroup}
-                disabled={busy || !selectedBattleGroup || !canUseGuest || !battleGroupIsRunning}
+                disabled={busy || !selectedBattleGroup || !canUseManager || !battleGroupIsRunning}
               >
                 <RotateCcw size={16} />
                 Restart
               </button>
-              <button onClick={exportLiveConfig} disabled={busy || !selectedBattleGroup || !canUseGuest}>
+              <button onClick={exportLiveConfig} disabled={busy || !selectedBattleGroup || !canUseManager}>
                 <Download size={16} />
                 Export
               </button>

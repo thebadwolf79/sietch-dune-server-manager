@@ -2,11 +2,11 @@ use anyhow::{anyhow, Context, Result};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        Path, Query, State,
     },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use futures::{SinkExt, StreamExt};
@@ -15,7 +15,7 @@ use k8s_openapi::{
     apimachinery::pkg::util::intstr::IntOrString,
 };
 use kube::{
-    api::{ApiResource, DynamicObject, ListParams, LogParams},
+    api::{ApiResource, DynamicObject, ListParams, LogParams, Patch, PatchParams},
     Api, Client,
 };
 use serde::{Deserialize, Serialize};
@@ -119,6 +119,40 @@ struct BattleGroupSummary {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ServerSetSummary {
+    map: String,
+    replicas: u64,
+    memory_limit: String,
+    dedicated_scaling: bool,
+    image: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BattleGroupDetail {
+    namespace: String,
+    name: String,
+    title: String,
+    phase: String,
+    stop: bool,
+    database_phase: String,
+    server_group_phase: String,
+    gateway_phase: String,
+    director_phase: String,
+    server_image: String,
+    utility_images: Vec<String>,
+    server_sets: Vec<ServerSetSummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkloadsResponse {
+    pods: Vec<PodSummary>,
+    services: Vec<ServiceSummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct TelemetryEnvelope {
     event_type: String,
     time_unix_ms: u128,
@@ -172,8 +206,29 @@ async fn main() -> Result<()> {
         .route("/health", get(health))
         .route("/api/status", get(status))
         .route("/api/battlegroups", get(battlegroups))
+        .route(
+            "/api/battlegroups/:namespace/:name",
+            get(battlegroup_detail),
+        )
+        .route(
+            "/api/battlegroups/:namespace/:name/raw",
+            get(battlegroup_raw),
+        )
+        .route(
+            "/api/battlegroups/:namespace/:name/start",
+            post(start_battlegroup),
+        )
+        .route(
+            "/api/battlegroups/:namespace/:name/stop",
+            post(stop_battlegroup),
+        )
+        .route(
+            "/api/battlegroups/:namespace/:name/restart",
+            post(restart_battlegroup),
+        )
         .route("/api/pods", get(pods))
         .route("/api/services", get(services))
+        .route("/api/workloads", get(workloads))
         .route("/api/logs", get(logs))
         .route("/api/director/battlegroup", get(director_battlegroup))
         .route("/api/telemetry", get(telemetry))
@@ -239,6 +294,66 @@ async fn battlegroups(
     Ok(Json(list_battlegroups(&state).await?))
 }
 
+async fn battlegroup_detail(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResponse<BattleGroupDetail> {
+    authorize(&state, &headers, None)?;
+    validate_namespace(&state, &namespace)?;
+    validate_kube_name(&name)?;
+    let item = get_battlegroup_object(&state, &name).await?;
+    Ok(Json(battlegroup_detail_from_object(&state.namespace, item)))
+}
+
+async fn battlegroup_raw(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResponse<Value> {
+    authorize(&state, &headers, None)?;
+    validate_namespace(&state, &namespace)?;
+    validate_kube_name(&name)?;
+    let item = get_battlegroup_object(&state, &name).await?;
+    let value = serde_json::to_value(item).context("failed to serialize battlegroup")?;
+    Ok(Json(redact_json(value)))
+}
+
+async fn start_battlegroup(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResponse<BattleGroupDetail> {
+    authorize(&state, &headers, None)?;
+    patch_battlegroup_stop(&state, &namespace, &name, false).await?;
+    let item = get_battlegroup_object(&state, &name).await?;
+    Ok(Json(battlegroup_detail_from_object(&state.namespace, item)))
+}
+
+async fn stop_battlegroup(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResponse<BattleGroupDetail> {
+    authorize(&state, &headers, None)?;
+    patch_battlegroup_stop(&state, &namespace, &name, true).await?;
+    let item = get_battlegroup_object(&state, &name).await?;
+    Ok(Json(battlegroup_detail_from_object(&state.namespace, item)))
+}
+
+async fn restart_battlegroup(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResponse<BattleGroupDetail> {
+    authorize(&state, &headers, None)?;
+    patch_battlegroup_stop(&state, &namespace, &name, true).await?;
+    time::sleep(Duration::from_secs(5)).await;
+    patch_battlegroup_stop(&state, &namespace, &name, false).await?;
+    let item = get_battlegroup_object(&state, &name).await?;
+    Ok(Json(battlegroup_detail_from_object(&state.namespace, item)))
+}
+
 async fn pods(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -253,6 +368,17 @@ async fn services(
 ) -> ApiResponse<Vec<ServiceSummary>> {
     authorize(&state, &headers, None)?;
     Ok(Json(list_services(&state).await?))
+}
+
+async fn workloads(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<WorkloadsResponse> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(WorkloadsResponse {
+        pods: list_pods(&state).await?,
+        services: list_services(&state).await?,
+    }))
 }
 
 async fn logs(
@@ -461,6 +587,40 @@ async fn list_battlegroups(state: &AppState) -> Result<Vec<BattleGroupSummary>> 
         .collect())
 }
 
+async fn get_battlegroup_object(state: &AppState, name: &str) -> Result<DynamicObject> {
+    let api: Api<DynamicObject> = Api::namespaced_with(
+        state.client.clone(),
+        &state.namespace,
+        &battlegroup_resource(),
+    );
+    api.get(name)
+        .await
+        .with_context(|| format!("failed to get battlegroup {name}"))
+}
+
+async fn patch_battlegroup_stop(
+    state: &AppState,
+    namespace: &str,
+    name: &str,
+    stop: bool,
+) -> Result<(), ApiError> {
+    validate_namespace(state, namespace)?;
+    validate_kube_name(name)?;
+    let api: Api<DynamicObject> = Api::namespaced_with(
+        state.client.clone(),
+        &state.namespace,
+        &battlegroup_resource(),
+    );
+    api.patch(
+        name,
+        &PatchParams::default(),
+        &Patch::Merge(json!({ "spec": { "stop": stop } })),
+    )
+    .await
+    .with_context(|| format!("failed to patch battlegroup {name}"))?;
+    Ok(())
+}
+
 fn battlegroup_resource() -> ApiResource {
     ApiResource {
         group: "igw.funcom.com".to_string(),
@@ -512,6 +672,107 @@ fn battlegroup_summary(default_namespace: &str, item: DynamicObject) -> BattleGr
     }
 }
 
+fn battlegroup_detail_from_object(
+    default_namespace: &str,
+    item: DynamicObject,
+) -> BattleGroupDetail {
+    let namespace = item
+        .metadata
+        .namespace
+        .unwrap_or_else(|| default_namespace.to_string());
+    let name = item.metadata.name.unwrap_or_default();
+    let data = serde_json::to_value(item.data).unwrap_or_else(|_| json!({}));
+    let server_sets = summarize_server_sets(&data);
+    let server_image = server_sets
+        .first()
+        .map(|set| set.image.clone())
+        .unwrap_or_default();
+    let mut utility_images = Vec::new();
+
+    for path in [
+        &data["spec"]["utilities"]["director"]["spec"]["image"],
+        &data["spec"]["utilities"]["serverGateway"]["spec"]["image"],
+        &data["spec"]["utilities"]["textRouter"]["spec"]["image"],
+        &data["spec"]["utilities"]["fileBrowser"]["spec"]["image"],
+    ] {
+        if let Some(image) = path.as_str() {
+            utility_images.push(image.to_string());
+        }
+    }
+
+    for template in data["spec"]["utilities"]["messageQueues"]["templates"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
+        if let Some(image) = template["spec"]["image"].as_str() {
+            utility_images.push(image.to_string());
+        }
+    }
+
+    BattleGroupDetail {
+        namespace,
+        name,
+        title: data["spec"]["title"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        phase: data["status"]["phase"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        stop: data["spec"]["stop"].as_bool().unwrap_or(false),
+        database_phase: data["status"]["database"]["phase"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        server_group_phase: data["status"]["serverGroup"]["phase"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        gateway_phase: data["status"]["serverGateway"]["phase"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        director_phase: data["status"]["director"]["phase"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        server_image,
+        utility_images: unique_strings(utility_images.into_iter()),
+        server_sets,
+    }
+}
+
+fn summarize_server_sets(data: &Value) -> Vec<ServerSetSummary> {
+    data["spec"]["serverGroup"]["template"]["spec"]["sets"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|set| ServerSetSummary {
+            map: set["map"].as_str().unwrap_or_default().to_string(),
+            replicas: set["replicas"].as_u64().unwrap_or_default(),
+            memory_limit: set["resources"]["limits"]["memory"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            dedicated_scaling: set["dedicatedScaling"].as_bool().unwrap_or(false),
+            image: set["image"].as_str().unwrap_or_default().to_string(),
+        })
+        .collect()
+}
+
+fn unique_strings(values: impl Iterator<Item = String>) -> Vec<String> {
+    let mut output = Vec::new();
+    for value in values {
+        if !value.is_empty() && !output.contains(&value) {
+            output.push(value);
+        }
+    }
+    output
+}
+
 fn authorize(
     state: &AppState,
     headers: &HeaderMap,
@@ -550,6 +811,17 @@ fn validate_kube_name(value: &str) -> Result<(), ApiError> {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.')
     {
         return Err(ApiError::bad_request("invalid Kubernetes resource name"));
+    }
+    Ok(())
+}
+
+fn validate_namespace(state: &AppState, namespace: &str) -> Result<(), ApiError> {
+    validate_kube_name(namespace)?;
+    if namespace != state.namespace {
+        return Err(ApiError::bad_request(format!(
+            "manager API is scoped to namespace {}",
+            state.namespace
+        )));
     }
     Ok(())
 }
