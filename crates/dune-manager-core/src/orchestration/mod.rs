@@ -25,6 +25,8 @@ pub mod hyperv_lifecycle;
 pub mod hyperv_setup;
 /// SSH-backed Kubernetes provider.
 pub mod kubernetes_ssh;
+/// SSH-based Manager API installation and health checks.
+pub mod manager_api_installer;
 /// OpenSSH command runner and shell command construction.
 pub mod openssh_runner;
 /// Provider traits and shared provider data models.
@@ -44,6 +46,7 @@ pub use hyperv_initial_setup::*;
 pub use hyperv_lifecycle::*;
 pub use hyperv_setup::*;
 pub use kubernetes_ssh::*;
+pub use manager_api_installer::*;
 pub use openssh_runner::*;
 pub use providers::*;
 pub use strict_command::*;

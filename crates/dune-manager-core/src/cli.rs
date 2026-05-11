@@ -9,10 +9,11 @@ use crate::{
         battlegroup_command_catalog, detect_player_address_candidates, hyperv_initial_setup_flow,
         BattlegroupManagementOrchestrator, BattlegroupRef, BattlegroupUpdateOrchestrator,
         GuestBootstrapOrchestrator, GuestBootstrapPlan, HyperVVmLifecycleOrchestrator,
-        HyperVVmSetupOrchestrator, HyperVVmSetupRequest, MemoryProfile, OpenSshGuestProvider,
-        OpenSshRunner, OpenSshTarget, OrchestrationEvent, SshGuestBootstrapProvider,
-        StrictPowerShellHyperV, StructuredBattlegroupOps, StructuredKubectl, VecOperationSink,
-        VmProvider, DEFAULT_VM_DISK_BYTES,
+        HyperVVmSetupOrchestrator, HyperVVmSetupRequest, ManagerApiInstallRequest,
+        ManagerApiInstaller, MemoryProfile, OpenSshGuestProvider, OpenSshRunner, OpenSshTarget,
+        OrchestrationEvent, SshGuestBootstrapProvider, StrictPowerShellHyperV,
+        StructuredBattlegroupOps, StructuredKubectl, VecOperationSink, VmProvider,
+        DEFAULT_VM_DISK_BYTES,
     },
     toolchain::{ManagedTool, Toolchain},
 };
@@ -259,6 +260,40 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
             BattlegroupUpdateOrchestrator::new(provider).update_from_downloads(&bg, &mut sink)?;
             operation_ok(sink)
         }
+        ["manager", "install"] => {
+            let token = args.token()?;
+            let mut request = ManagerApiInstallRequest::new(
+                args.required("--binary")?,
+                token,
+                args.required("--namespace")?,
+            );
+            request.port = optional_port(&args, "--port")?.unwrap_or(request.port);
+            request.director_base_url = args.optional("--director-base-url");
+            if let Some(path) = args.optional("--remote-binary") {
+                request.remote_binary_path = path;
+            }
+            if let Some(path) = args.optional("--env-path") {
+                request.env_path = path;
+            }
+            if let Some(path) = args.optional("--log-path") {
+                request.log_path = path;
+            }
+            if let Some(path) = args.optional("--kubeconfig-path") {
+                request.kubeconfig_path = path;
+            }
+            let mut sink = VecOperationSink::default();
+            let result =
+                ManagerApiInstaller::new(ssh_runner(&args)?).install(&request, &mut sink)?;
+            to_json(OperationOutput {
+                ok: true,
+                result,
+                events: sink.events,
+            })
+        }
+        ["manager", "status"] => {
+            let port = optional_port(&args, "--port")?.unwrap_or(8787);
+            to_json(ManagerApiInstaller::new(ssh_runner(&args)?).status(port)?)
+        }
         other => Err(failure(format!(
             "Unknown command: {}",
             if other.is_empty() {
@@ -302,6 +337,14 @@ fn toolchain(args: &CliArgs) -> CommandResult<Toolchain> {
     } else {
         Toolchain::from_default_root()
     }
+}
+
+fn optional_port(args: &CliArgs, name: &str) -> CommandResult<Option<u16>> {
+    args.optional_u64(name)?
+        .map(|value| {
+            u16::try_from(value).map_err(|_| failure(format!("{name} must fit in a TCP port")))
+        })
+        .transpose()
 }
 
 fn battlegroup_ref(args: &CliArgs) -> CommandResult<BattlegroupRef> {
@@ -428,7 +471,7 @@ impl CliArgs {
             return Ok(token);
         }
         Err(failure(
-            "Missing self-host token; use --token, --token-file, or --token-env",
+            "Missing token; use --token, --token-file, or --token-env",
         ))
     }
 }
@@ -463,6 +506,8 @@ fn usage() -> Vec<&'static str> {
         "dune-manager-cli bg update --ssh PATH --key PATH --host IP --namespace NS --name BG",
         "dune-manager-cli bg file-browser-url --ssh PATH --key PATH --host IP --vm-ip IP",
         "dune-manager-cli bg director-url --ssh PATH --key PATH --host IP --namespace NS --name BG --vm-ip IP",
+        "dune-manager-cli manager install --ssh PATH --key PATH --host IP --binary PATH --namespace NS (--token TOKEN | --token-file PATH | --token-env NAME) [--port 8787] [--director-base-url URL] [--kubeconfig-path /etc/rancher/k3s/k3s.yaml] [--user dune]",
+        "dune-manager-cli manager status --ssh PATH --key PATH --host IP [--port 8787] [--user dune]",
     ]
 }
 

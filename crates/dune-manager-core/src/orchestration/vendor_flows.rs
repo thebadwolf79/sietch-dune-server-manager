@@ -6,6 +6,8 @@ use serde::Serialize;
 pub enum ProviderKind {
     /// Windows Hyper-V host provider.
     HyperV,
+    /// OpenSSH guest provider.
+    Ssh,
     /// Container runtime provider.
     Docker,
     /// Kubernetes API provider.
