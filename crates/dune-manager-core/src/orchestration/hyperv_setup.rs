@@ -237,10 +237,10 @@ where
             self.vm.remove_vm(&request.vm_name)?;
         }
 
-        if request.destination_path.exists() {
+        if destination_has_vm_artifacts(&request.destination_path) {
             if !request.clear_destination {
                 return Err(failure(format!(
-                    "VM destination already exists: {}",
+                    "VM destination already contains VM files: {}",
                     request.destination_path.display()
                 )));
             }
@@ -426,6 +426,27 @@ fn clear_destination_dir(path: &Path) -> CommandResult<()> {
         .map_err(|err| failure(format!("Failed to clear {}: {err}", path.display())))
 }
 
+fn destination_has_vm_artifacts(path: &Path) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    if path.join("Virtual Machines").is_dir() || path.join("Virtual Hard Disks").is_dir() {
+        return true;
+    }
+    path.read_dir()
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry.path().extension().is_some_and(|extension| {
+                ["vmcx", "vmrs", "vhd", "vhdx"]
+                    .iter()
+                    .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -452,6 +473,8 @@ mod tests {
                 hyperv_available: true,
                 vmms_running: true,
                 virtualization_firmware_enabled: Some(true),
+                total_physical_memory_bytes: 64 * 1024 * 1024 * 1024,
+                available_physical_memory_bytes: 48 * 1024 * 1024 * 1024,
             })
         }
 
@@ -642,6 +665,77 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.message.contains("already exists"));
+    }
+
+    #[test]
+    fn allows_existing_destination_folder_without_vm_artifacts() {
+        let temp = test_dir();
+        let install = temp.join("server");
+        let vm_dir = install.join("Virtual Machines");
+        fs::create_dir_all(&vm_dir).unwrap();
+        fs::write(vm_dir.join("server.vmcx"), "").unwrap();
+        let destination = temp.join("vm");
+        fs::create_dir_all(&destination).unwrap();
+
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let vm = MockVm {
+            calls: calls.clone(),
+            existing: None,
+        };
+        let orchestrator = HyperVVmSetupOrchestrator::new(MockHost, vm);
+        let mut sink = VecOperationSink::default();
+        orchestrator
+            .import_and_prepare_vm(
+                &HyperVVmSetupRequest {
+                    install_path: install,
+                    vm_name: "test-vm".to_string(),
+                    destination_path: destination,
+                    switch_name: "switch".to_string(),
+                    adapter_name: "Ethernet".to_string(),
+                    memory: MemoryProfile::Sietch20Gb,
+                    replace_existing_vm: false,
+                    clear_destination: false,
+                    disk_size_bytes: DEFAULT_VM_DISK_BYTES,
+                },
+                &mut sink,
+            )
+            .unwrap();
+        assert!(calls.borrow().contains(&"import_vm"));
+    }
+
+    #[test]
+    fn refuses_destination_folder_with_vm_artifacts() {
+        let temp = test_dir();
+        let install = temp.join("server");
+        let vm_dir = install.join("Virtual Machines");
+        fs::create_dir_all(&vm_dir).unwrap();
+        fs::write(vm_dir.join("server.vmcx"), "").unwrap();
+        let destination = temp.join("vm");
+        fs::create_dir_all(destination.join("Virtual Machines")).unwrap();
+
+        let vm = MockVm {
+            calls: Rc::new(RefCell::new(Vec::new())),
+            existing: None,
+        };
+        let orchestrator = HyperVVmSetupOrchestrator::new(MockHost, vm);
+        let mut sink = VecOperationSink::default();
+        let err = orchestrator
+            .import_and_prepare_vm(
+                &HyperVVmSetupRequest {
+                    install_path: install,
+                    vm_name: "test-vm".to_string(),
+                    destination_path: destination,
+                    switch_name: "switch".to_string(),
+                    adapter_name: "Ethernet".to_string(),
+                    memory: MemoryProfile::Sietch20Gb,
+                    replace_existing_vm: false,
+                    clear_destination: false,
+                    disk_size_bytes: DEFAULT_VM_DISK_BYTES,
+                },
+                &mut sink,
+            )
+            .unwrap_err();
+        assert!(err.message.contains("contains VM files"));
     }
 
     fn test_dir() -> PathBuf {

@@ -212,7 +212,30 @@ mkdir -p "$DOWNLOAD_PATH"
 if [ -f "$DOWNLOAD_PATH/scripts/battlegroup.sh" ] && [ -f "$DOWNLOAD_PATH/scripts/setup.sh" ]; then
   exit 0
 fi
-steamcmd +set_spew_level 1 1 +force_install_dir "$DOWNLOAD_PATH" +login anonymous +app_update {app_id} validate +logoff +quit >&2
+steamcmd_update_once() {{
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 45m steamcmd +@ShutdownOnFailedCommand 1 +@NoPromptForPassword 1 +set_spew_level 1 1 +force_install_dir "$DOWNLOAD_PATH" +login anonymous +app_update {app_id} validate +logoff +quit < /dev/null >&2
+  else
+    steamcmd +@ShutdownOnFailedCommand 1 +@NoPromptForPassword 1 +set_spew_level 1 1 +force_install_dir "$DOWNLOAD_PATH" +login anonymous +app_update {app_id} validate +logoff +quit < /dev/null >&2
+  fi
+}}
+attempt=1
+max_attempts=5
+while [ "$attempt" -le "$max_attempts" ]; do
+  echo "SteamCMD payload download attempt $attempt/$max_attempts." >&2
+  if steamcmd_update_once; then
+    break
+  fi
+  status=$?
+  if [ "$attempt" -ge "$max_attempts" ]; then
+    echo "SteamCMD payload download failed after $max_attempts attempts, last exit code $status." >&2
+    exit "$status"
+  fi
+  sleep_seconds=$((attempt * 15))
+  echo "SteamCMD payload download failed with exit code $status; retrying in ${{sleep_seconds}}s." >&2
+  sleep "$sleep_seconds"
+  attempt=$((attempt + 1))
+done
 test -f "$DOWNLOAD_PATH/scripts/battlegroup.sh"
 test -f "$DOWNLOAD_PATH/scripts/setup.sh"
 "#,
@@ -646,6 +669,16 @@ mod tests {
     fn guest_download_uses_validating_app_update() {
         let script = download_script();
         assert!(script.contains("+app_update 3104830 validate"));
+    }
+
+    #[test]
+    fn guest_download_retries_without_interactive_prompts() {
+        let script = download_script();
+        assert!(script.contains("+@ShutdownOnFailedCommand 1"));
+        assert!(script.contains("+@NoPromptForPassword 1"));
+        assert!(script.contains("< /dev/null"));
+        assert!(script.contains("max_attempts=5"));
+        assert!(script.contains("retrying in ${sleep_seconds}s"));
     }
 
     #[test]

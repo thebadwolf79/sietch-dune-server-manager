@@ -11,6 +11,8 @@
 pub mod cli;
 /// PostgreSQL access for the Dune game database.
 pub mod database;
+/// Ordered host environment detection for setup preflight.
+pub mod environment;
 /// Shared error constructors and JSON parsing helpers.
 pub mod errors;
 /// Common command result types used by core operations.

@@ -56,6 +56,10 @@ pub struct HostReadiness {
     pub vmms_running: bool,
     /// Whether firmware virtualization is enabled, when the host can report it.
     pub virtualization_firmware_enabled: Option<bool>,
+    /// Total physical memory on the host in bytes.
+    pub total_physical_memory_bytes: u64,
+    /// Currently available physical memory on the host in bytes.
+    pub available_physical_memory_bytes: u64,
 }
 
 /// Host drive candidate suitable for placing VM files.
@@ -84,6 +88,8 @@ pub struct NetworkAdapterCandidate {
     pub prefix_length: u8,
     /// Default gateway for the adapter.
     pub gateway: String,
+    /// Suggested static IPv4 address for a VM on this adapter subnet.
+    pub suggested_ipv4_address: String,
     /// Existing external switch bound to this adapter, if any.
     pub existing_external_switch: String,
 }

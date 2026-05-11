@@ -45,6 +45,8 @@ app/steamcmd/
 app/dune-server/
 app/vm/
 app/vm-*/
+app/src-tauri/dune-server/
+app/src-tauri/vm/
 vm/
 *.pem
 *.key

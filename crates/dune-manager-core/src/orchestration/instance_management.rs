@@ -64,6 +64,13 @@ pub struct SetMapInstancesRequest {
     /// `None` leaves config files untouched. `Some(Vec::new())` clears the
     /// configured PvP partition list.
     pub pvp_partition_ids: Option<Vec<i64>>,
+    /// Number of Deep Desert instances that should be marked PvP.
+    ///
+    /// When set, the highest selected Deep Desert partition IDs are marked as
+    /// PvP and the remaining selected partitions stay PvE. This is the
+    /// user-facing setup flow; `pvp_partition_ids` is the lower-level escape
+    /// hatch for exact partition control.
+    pub pvp_instance_count: Option<usize>,
 }
 
 impl SetMapInstancesRequest {
@@ -74,6 +81,7 @@ impl SetMapInstancesRequest {
             map,
             count,
             pvp_partition_ids: None,
+            pvp_instance_count: None,
         }
     }
 
@@ -81,6 +89,11 @@ impl SetMapInstancesRequest {
         self.battlegroup.validate()?;
         if self.count == 0 || self.count > 64 {
             return Err(failure("--count must be between 1 and 64"));
+        }
+        if self.pvp_partition_ids.is_some() && self.pvp_instance_count.is_some() {
+            return Err(failure(
+                "Use either explicit PvP partition IDs or a PvP instance count, not both",
+            ));
         }
         if let Some(ids) = &self.pvp_partition_ids {
             for id in ids {
@@ -91,6 +104,18 @@ impl SetMapInstancesRequest {
             if self.map != InstanceMap::DeepDesert {
                 return Err(failure(
                     "PvP partition config is currently supported only for deep-desert",
+                ));
+            }
+        }
+        if let Some(count) = self.pvp_instance_count {
+            if self.map != InstanceMap::DeepDesert {
+                return Err(failure(
+                    "PvP instance config is currently supported only for deep-desert",
+                ));
+            }
+            if count > self.count {
+                return Err(failure(
+                    "PvP instance count cannot exceed total instance count",
                 ));
             }
         }
@@ -156,16 +181,22 @@ where
             battlegroup_patched = true;
         }
 
+        let pvp_partition_ids = request.pvp_partition_ids.clone().or_else(|| {
+            request
+                .pvp_instance_count
+                .map(|count| deep_desert_pvp_ids(&update.partition_ids, count))
+        });
+
         let mut pvp_config_updated = false;
-        if let Some(pvp_partition_ids) = &request.pvp_partition_ids {
-            self.write_deep_desert_pvp_config(&request.battlegroup.namespace, pvp_partition_ids)?;
+        if let Some(ids) = &pvp_partition_ids {
+            self.write_deep_desert_pvp_config(&request.battlegroup.namespace, ids)?;
             pvp_config_updated = true;
         }
 
         Ok(SetMapInstancesResult {
             map: request.map.map_name().to_string(),
             partition_ids: update.partition_ids,
-            pvp_partition_ids: request.pvp_partition_ids.clone().unwrap_or_default(),
+            pvp_partition_ids: pvp_partition_ids.unwrap_or_default(),
             restart_required: battlegroup_patched || pvp_config_updated,
             battlegroup_patched,
             pvp_config_updated,
@@ -303,6 +334,21 @@ fn next_partition_dimension(map: InstanceMap, desired: &[Value]) -> i64 {
                 + 1
         }
     }
+}
+
+fn deep_desert_pvp_ids(partition_ids: &[i64], pvp_instance_count: usize) -> Vec<i64> {
+    if pvp_instance_count == 0 {
+        return Vec::new();
+    }
+    partition_ids
+        .iter()
+        .rev()
+        .take(pvp_instance_count)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 fn descend<'a>(value: &'a Value, path: &[&str]) -> CommandResult<&'a Value> {
@@ -451,6 +497,51 @@ mod tests {
     }
 
     #[test]
+    fn derives_deep_desert_pvp_ids_from_instance_count() {
+        let update =
+            build_world_partition_update(&sample_battlegroup(), InstanceMap::DeepDesert, 4)
+                .unwrap();
+
+        assert_eq!(update.partition_ids, vec![8, 9, 10, 11]);
+        assert_eq!(
+            deep_desert_pvp_ids(&update.partition_ids, 0),
+            Vec::<i64>::new()
+        );
+        assert_eq!(deep_desert_pvp_ids(&update.partition_ids, 1), vec![11]);
+        assert_eq!(deep_desert_pvp_ids(&update.partition_ids, 2), vec![10, 11]);
+    }
+
+    #[test]
+    fn rejects_pvp_instance_count_for_survival() {
+        let mut request = SetMapInstancesRequest::new(
+            BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            InstanceMap::Survival1,
+            2,
+        );
+        request.pvp_instance_count = Some(1);
+
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_pvp_instance_count_above_deep_desert_total() {
+        let mut request = SetMapInstancesRequest::new(
+            BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            InstanceMap::DeepDesert,
+            2,
+        );
+        request.pvp_instance_count = Some(3);
+
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
     fn shrinks_survival_partitions_by_dimension_order() {
         let mut bg = sample_battlegroup();
         bg["spec"]["database"]["template"]["spec"]["deployment"]["spec"]["worldPartitions"][0]
@@ -468,8 +559,8 @@ mod tests {
 
     #[test]
     fn adds_survival_partitions_with_new_dimensions() {
-        let update = build_world_partition_update(&sample_battlegroup(), InstanceMap::Survival1, 3)
-            .unwrap();
+        let update =
+            build_world_partition_update(&sample_battlegroup(), InstanceMap::Survival1, 3).unwrap();
 
         assert_eq!(update.partition_ids, vec![1, 9, 10]);
         assert_eq!(

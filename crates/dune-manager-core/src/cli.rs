@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use crate::orchestration::{GuestProvider, HostProvider};
 use crate::{
     database::{DuneDatabase, DuneDatabaseConfig, DEFAULT_DUNE_DATABASE_PORT},
+    environment::detect_setup_environment,
     errors::failure,
     models::{CommandFailure, CommandResult},
     orchestration::{
@@ -63,6 +64,7 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
     match positional.as_slice() {
         ["flow", "initial"] => to_json(hyperv_initial_setup_flow()),
         ["flow", "battlegroup"] => to_json(battlegroup_command_catalog()),
+        ["host", "environment"] => to_json(detect_setup_environment()?),
         ["host", "readiness"] => to_json(StrictPowerShellHyperV::new().readiness()?),
         ["host", "drives"] => {
             let min_gb = args.optional_u64("--min-gb")?.unwrap_or(100);
@@ -300,8 +302,12 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
             let count = usize::try_from(args.required_u64("--count")?)
                 .map_err(|_| failure("--count is too large"))?;
             let mut request = SetMapInstancesRequest::new(bg, map, count);
-            request.pvp_partition_ids =
-                optional_partition_id_list(&args.optional("--pvp-partitions"))?;
+            request.pvp_instance_count = args
+                .optional_u64("--pvp-count")?
+                .map(|value| {
+                    usize::try_from(value).map_err(|_| failure("--pvp-count is too large"))
+                })
+                .transpose()?;
             let result =
                 MapInstanceOrchestrator::new(ssh_runner(&args)?).set_instances(&request)?;
             let restart = if args.has_flag("--restart") {
@@ -435,30 +441,6 @@ fn optional_port(args: &CliArgs, name: &str) -> CommandResult<Option<u16>> {
             u16::try_from(value).map_err(|_| failure(format!("{name} must fit in a TCP port")))
         })
         .transpose()
-}
-
-fn optional_partition_id_list(value: &Option<String>) -> CommandResult<Option<Vec<i64>>> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    if value.trim().is_empty()
-        || matches!(
-            value.to_ascii_lowercase().as_str(),
-            "none" | "clear" | "pve"
-        )
-    {
-        return Ok(Some(Vec::new()));
-    }
-    let ids = value
-        .split([',', ';', ' '])
-        .filter(|part| !part.trim().is_empty())
-        .map(|part| {
-            part.trim()
-                .parse::<i64>()
-                .map_err(|_| failure(format!("Invalid partition id: {part}")))
-        })
-        .collect::<CommandResult<Vec<_>>>()?;
-    Ok(Some(ids))
 }
 
 fn db_config(args: &CliArgs) -> CommandResult<DuneDatabaseConfig> {
@@ -665,6 +647,7 @@ fn usage() -> Vec<&'static str> {
     vec![
         "dune-manager-cli flow initial",
         "dune-manager-cli flow battlegroup",
+        "dune-manager-cli host environment",
         "dune-manager-cli host readiness",
         "dune-manager-cli host drives [--min-gb 100]",
         "dune-manager-cli host adapters",
@@ -689,7 +672,7 @@ fn usage() -> Vec<&'static str> {
         "dune-manager-cli bg status --ssh PATH --key PATH --host IP --namespace NS --name BG [--user dune]",
         "dune-manager-cli bg start|stop|restart --ssh PATH --key PATH --host IP --namespace NS --name BG [--director-timeout 60]",
         "dune-manager-cli bg patch-region --ssh PATH --key PATH --host IP --namespace NS --name BG --region \"Europe Test\"",
-        "dune-manager-cli bg instances set --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --count N [--pvp-partitions 29,30|none] [--restart]",
+        "dune-manager-cli bg instances set --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --count N [--pvp-count N] [--restart]",
         "dune-manager-cli bg pods --ssh PATH --key PATH --host IP --namespace NS",
         "dune-manager-cli bg pod-shell-spec --ssh PATH --key PATH --host IP --namespace NS --pod POD",
         "dune-manager-cli bg export-logs --ssh PATH --key PATH --host IP --namespace NS",

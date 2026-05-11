@@ -3,12 +3,14 @@
 use std::{
     env,
     path::{Path, PathBuf},
+    process::Command,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    errors::failure,
+    errors::{command_failure, failure},
     models::CommandResult,
     shell::{ps_single_quoted, run_powershell},
 };
@@ -16,6 +18,7 @@ use crate::{
 const STEAMCMD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
 const OPENSSH_URL: &str =
     "https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip";
+const SERVER_APP_ID: &str = "3104830";
 
 /// External command-line tool managed under the app-owned tools directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +94,18 @@ pub struct ToolInstallResult {
     pub source_url: String,
     /// Whether the installer performed work in this call.
     pub installed_now: bool,
+}
+
+/// Result of installing or validating the host-side server package.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerPackageInstallResult {
+    /// Directory where the server package was installed.
+    pub install_dir: PathBuf,
+    /// Steam app id used for the package.
+    pub app_id: String,
+    /// Whether SteamCMD reported the app fully installed.
+    pub installed: bool,
 }
 
 /// Manager for app-owned external command-line tools.
@@ -173,6 +188,74 @@ impl Toolchain {
     fn install_dir(&self, tool: ManagedTool) -> PathBuf {
         self.root.join("tools").join(tool.id())
     }
+
+    /// Installs or validates the host-side Dune server package with SteamCMD.
+    pub fn install_server_package(
+        &self,
+        install_dir: impl AsRef<Path>,
+    ) -> CommandResult<ServerPackageInstallResult> {
+        let steamcmd = self.status(ManagedTool::SteamCmd);
+        if !steamcmd.installed {
+            return Err(failure("SteamCMD is not installed"));
+        }
+        let install_dir = install_dir.as_ref();
+        let output = Command::new(&steamcmd.executable)
+            .args([
+                "+@ShutdownOnFailedCommand",
+                "1",
+                "+@NoPromptForPassword",
+                "1",
+                "+force_install_dir",
+            ])
+            .arg(install_dir)
+            .args([
+                "+login",
+                "anonymous",
+                "+app_update",
+                SERVER_APP_ID,
+                "validate",
+                "+quit",
+            ])
+            .output()
+            .map_err(|err| failure(format!("Failed to run SteamCMD: {err}")))?;
+        let combined_output = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let installed = combined_output
+            .contains(&format!("Success! App '{SERVER_APP_ID}' fully installed."))
+            || server_package_exists(install_dir);
+        if !output.status.success() && !installed {
+            return Err(command_failure(
+                "SteamCMD server package install failed",
+                output,
+            ));
+        }
+        Ok(ServerPackageInstallResult {
+            install_dir: install_dir.to_path_buf(),
+            app_id: SERVER_APP_ID.to_string(),
+            installed,
+        })
+    }
+}
+
+fn server_package_exists(install_dir: &Path) -> bool {
+    let vm_dir = install_dir.join("Virtual Machines");
+    install_dir.join("initial-setup.bat").is_file()
+        && install_dir.join("battlegroup.bat").is_file()
+        && vm_dir
+            .read_dir()
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("vmcx"))
+            })
 }
 
 /// Resolves the default manager data root for owned tools and downloads.
@@ -192,6 +275,69 @@ pub fn default_tools_root() -> CommandResult<PathBuf> {
     Ok(env::current_dir()
         .map_err(|err| failure(format!("Failed to determine current directory: {err}")))?
         .join(".dune-manager"))
+}
+
+/// Resolves the default directory for Hyper-V VM files managed by the app.
+pub fn default_vm_destination() -> CommandResult<PathBuf> {
+    Ok(default_runtime_root()?.join("vm"))
+}
+
+/// Resolves the default host-side server package directory.
+pub fn default_server_package_dir() -> CommandResult<PathBuf> {
+    Ok(default_runtime_root()?.join("dune-server"))
+}
+
+fn default_runtime_root() -> CommandResult<PathBuf> {
+    let current = env::current_dir()
+        .map_err(|err| failure(format!("Failed to determine current directory: {err}")))?;
+    if current
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case("src-tauri"))
+    {
+        return current
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| failure("Failed to resolve app runtime root"));
+    }
+    Ok(current)
+}
+
+/// Copies the vendor SSH key to a temporary path and restricts its ACL for OpenSSH.
+pub fn prepare_vendor_ssh_key(server_package_dir: impl AsRef<Path>) -> CommandResult<PathBuf> {
+    let source = server_package_dir
+        .as_ref()
+        .join("internal-scripts")
+        .join("ssh")
+        .join("sshKey");
+    if !source.is_file() {
+        return Err(failure(format!(
+            "Vendor SSH key was not found: {}",
+            source.display()
+        )));
+    }
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let destination = env::temp_dir().join(format!(
+        "dune-manager-vm-sshKey-{}-{unique}",
+        std::process::id()
+    ));
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'Stop'
+$source = {source}
+$destination = {destination}
+Copy-Item -LiteralPath $source -Destination $destination -Force
+icacls $destination /inheritance:r | Out-Null
+icacls $destination /grant:r "$($env:USERNAME):(R)" | Out-Null
+[Console]::Out.WriteLine($destination)
+"#,
+        source = ps_single_quoted(&source.to_string_lossy()),
+        destination = ps_single_quoted(&destination.to_string_lossy()),
+    );
+    run_powershell(&script)?;
+    Ok(destination)
 }
 
 fn install_zip_tool_script(

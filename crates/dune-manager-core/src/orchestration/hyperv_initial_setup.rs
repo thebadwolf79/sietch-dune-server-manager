@@ -246,6 +246,8 @@ mod tests {
                 hyperv_available: true,
                 vmms_running: true,
                 virtualization_firmware_enabled: Some(true),
+                total_physical_memory_bytes: 64 * 1024 * 1024 * 1024,
+                available_physical_memory_bytes: 48 * 1024 * 1024 * 1024,
             })
         }
 
