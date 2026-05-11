@@ -513,82 +513,8 @@ if ($usedByVms.Count -eq 0) {{
     Ok(output.trim().eq_ignore_ascii_case("true"))
 }
 
-#[cfg(target_os = "windows")]
-fn ensure_elevated_or_relaunch() {
-    match is_current_process_elevated() {
-        Ok(true) => {}
-        Ok(false) => relaunch_elevated_or_exit(),
-        Err(err) => {
-            eprintln!("Failed to check administrator elevation: {}", err.message);
-            std::process::exit(1);
-        }
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn ensure_elevated_or_relaunch() {}
-
-#[cfg(target_os = "windows")]
-fn is_current_process_elevated() -> CommandResult<bool> {
-    let output = run_powershell(
-        r#"
-$ErrorActionPreference = 'Stop'
-$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-$principal = [Security.Principal.WindowsPrincipal]::new($identity)
-[Console]::Out.WriteLine($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
-"#,
-    )?;
-    Ok(output.trim().eq_ignore_ascii_case("true"))
-}
-
-#[cfg(target_os = "windows")]
-fn relaunch_elevated_or_exit() -> ! {
-    let exe = match std::env::current_exe() {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("Failed to resolve current executable for elevation: {err}");
-            std::process::exit(1);
-        }
-    };
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let argument_list = powershell_argument_list(&args);
-    let script = format!(
-        r#"
-$ErrorActionPreference = 'Stop'
-Start-Process -FilePath {exe} -ArgumentList {argument_list} -Verb RunAs
-"#,
-        exe = ps_single_quoted(&exe.to_string_lossy()),
-        argument_list = argument_list,
-    );
-
-    if let Err(err) = run_powershell(&script) {
-        eprintln!("Failed to relaunch as administrator: {}", err.message);
-        if !err.stderr.trim().is_empty() {
-            eprintln!("{}", err.stderr);
-        }
-        std::process::exit(1);
-    }
-    std::process::exit(0);
-}
-
-#[cfg(target_os = "windows")]
-fn powershell_argument_list(args: &[String]) -> String {
-    if args.is_empty() {
-        return "$null".to_string();
-    }
-    format!(
-        "@({})",
-        args.iter()
-            .map(|arg| ps_single_quoted(arg))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    ensure_elevated_or_relaunch();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
