@@ -1,0 +1,60 @@
+:root {
+  font-family:
+    "Aptos", "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app-root {
+  width: 100vw;
+  height: 100vh;
+  background: var(--color-background);
+}
+
+.app-main {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.app-main.has-log {
+  grid-template-columns: 380px minmax(0, 1fr);
+}
+
+.pane {
+  min-height: 0;
+}
+
+.log-body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+
+.log-line {
+  min-height: 30px;
+}
+
+.mono {
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+}

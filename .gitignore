@@ -5,6 +5,7 @@ app/node_modules/
 # Frontend build
 dist/
 app/dist/
+app/src-tauri/gen/schemas/
 
 # Rust/Tauri build outputs
 target/

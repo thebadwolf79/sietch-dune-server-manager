@@ -1,0 +1,18 @@
+[package]
+name = "dune-dedicated-server-manager-app"
+version = "0.1.0"
+description = "Desktop shell for Dune Dedicated Server Manager"
+authors = ["Dune Dedicated Server Manager"]
+edition = "2021"
+
+[lib]
+name = "dune_dedicated_server_manager_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { workspace = true }
+serde_json = { workspace = true }
