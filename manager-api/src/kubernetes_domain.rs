@@ -200,7 +200,10 @@ pub fn battlegroup_detail_from_object(
         stop: data["spec"]["stop"].as_bool().unwrap_or(false),
         database_phase: string_at_paths(
             &data,
-            &[&["status", "database", "phase"], &["status", "databasePhase"]],
+            &[
+                &["status", "database", "phase"],
+                &["status", "databasePhase"],
+            ],
         ),
         server_group_phase: string_at_paths(
             &data,

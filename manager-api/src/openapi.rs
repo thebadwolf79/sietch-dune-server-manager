@@ -1,0 +1,218 @@
+use serde_json::{json, Value};
+
+const MANAGER_API_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub fn document() -> Value {
+    json!({
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Dune Manager API",
+            "version": MANAGER_API_VERSION,
+            "description": "Authenticated control plane for a Dune Awakening dedicated server VM."
+        },
+        "servers": [
+            { "url": "/" }
+        ],
+        "security": [
+            { "bearerAuth": [] }
+        ],
+        "components": {
+            "securitySchemes": {
+                "bearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "opaque"
+                }
+            },
+            "responses": {
+                "Unauthorized": {
+                    "description": "Missing or invalid manager token"
+                },
+                "Error": {
+                    "description": "Manager API error",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "error": { "type": "string" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "paths": {
+            "/health": {
+                "get": {
+                    "summary": "Health check",
+                    "security": [],
+                    "responses": { "200": { "description": "Manager API is alive" } }
+                }
+            },
+            "/api/status": {
+                "get": {
+                    "summary": "Cluster and manager status",
+                    "responses": { "200": { "description": "Status summary" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/manager/self": {
+                "get": {
+                    "summary": "Manager process metadata",
+                    "responses": { "200": { "description": "Manager process metadata" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/battlegroups": {
+                "get": {
+                    "summary": "List battlegroups",
+                    "responses": { "200": { "description": "BattleGroup summaries" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/battlegroups/{namespace}/{name}": {
+                "get": {
+                    "summary": "Get battlegroup details",
+                    "parameters": [namespace_parameter(), name_parameter()],
+                    "responses": { "200": { "description": "BattleGroup detail" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/battlegroups/{namespace}/{name}/raw": {
+                "get": {
+                    "summary": "Get redacted raw battlegroup JSON",
+                    "parameters": [namespace_parameter(), name_parameter()],
+                    "responses": { "200": { "description": "Redacted raw BattleGroup resource" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/battlegroups/{namespace}/{name}/start": {
+                "post": {
+                    "summary": "Start a battlegroup",
+                    "parameters": [namespace_parameter(), name_parameter()],
+                    "responses": { "200": { "description": "Updated BattleGroup detail" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/battlegroups/{namespace}/{name}/stop": {
+                "post": {
+                    "summary": "Stop a battlegroup",
+                    "parameters": [namespace_parameter(), name_parameter()],
+                    "responses": { "200": { "description": "Updated BattleGroup detail" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/battlegroups/{namespace}/{name}/restart": {
+                "post": {
+                    "summary": "Restart a battlegroup",
+                    "parameters": [namespace_parameter(), name_parameter()],
+                    "responses": { "200": { "description": "Updated BattleGroup detail" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/pods": {
+                "get": {
+                    "summary": "List pods",
+                    "responses": { "200": { "description": "Pod summaries" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/services": {
+                "get": {
+                    "summary": "List services",
+                    "responses": { "200": { "description": "Service summaries" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/workloads": {
+                "get": {
+                    "summary": "List pods and services",
+                    "responses": { "200": { "description": "Workload summary" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/logs": {
+                "get": {
+                    "summary": "Read pod logs",
+                    "parameters": [
+                        { "name": "pod", "in": "query", "required": true, "schema": { "type": "string" } },
+                        { "name": "container", "in": "query", "required": false, "schema": { "type": "string" } },
+                        { "name": "tail", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 2000 } }
+                    ],
+                    "responses": { "200": { "description": "Redacted log lines" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/director/capabilities": {
+                "get": {
+                    "summary": "List Director proxy capabilities",
+                    "responses": { "200": { "description": "Director capability list" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/director/battlegroup": director_get("Director battlegroup runtime data"),
+            "/api/director/players/summary": director_get("Director player summary"),
+            "/api/director/players": director_get("Director player lists"),
+            "/api/director/maps": director_get("Director map summaries"),
+            "/api/director/config/fls": director_config_path("FLS report settings"),
+            "/api/director/config/character-transfer": director_config_path("Character transfer settings"),
+            "/api/director/config/maps/{mapName}/override": {
+                "post": {
+                    "summary": "Update a Director map override",
+                    "parameters": [map_parameter()],
+                    "responses": { "200": { "description": "Director response" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                },
+                "delete": {
+                    "summary": "Clear a Director map override",
+                    "parameters": [map_parameter()],
+                    "responses": { "200": { "description": "Director response" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/director/v0/{path}": {
+                "get": { "summary": "Allowlisted Director API proxy", "parameters": [path_parameter()], "responses": { "200": { "description": "Director response" } } },
+                "post": { "summary": "Allowlisted Director API proxy", "parameters": [path_parameter()], "responses": { "200": { "description": "Director response" } } }
+            },
+            "/api/telemetry": {
+                "get": {
+                    "summary": "Telemetry websocket",
+                    "responses": { "101": { "description": "WebSocket telemetry stream" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            }
+        }
+    })
+}
+
+fn namespace_parameter() -> Value {
+    json!({ "name": "namespace", "in": "path", "required": true, "schema": { "type": "string" } })
+}
+
+fn name_parameter() -> Value {
+    json!({ "name": "name", "in": "path", "required": true, "schema": { "type": "string" } })
+}
+
+fn map_parameter() -> Value {
+    json!({ "name": "mapName", "in": "path", "required": true, "schema": { "type": "string" } })
+}
+
+fn path_parameter() -> Value {
+    json!({ "name": "path", "in": "path", "required": true, "schema": { "type": "string" } })
+}
+
+fn director_get(summary: &str) -> Value {
+    json!({
+        "get": {
+            "summary": summary,
+            "responses": {
+                "200": { "description": "Director response" },
+                "401": { "$ref": "#/components/responses/Unauthorized" },
+                "502": { "$ref": "#/components/responses/Error" }
+            }
+        }
+    })
+}
+
+fn director_config_path(summary: &str) -> Value {
+    json!({
+        "get": {
+            "summary": format!("Fetch {summary}"),
+            "responses": { "200": { "description": "Director config" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+        },
+        "post": {
+            "summary": format!("Update {summary}"),
+            "responses": { "200": { "description": "Director response" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+        },
+        "delete": {
+            "summary": format!("Clear {summary} overrides"),
+            "responses": { "200": { "description": "Director response" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+        }
+    })
+}
