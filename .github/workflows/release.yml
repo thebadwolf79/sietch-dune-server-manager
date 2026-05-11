@@ -106,8 +106,6 @@ jobs:
           $config = $config.Replace("__GITHUB_REPOSITORY__", "${{ github.repository }}")
           Set-Content -Path $tauriConfigPath -Value $config -NoNewline
 
-          Copy-Item app/src-tauri/resources/manager-api/dune-manager-api app/src-tauri/resources/manager-api/dune-manager-api-x86_64-unknown-linux-musl -Force
-
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -121,9 +119,3 @@ jobs:
           releaseBody: "Windows installer, updater metadata, and bundled VM Manager API binary."
           releaseDraft: false
           prerelease: false
-
-      - name: Upload Manager API binary to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          files: app/src-tauri/resources/manager-api/dune-manager-api-x86_64-unknown-linux-musl
