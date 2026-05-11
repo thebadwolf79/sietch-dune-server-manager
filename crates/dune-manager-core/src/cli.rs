@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::orchestration::{GuestProvider, HostProvider};
+use crate::orchestration::{GuestBootstrapProvider, GuestProvider, HostProvider};
 use crate::{
     database::{DuneDatabase, DuneDatabaseConfig, DEFAULT_DUNE_DATABASE_PORT},
     environment::detect_setup_environment,
@@ -15,10 +15,12 @@ use crate::{
         HyperVVmLifecycleOrchestrator, HyperVVmSetupOrchestrator, HyperVVmSetupRequest,
         InstanceMap, ManagerApiInstallRequest, ManagerApiInstaller, MapInstanceOrchestrator,
         MemoryProfile, OpenSshGuestProvider, OpenSshRunner, OpenSshTarget, OrchestrationEvent,
-        SetMapInstancesRequest, SshGuestBootstrapProvider, StrictPowerShellHyperV,
-        StructuredBattlegroupOps, StructuredKubectl, VecOperationSink, VmProvider,
-        DEFAULT_VM_DISK_BYTES,
+        SetMapInstancesRequest, SshGuestBootstrapProvider, StepAction, StepDomain,
+        StrictPowerShellHyperV, StructuredBattlegroupOps, StructuredKubectl,
+        UbuntuSshPrepareRequest, UbuntuSshSetup, VecOperationSink, VmProvider,
+        WorldManifestRequest, DEFAULT_VM_DISK_BYTES,
     },
+    security::redact_json,
     toolchain::{ManagedTool, Toolchain},
 };
 
@@ -28,7 +30,8 @@ use crate::{
 /// JSON error envelope to stderr.
 pub fn run_cli_from_env() -> i32 {
     match run_cli(std::env::args().skip(1).collect()) {
-        Ok(value) => {
+        Ok(mut value) => {
+            redact_json(&mut value);
             println!(
                 "{}",
                 serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
@@ -36,16 +39,18 @@ pub fn run_cli_from_env() -> i32 {
             0
         }
         Err(err) => {
+            let mut value = json!({
+                "ok": false,
+                "error": err.message,
+                "stdout": err.stdout,
+                "stderr": err.stderr,
+                "code": err.code,
+            });
+            redact_json(&mut value);
             eprintln!(
                 "{}",
-                serde_json::to_string_pretty(&json!({
-                    "ok": false,
-                    "error": err.message,
-                    "stdout": err.stdout,
-                    "stderr": err.stderr,
-                    "code": err.code,
-                }))
-                .unwrap_or_else(|_| "{\"ok\":false}".to_string())
+                serde_json::to_string_pretty(&value)
+                    .unwrap_or_else(|_| "{\"ok\":false}".to_string())
             );
             err.code.unwrap_or(1)
         }
@@ -296,6 +301,129 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
             let spec = ssh_runner(&args)?.interactive_shell_spec()?;
             to_json(spec)
         }
+        ["ubuntu", "preflight"] => {
+            to_json(UbuntuSshSetup::new(ssh_runner_with_default_user(&args, "root")?).preflight()?)
+        }
+        ["ubuntu", "prepare-host"] => {
+            let request = ubuntu_prepare_request(&args);
+            let mut sink = VecOperationSink::default();
+            let result = UbuntuSshSetup::new(ssh_runner_with_default_user(&args, "root")?)
+                .prepare_host(&request, &mut sink)?;
+            to_json(OperationOutput {
+                ok: true,
+                result,
+                events: sink.events,
+            })
+        }
+        ["ubuntu", "install-k3s"] => {
+            let request = ubuntu_prepare_request(&args);
+            let mut sink = VecOperationSink::default();
+            UbuntuSshSetup::new(ssh_runner_with_default_user(&args, "root")?)
+                .install_k3s(&request, &mut sink)?;
+            operation_ok(sink)
+        }
+        ["ubuntu", "bootstrap-kubernetes"] => {
+            let request = ubuntu_prepare_request(&args);
+            let mut sink = VecOperationSink::default();
+            UbuntuSshSetup::new(ssh_runner_with_default_user(&args, "root")?)
+                .bootstrap_kubernetes(&request, &mut sink)?;
+            operation_ok(sink)
+        }
+        ["ubuntu", "install-payload"] => {
+            let request = ubuntu_prepare_request(&args);
+            let mut sink = VecOperationSink::default();
+            let result = UbuntuSshSetup::new(ssh_runner_with_default_user(&args, "root")?)
+                .install_server_payload(&request, &mut sink)?;
+            to_json(OperationOutput {
+                ok: true,
+                result,
+                events: sink.events,
+            })
+        }
+        ["ubuntu", "create-world"] => {
+            let token = args.token()?;
+            let plan = GuestBootstrapPlan::from_self_host_token(
+                args.required("--player-ip")?,
+                args.required("--world-name")?,
+                args.optional("--region")
+                    .unwrap_or_else(|| "Europe Test".to_string()),
+                token,
+            )?;
+            plan.validate()?;
+            let runner = ssh_runner_with_default_user(&args, "root")?;
+            let provider = SshGuestBootstrapProvider::new(runner.clone());
+            let mut sink = VecOperationSink::default();
+            emit_cli_event(
+                &mut sink,
+                "ubuntu.settings.player-ip",
+                "Writing player-facing server address.",
+                StepDomain::Guest,
+                StepAction::Configure,
+            );
+            write_ubuntu_player_settings(&runner, &plan.player_ip)?;
+            emit_cli_event(
+                &mut sink,
+                "ubuntu.world.create",
+                "Creating BattleGroup world resources.",
+                StepDomain::Kubernetes,
+                StepAction::Create,
+            );
+            let created = provider.create_world(&WorldManifestRequest {
+                world_name: plan.world_name.clone(),
+                world_region: plan.world_region.clone(),
+                world_unique_name: plan.world_unique_name(),
+                self_host_token: plan.self_host_token.clone(),
+            })?;
+            emit_cli_event(
+                &mut sink,
+                "ubuntu.helper.install",
+                "Installing battlegroup helper.",
+                StepDomain::Files,
+                StepAction::Configure,
+            );
+            provider.install_battlegroup_helper()?;
+            emit_cli_event(
+                &mut sink,
+                "ubuntu.images.import",
+                "Importing BattleGroup container images.",
+                StepDomain::Kubernetes,
+                StepAction::Import,
+            );
+            provider.import_battlegroup_images()?;
+            emit_cli_event(
+                &mut sink,
+                "ubuntu.images.patch",
+                "Patching BattleGroup image tags.",
+                StepDomain::Kubernetes,
+                StepAction::Patch,
+            );
+            provider.patch_battlegroup_images(&created.namespace, &created.battlegroup_name)?;
+            emit_cli_event(
+                &mut sink,
+                "ubuntu.scheduler.default",
+                "Using the default Kubernetes scheduler for Ubuntu.",
+                StepDomain::Kubernetes,
+                StepAction::Patch,
+            );
+            remove_ubuntu_custom_scheduler(&runner, &created.namespace, &created.battlegroup_name)?;
+            emit_cli_event(
+                &mut sink,
+                "ubuntu.defaults.apply",
+                "Applying default user settings.",
+                StepDomain::Files,
+                StepAction::Configure,
+            );
+            provider.apply_default_user_settings(&created.namespace, &created.battlegroup_name)?;
+            to_json(OperationOutput {
+                ok: true,
+                result: json!({
+                    "namespace": created.namespace,
+                    "battlegroupName": created.battlegroup_name,
+                    "worldUniqueName": plan.world_unique_name(),
+                }),
+                events: sink.events,
+            })
+        }
         ["bg", "list"] => to_json(bg_ops(&args)?.list()?),
         ["bg", "status"] => {
             let bg = battlegroup_ref(&args)?;
@@ -529,13 +657,34 @@ fn ssh_guest_provider(args: &CliArgs) -> CommandResult<OpenSshGuestProvider> {
 }
 
 fn ssh_runner(args: &CliArgs) -> CommandResult<OpenSshRunner> {
+    ssh_runner_with_default_user(args, "dune")
+}
+
+fn ssh_runner_with_default_user(
+    args: &CliArgs,
+    default_user: &str,
+) -> CommandResult<OpenSshRunner> {
     Ok(OpenSshRunner::new(OpenSshTarget::new(
         args.required("--ssh")?,
         args.required("--key")?,
         args.optional("--user")
-            .unwrap_or_else(|| "dune".to_string()),
+            .unwrap_or_else(|| default_user.to_string()),
         args.required("--host")?,
     )))
+}
+
+fn ubuntu_prepare_request(args: &CliArgs) -> UbuntuSshPrepareRequest {
+    UbuntuSshPrepareRequest {
+        linux_user: args
+            .optional("--linux-user")
+            .unwrap_or_else(|| "dune".to_string()),
+        server_root: args
+            .optional("--server-root")
+            .unwrap_or_else(|| "/home/dune/.dune".to_string()),
+        steamcmd_url: args.optional("--steamcmd-url").unwrap_or_else(|| {
+            "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz".to_string()
+        }),
+    }
 }
 
 fn operation_ok(sink: VecOperationSink) -> CommandResult<Value> {
@@ -543,6 +692,80 @@ fn operation_ok(sink: VecOperationSink) -> CommandResult<Value> {
         "ok": true,
         "events": sink.events,
     }))
+}
+
+fn emit_cli_event(
+    sink: &mut VecOperationSink,
+    step_id: &'static str,
+    message: &str,
+    domain: StepDomain,
+    action: StepAction,
+) {
+    sink.events.push(OrchestrationEvent {
+        step_id,
+        message: message.to_string(),
+        domain,
+        action,
+        provider: crate::orchestration::ProviderKind::Ssh,
+    });
+}
+
+fn write_ubuntu_player_settings(runner: &OpenSshRunner, player_ip: &str) -> CommandResult<()> {
+    let script = format!(
+        "set -eu\nmkdir -p /home/dune/.dune\nprintf '\\n\\n\\n%s\\n' {} > /home/dune/.dune/settings.conf\nchown -R dune:dune /home/dune/.dune\n",
+        sh_single_quoted(player_ip)
+    );
+    crate::orchestration::RemoteCommandRunner::run_script(runner, &script)?;
+    Ok(())
+}
+
+fn remove_ubuntu_custom_scheduler(
+    runner: &OpenSshRunner,
+    namespace: &str,
+    battlegroup_name: &str,
+) -> CommandResult<()> {
+    let command = format!(
+        "sudo kubectl get battlegroup {} -n {} -o json",
+        sh_single_quoted(battlegroup_name),
+        sh_single_quoted(namespace),
+    );
+    let value = crate::orchestration::RemoteCommandRunner::run_json(
+        runner,
+        &command,
+        "ubuntu battlegroup scheduler patch source",
+    )?;
+    let sets = value["spec"]["serverGroup"]["template"]["spec"]["sets"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let operations = sets
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.get("schedulerName").is_some())
+        .map(|(index, _)| {
+            json!({
+                "op": "remove",
+                "path": format!("/spec/serverGroup/template/spec/sets/{index}/schedulerName"),
+            })
+        })
+        .collect::<Vec<_>>();
+    if operations.is_empty() {
+        return Ok(());
+    }
+    let patch = serde_json::to_string(&operations)
+        .map_err(|err| failure(format!("Failed to serialize scheduler patch: {err}")))?;
+    let patch_command = format!(
+        "sudo kubectl patch battlegroup {} -n {} --type=json -p {} -o name",
+        sh_single_quoted(battlegroup_name),
+        sh_single_quoted(namespace),
+        sh_single_quoted(&patch),
+    );
+    crate::orchestration::RemoteCommandRunner::run(runner, &patch_command)?;
+    Ok(())
+}
+
+fn sh_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn to_json(value: impl Serialize) -> CommandResult<Value> {
@@ -674,6 +897,12 @@ fn usage() -> Vec<&'static str> {
         "dune-manager-cli vm stop --name NAME",
         "dune-manager-cli setup create-vm --install-path PATH --destination PATH --vm-name NAME --switch NAME --adapter NAME [--memory-gb 20] [--processors 4] [--disk-gb 100] [--replace-existing] [--clear-destination]",
         "dune-manager-cli ssh shell-spec --ssh PATH --key PATH --host IP [--user dune]",
+        "dune-manager-cli ubuntu preflight --ssh PATH --key PATH --host HOST [--user root]",
+        "dune-manager-cli ubuntu prepare-host --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
+        "dune-manager-cli ubuntu install-k3s --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
+        "dune-manager-cli ubuntu bootstrap-kubernetes --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
+        "dune-manager-cli ubuntu install-payload --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
+        "dune-manager-cli ubuntu create-world --ssh PATH --key PATH --host HOST (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region \"Europe Test\"] [--user root]",
         "dune-manager-cli token plan (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region \"Europe Test\"]",
         "dune-manager-cli guest player-candidates --ssh PATH --key PATH --host IP [--user dune]",
         "dune-manager-cli guest write-player-settings --ssh PATH --key PATH --host IP --player-ip IP [--user dune]",

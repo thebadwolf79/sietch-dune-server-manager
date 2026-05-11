@@ -39,6 +39,8 @@ pub mod openssh_runner;
 pub mod providers;
 /// Strict command execution and strict JSON parsing.
 pub mod strict_command;
+/// Ubuntu-over-SSH remote setup phases.
+pub mod ubuntu_ssh_setup;
 /// Declarative flow descriptions derived from the vendor scripts.
 pub mod vendor_flows;
 
@@ -59,4 +61,5 @@ pub use manager_api_installer::*;
 pub use openssh_runner::*;
 pub use providers::*;
 pub use strict_command::*;
+pub use ubuntu_ssh_setup::*;
 pub use vendor_flows::*;

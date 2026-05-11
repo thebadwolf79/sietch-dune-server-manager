@@ -72,7 +72,7 @@ impl GuestProvider for OpenSshGuestProvider {
         validate_remote_path(remote_path)?;
         let encoded = base64_encode(bytes);
         let mode_text = format!("{:o}", mode & 0o777);
-        let mut script = String::from("set -euo pipefail\n");
+        let mut script = String::from("set -eu\n");
         script.push_str(&shell_value("REMOTE_PATH", remote_path));
         script.push_str(&shell_value("MODE", &mode_text));
         script.push_str(&shell_value("PAYLOAD_B64", &encoded));
@@ -91,7 +91,7 @@ sudo install -D -m "$MODE" "$tmp" "$REMOTE_PATH"
     fn write_player_settings(&self, ip: &str, player_ip: &str) -> CommandResult<()> {
         validate_ip_present(ip)?;
         validate_ipv4ish(player_ip, "player-facing IP")?;
-        let mut script = String::from("set -euo pipefail\n");
+        let mut script = String::from("set -eu\n");
         script.push_str(&shell_value("PLAYER_IP", player_ip.trim()));
         script.push_str(
             r#"
@@ -106,7 +106,7 @@ printf '\n\n\n%s\n' "$PLAYER_IP" > /home/dune/.dune/settings.conf
     fn apply_static_network(&self, ip: &str, config: &GuestNetworkConfig) -> CommandResult<()> {
         validate_ip_present(ip)?;
         validate_static_network(config)?;
-        let mut script = String::from("set -euo pipefail\n");
+        let mut script = String::from("set -eu\n");
         script.push_str(&shell_value("IFACE", &config.interface));
         script.push_str(&shell_value("ADDRESS_CIDR", &config.address_cidr));
         script.push_str(&shell_value("GATEWAY", &config.gateway));

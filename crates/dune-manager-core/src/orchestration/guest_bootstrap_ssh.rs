@@ -157,7 +157,7 @@ where
         validate_kube_arg(namespace, "namespace")?;
         validate_kube_arg(battlegroup_name, "battlegroup name")?;
         let mut script = String::new();
-        script.push_str("set -euo pipefail\n");
+        script.push_str("set -eu\n");
         script.push_str(&shell_value("NS", namespace));
         script.push_str(APPLY_DEFAULT_SETTINGS_SCRIPT);
         self.run_phase(&script)?;
@@ -205,7 +205,7 @@ fn with_guest_path(script: &str) -> String {
 fn download_script() -> String {
     format!(
         r#"
-set -euo pipefail
+set -eu
 DUNE_USER_PATH={dune_home}
 DOWNLOAD_PATH="$DUNE_USER_PATH/download"
 mkdir -p "$DOWNLOAD_PATH"
@@ -245,7 +245,7 @@ test -f "$DOWNLOAD_PATH/scripts/setup.sh"
 }
 
 const DISK_SCRIPT: &str = r#"
-set -euo pipefail
+set -eu
 required_gb=30
 available_gb=$(df -B1G -P / | awk '$NF == "/" {print $(NF-2)+0}')
 if [ "$available_gb" -le "$required_gb" ]; then
@@ -262,7 +262,7 @@ fi
 "#;
 
 const START_K3S_SCRIPT: &str = r#"
-set -euo pipefail
+set -eu
 sudo rc-service k3s start >&2 || true
 sudo rc-service k3s restart >&2
 elapsed=0
@@ -282,7 +282,7 @@ sudo rc-update add k3s >/dev/null
 "#;
 
 const CONTAINER_IMAGE_HELPERS: &str = r#"
-set -euo pipefail
+set -eu
 DOWNLOAD_PATH=/home/dune/.dune/download
 load_image_from_file() {
   local file_name="$1"
@@ -314,7 +314,7 @@ load_image_from_file "images/prerequisites/igw-postgres.tar"
 "#;
 
 const KUBECTL_HELPERS: &str = r#"
-set -euo pipefail
+set -eu
 kubectl_retry() {
   local attempt=1 out rc
   while [ "$attempt" -le 5 ]; do
@@ -399,7 +399,7 @@ scale_deployment funcom-operators utilitiesoperator-controller-manager 1
 "#;
 
 const INSTALL_HELPER_SCRIPT: &str = r#"
-set -euo pipefail
+set -eu
 mkdir -p /home/dune/.dune/bin
 test -f /home/dune/.dune/download/scripts/battlegroup.sh
 ln -sfn /home/dune/.dune/download/scripts/battlegroup.sh /home/dune/.dune/bin/battlegroup
@@ -408,7 +408,7 @@ chmod +x /home/dune/.dune/download/scripts/battlegroup.sh
 
 fn create_world_script(request: &WorldManifestRequest) -> String {
     let namespace = format!("funcom-seabass-{}", request.world_unique_name);
-    let mut script = String::from("set -euo pipefail\n");
+    let mut script = String::from("set -eu\n");
     script.push_str("G_SPEC_PATH=/home/dune/.dune\n");
     script.push_str("G_SCRIPT_PATH=/home/dune/.dune/download/scripts/setup\n");
     script.push_str(&shell_value("WORLD_NAME", request.world_name.trim()));
