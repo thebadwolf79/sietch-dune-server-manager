@@ -32,13 +32,11 @@ import {
 } from "@radix-ui/react-icons";
 
 const pages = [
-  { id: "install", label: "Install", hasLog: true },
-  { id: "servers", label: "Servers", hasLog: false },
-  { id: "configuration", label: "Configuration", hasLog: false },
-  { id: "telemetry", label: "Telemetry", hasLog: true },
-];
+  { id: "home", label: "Home" },
+  { id: "install", label: "Create New Server" },
+] as const;
 
-const activePage = pages[0];
+type PageId = (typeof pages)[number]["id"] | "server-detail";
 
 type NetworkMode = "static" | "dhcp";
 type PlayerIpMode = "local" | "external";
@@ -73,6 +71,37 @@ type EnvironmentDetection = {
   drives: DriveCandidate[];
   networkAdapters: NetworkAdapterCandidate[];
   externalIp: string | null;
+};
+
+type VmPowerState =
+  | "missing"
+  | "off"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "saved"
+  | "paused"
+  | "other";
+
+type VmInventoryRecord = {
+  name: string;
+  state: VmPowerState;
+  rawState: string;
+  configurationLocation: string;
+  path: string;
+  memoryAssignedBytes: number;
+  uptimeSeconds: number;
+  ipv4Addresses: string[];
+  hardDiskPaths: string[];
+  diskSizeBytes: number;
+  diskFileSizeBytes: number;
+  switchNames: string[];
+};
+
+type DuneVmCandidate = {
+  vm: VmInventoryRecord;
+  confidence: "high" | "medium" | "low";
+  reasons: string[];
 };
 
 type DetectionState = "detecting" | "ready" | "failed";
@@ -185,10 +214,13 @@ const playerPortForwards = [
 ];
 
 export function App() {
+  const [activePage, setActivePage] = useState<PageId>("home");
+  const [selectedServerName, setSelectedServerName] = useState<string | null>(null);
   const [form, setForm] = useState<SetupForm>(defaultForm);
   const [started, setStarted] = useState(false);
   const [setupRunning, setSetupRunning] = useState(false);
   const [setupRows, setSetupRows] = useState<LogRow[]>([]);
+  const [initRows, setInitRows] = useState<LogRow[]>([]);
   const [rollbackOpen, setRollbackOpen] = useState(false);
   const [rollbackRunning, setRollbackRunning] = useState(false);
   const [failedRollbackRequest, setFailedRollbackRequest] = useState<RollbackRequest | null>(null);
@@ -197,6 +229,8 @@ export function App() {
   const [networkAdapters, setNetworkAdapters] = useState<NetworkAdapterCandidate[]>([]);
   const [externalIp, setExternalIp] = useState<string | null>(null);
   const [networkDetection, setNetworkDetection] = useState<DetectionState>("detecting");
+  const [duneVms, setDuneVms] = useState<DuneVmCandidate[]>([]);
+  const [vmDetection, setVmDetection] = useState<DetectionState>("detecting");
   const [vmDestinationHasVm, setVmDestinationHasVm] = useState(false);
   const calculatedMemory = useMemo(() => calculateRequiredMemory(form), [form]);
   const environmentGate = useMemo(
@@ -216,12 +250,20 @@ export function App() {
     [driveCandidates, environmentGate, externalIp, hostReadiness, networkAdapters, networkDetection],
   );
   const layoutPreview = useMemo(() => setupLayoutPreview(form), [form]);
+  const selectedServer = useMemo(
+    () => duneVms.find((candidate) => candidate.vm.name === selectedServerName) ?? null,
+    [duneVms, selectedServerName],
+  );
   const update = <K extends keyof SetupForm>(key: K, value: SetupForm[K]) => {
     setForm((current) => normalizeSetupForm({ ...current, [key]: value }));
   };
 
   useEffect(() => {
     let cancelled = false;
+    const appendInit = (row: LogRow) => {
+      if (!cancelled) setInitRows((rows) => [...rows, row]);
+    };
+    appendInit(log.info("init", "Starting initial detection."));
     invoke<string>("default_vm_location")
       .then((location) => {
         if (cancelled) return;
@@ -230,6 +272,7 @@ export function App() {
       .catch(() => {
         // Keep the field user-editable if the native default path cannot be resolved.
       });
+    appendInit(log.info("capabilities", "Checking host capabilities."));
     invoke<EnvironmentDetection>("detect_environment")
       .then((environment) => {
         if (cancelled) return;
@@ -238,6 +281,7 @@ export function App() {
         setNetworkAdapters(environment.networkAdapters);
         setExternalIp(environment.externalIp);
         setNetworkDetection("ready");
+        appendInit(log.info("capabilities", "Host capability detection completed."));
         const first = environment.networkAdapters[0];
         if (first) {
           setForm((current) => {
@@ -258,7 +302,31 @@ export function App() {
         }
       })
       .catch(() => {
-        if (!cancelled) setNetworkDetection("failed");
+        if (!cancelled) {
+          setNetworkDetection("failed");
+          appendInit(log.error("capabilities", "Host capability detection failed."));
+        }
+      })
+      .finally(() => {
+        if (cancelled) return;
+        appendInit(log.info("vms", "Detecting existing Dune VMs."));
+        invoke<DuneVmCandidate[]>("detect_dune_vms")
+          .then((candidates) => {
+            if (cancelled) return;
+            setDuneVms(candidates);
+            setVmDetection("ready");
+            appendInit(
+              candidates.length > 0
+                ? log.info("vms", `Detected ${candidates.length} Dune VM candidate${candidates.length === 1 ? "" : "s"}.`)
+                : log.warn("vms", "No existing Dune VMs were detected."),
+            );
+          })
+          .catch(() => {
+            if (!cancelled) {
+              setVmDetection("failed");
+              appendInit(log.error("vms", "Existing VM detection failed."));
+            }
+          });
       });
     return () => {
       cancelled = true;
@@ -310,12 +378,9 @@ export function App() {
   const logRows = useMemo(
     () =>
       started
-        ? [...environmentRows, ...setupRows]
-        : [
-            ...environmentRows,
-            log.info("setup", "Choose the full setup shape, then run it once."),
-          ],
-    [environmentRows, setupRows, started],
+        ? [...initRows, ...environmentRows, ...setupRows]
+        : [...initRows, ...environmentRows],
+    [environmentRows, initRows, setupRows, started],
   );
 
   const startSetup = async () => {
@@ -359,27 +424,45 @@ export function App() {
       scaling="95%"
     >
       <Flex direction="column" className="app-root">
-        <Header />
+        <Header activePage={activePage} selectedServerName={selectedServerName} onNavigate={setActivePage} />
         <Separator size="4" />
-        <Box className={activePage.hasLog ? "app-main has-log" : "app-main"}>
-          <InstallControls
-            form={form}
-            calculatedMemory={calculatedMemory}
-            layoutPreview={layoutPreview}
-            hostReadiness={hostReadiness}
-            driveCandidates={driveCandidates}
-            networkAdapters={networkAdapters}
-            networkDetection={networkDetection}
-            externalIp={externalIp}
-            environmentGate={environmentGate}
-            setupRunning={setupRunning}
-            vmDestinationHasVm={vmDestinationHasVm}
-            update={update}
-            onStart={startSetup}
-          />
-          {activePage.hasLog ? (
-            <LogWindow rows={logRows} />
+        <Box className="app-main has-log">
+          {activePage === "home" ? (
+            <HomePage
+              environmentGate={environmentGate}
+              networkDetection={networkDetection}
+              vmDetection={vmDetection}
+              hostReadiness={hostReadiness}
+              networkAdapters={networkAdapters}
+              externalIp={externalIp}
+              duneVms={duneVms}
+              onOpenServer={(name) => {
+                setSelectedServerName(name);
+                setActivePage("server-detail");
+              }}
+            />
           ) : null}
+          {activePage === "install" ? (
+            <InstallControls
+              form={form}
+              calculatedMemory={calculatedMemory}
+              layoutPreview={layoutPreview}
+              hostReadiness={hostReadiness}
+              driveCandidates={driveCandidates}
+              networkAdapters={networkAdapters}
+              networkDetection={networkDetection}
+              externalIp={externalIp}
+              environmentGate={environmentGate}
+              setupRunning={setupRunning}
+              vmDestinationHasVm={vmDestinationHasVm}
+              update={update}
+              onStart={startSetup}
+            />
+          ) : null}
+          {activePage === "server-detail" && selectedServer ? (
+            <ServerDetailsPage candidate={selectedServer} />
+          ) : null}
+          <LogWindow rows={logRows} />
         </Box>
         <RollbackDialog
           open={rollbackOpen}
@@ -392,7 +475,15 @@ export function App() {
   );
 }
 
-function Header() {
+function Header({
+  activePage,
+  selectedServerName,
+  onNavigate,
+}: {
+  activePage: PageId;
+  selectedServerName: string | null;
+  onNavigate: (page: PageId) => void;
+}) {
   return (
     <Flex asChild align="center" justify="between" p="4">
       <header>
@@ -401,25 +492,381 @@ function Header() {
             <CubeIcon width="24" height="24" />
             <Heading size="4">Dune Dedicated Server Manager</Heading>
           </Flex>
-          <TopNav />
+          <TopNav
+            activePage={activePage}
+            selectedServerName={selectedServerName}
+            onNavigate={onNavigate}
+          />
         </Flex>
       </header>
     </Flex>
   );
 }
 
-function TopNav() {
+function TopNav({
+  activePage,
+  onNavigate,
+  selectedServerName,
+}: {
+  activePage: PageId;
+  onNavigate: (page: PageId) => void;
+  selectedServerName: string | null;
+}) {
   return (
     <Box asChild>
       <nav aria-label="Primary navigation">
         <TabNav.Root size="2" color="bronze">
           {pages.map((page) => (
-            <TabNav.Link key={page.id} href="#" active={page.id === activePage.id}>
+            <TabNav.Link
+              key={page.id}
+              href="#"
+              active={page.id === activePage}
+              onClick={(event) => {
+                event.preventDefault();
+                onNavigate(page.id);
+              }}
+            >
               {page.label}
             </TabNav.Link>
           ))}
+          {selectedServerName ? (
+            <TabNav.Link
+              href="#"
+              active={activePage === "server-detail"}
+              onClick={(event) => {
+                event.preventDefault();
+                onNavigate("server-detail");
+              }}
+            >
+              {selectedServerName}
+            </TabNav.Link>
+          ) : null}
         </TabNav.Root>
       </nav>
+    </Box>
+  );
+}
+
+function HomePage({
+  environmentGate,
+  networkDetection,
+  vmDetection,
+  hostReadiness,
+  networkAdapters,
+  externalIp,
+  duneVms,
+  onOpenServer,
+}: {
+  environmentGate: EnvironmentGate;
+  networkDetection: DetectionState;
+  vmDetection: DetectionState;
+  hostReadiness: HostReadiness | null;
+  networkAdapters: NetworkAdapterCandidate[];
+  externalIp: string | null;
+  duneVms: DuneVmCandidate[];
+  onOpenServer: (name: string) => void;
+}) {
+  const vmDetectionReady = vmDetection === "ready";
+  const primaryAdapter = networkAdapters[0];
+
+  return (
+    <Card size="3" variant="surface" className="pane page-pane">
+      <Flex direction="column" gap="5" height="100%" minHeight="0">
+        <Box className="info-card">
+          <InfoRow
+            label="Privileges"
+            value={hostReadiness?.elevated ? "Administrator" : "Not elevated"}
+            tone={hostReadiness?.elevated ? "green" : "red"}
+          />
+          <InfoRow
+            label="Hyper-V"
+            value={
+              hostReadiness?.hypervAvailable && hostReadiness.vmmsRunning
+                ? "Available"
+                : networkDetection === "failed"
+                  ? "Failed"
+                  : "Checking"
+            }
+            tone={hostReadiness?.hypervAvailable && hostReadiness.vmmsRunning ? "green" : "amber"}
+          />
+          <InfoRow
+            label="Virtualization"
+            value={
+              hostReadiness?.virtualizationFirmwareEnabled === false
+                ? "Disabled"
+                : hostReadiness
+                  ? "Operational"
+                  : "Checking"
+            }
+            tone={hostReadiness?.virtualizationFirmwareEnabled === false ? "red" : hostReadiness ? "green" : "amber"}
+          />
+          <InfoRow
+            label="Memory"
+            value={
+              hostReadiness
+                ? `${formatGiB(hostReadiness.availablePhysicalMemoryBytes)} available of ${formatGiB(hostReadiness.totalPhysicalMemoryBytes)}`
+                : "Checking"
+            }
+            tone={hostReadiness ? "green" : "amber"}
+          />
+          <InfoRow
+            label="Network"
+            value={
+              primaryAdapter
+                ? `${primaryAdapter.name} ${primaryAdapter.ipv4Address}/${primaryAdapter.prefixLength}`
+                : networkDetection === "failed"
+                  ? "Failed"
+                  : "Checking"
+            }
+            tone={primaryAdapter ? "green" : networkDetection === "failed" ? "red" : "amber"}
+          />
+          <InfoRow label="External IP" value={externalIp ?? "Not detected"} tone={externalIp ? "green" : "amber"} />
+          <InfoRow
+            label="Dune VMs"
+            value={vmDetectionReady ? `${duneVms.length} found` : vmDetection === "failed" ? "Failed" : "Checking"}
+            tone={vmDetectionReady ? "green" : vmDetection === "failed" ? "red" : "amber"}
+          />
+        </Box>
+
+        {!environmentGate.canContinue ? (
+          <Box className="setup-readiness">
+            <ul className="setup-issues">
+              {environmentGate.reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          </Box>
+        ) : null}
+
+        <Box className="setup-scroll">
+          <Flex direction="column" gap="3">
+            {duneVms.length > 0 ? (
+              duneVms.map((candidate) => (
+                <ServerCard
+                  key={candidate.vm.name}
+                  candidate={candidate}
+                  compact
+                  onOpen={() => onOpenServer(candidate.vm.name)}
+                />
+              ))
+            ) : (
+              <EmptyState
+                title={vmDetection === "failed" ? "VM detection failed" : "No Dune servers detected"}
+                body="Create a new server from the Create New Server tab, or keep this page open while detection completes."
+              />
+            )}
+          </Flex>
+        </Box>
+      </Flex>
+    </Card>
+  );
+}
+
+function ServerCard({
+  candidate,
+  compact = false,
+  onOpen,
+}: {
+  candidate: DuneVmCandidate;
+  compact?: boolean;
+  onOpen?: () => void;
+}) {
+  const vm = candidate.vm;
+  const primaryIp = vm.ipv4Addresses[0] ?? "No IPv4 reported";
+  const diskLabel = vm.diskSizeBytes > 0 ? `${formatGiB(vm.diskSizeBytes)} disk` : "Disk size unknown";
+  const usedDiskLabel = vm.diskFileSizeBytes > 0 ? `${formatGiB(vm.diskFileSizeBytes)} used` : "usage unknown";
+
+  return (
+    <Box
+      className={onOpen ? "server-card is-clickable" : "server-card"}
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (!onOpen) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onOpen();
+        }
+      }}
+    >
+      <Flex align="start" justify="between" gap="3">
+        <Box>
+          <Flex align="center" gap="2">
+            <Heading size={compact ? "3" : "4"}>{vm.name}</Heading>
+            <Badge color={candidate.confidence === "high" ? "green" : candidate.confidence === "medium" ? "amber" : "gray"} variant="soft">
+              {candidate.confidence}
+            </Badge>
+          </Flex>
+          <Text as="div" size="2" color="gray">
+            {vm.rawState} · {primaryIp}
+          </Text>
+        </Box>
+        <Badge color={vm.state === "running" ? "green" : vm.state === "off" ? "gray" : "amber"} variant="surface">
+          {vm.state}
+        </Badge>
+      </Flex>
+
+      <Grid columns={compact ? "2" : "4"} gap="3" mt="3">
+        <Metric label="Memory" value={formatGiB(vm.memoryAssignedBytes)} />
+        <Metric label="Disk" value={`${diskLabel}; ${usedDiskLabel}`} />
+        <Metric label="Switch" value={vm.switchNames.join(", ") || "none"} />
+        <Metric label="Uptime" value={formatDuration(vm.uptimeSeconds)} />
+      </Grid>
+
+    </Box>
+  );
+}
+
+function ServerDetailsPage({ candidate }: { candidate: DuneVmCandidate }) {
+  const vm = candidate.vm;
+  const primaryIp = vm.ipv4Addresses[0] ?? "";
+  const diskLabel =
+    vm.diskSizeBytes > 0
+      ? `${formatGiB(vm.diskSizeBytes)} disk; ${formatGiB(vm.diskFileSizeBytes)} used`
+      : "Unknown";
+
+  return (
+    <Card size="3" variant="surface" className="pane setup-pane">
+      <Flex direction="column" gap="4" height="100%" minHeight="0">
+        <Box>
+          <Heading size="5">{vm.name}</Heading>
+          <Text as="p" size="2" color="gray">
+            Server details and future update controls.
+          </Text>
+        </Box>
+
+        <Box className="setup-scroll">
+          <Flex direction="column" gap="5">
+            <SetupSection icon={DesktopIcon} title="Host and VM">
+              <Flex direction="column" gap="2">
+                <FormRow label="VM Name">
+                  <TextField.Root value={vm.name} readOnly />
+                </FormRow>
+                <FormRow label="VM Location">
+                  <TextField.Root value={vm.path || vm.configurationLocation} readOnly />
+                </FormRow>
+                <FormRow label="VM State">
+                  <TextField.Root value={vm.rawState} readOnly />
+                </FormRow>
+                <FormRow label="Memory">
+                  <TextField.Root value={formatGiB(vm.memoryAssignedBytes)} readOnly />
+                </FormRow>
+                <FormRow label="Disk">
+                  <TextField.Root value={diskLabel} readOnly />
+                </FormRow>
+                <FormRow label="VHD">
+                  <TextField.Root value={vm.hardDiskPaths[0] ?? "No disk reported"} readOnly />
+                </FormRow>
+              </Flex>
+            </SetupSection>
+
+            <SetupSection icon={RocketIcon} title="World Layout">
+              <Grid columns="2" gap="3">
+                <Field label="Hagga Basin">
+                  <Select.Root value="unknown" disabled>
+                    <Select.Trigger />
+                    <Select.Content>
+                      <Select.Item value="unknown">Detect from manager API</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                </Field>
+                <Field label="Social Hubs">
+                  <TextField.Root value="Detect from manager API" readOnly />
+                </Field>
+                <Field label="Deep Desert PvE">
+                  <Select.Root value="unknown" disabled>
+                    <Select.Trigger />
+                    <Select.Content>
+                      <Select.Item value="unknown">Detect from manager API</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                </Field>
+                <Field label="Deep Desert PvP">
+                  <Select.Root value="unknown" disabled>
+                    <Select.Trigger />
+                    <Select.Content>
+                      <Select.Item value="unknown">Detect from manager API</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                </Field>
+              </Grid>
+            </SetupSection>
+
+            <SetupSection icon={MixIcon} title="Network">
+              <Flex direction="column" gap="2">
+                <FormRow label="VM IP">
+                  <TextField.Root value={primaryIp || "No IPv4 reported"} readOnly />
+                </FormRow>
+                <FormRow label="Switch">
+                  <TextField.Root value={vm.switchNames.join(", ") || "No switch reported"} readOnly />
+                </FormRow>
+                <FormRow label="Reported IPs">
+                  <TextArea value={vm.ipv4Addresses.join("\n") || "No IPv4 reported"} readOnly />
+                </FormRow>
+              </Flex>
+              <Text as="p" size="2" color="gray">
+                IP changes are read-only here for now. Changing VM IP can interrupt SSH and Manager API access,
+                invalidate port-forwarding rules, and require player-facing IP settings to be rewritten.
+              </Text>
+            </SetupSection>
+
+            <SetupSection icon={GlobeIcon} title="Self-Host">
+              <FormRow label="Service Token">
+                <TextField.Root value="Stored only during setup; not displayed here" readOnly />
+              </FormRow>
+            </SetupSection>
+          </Flex>
+        </Box>
+      </Flex>
+    </Card>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "green" | "amber" | "red";
+}) {
+  return (
+    <Grid columns="160px 1fr auto" gap="3" align="center" className="info-row">
+      <Text as="div" size="2" color="gray">
+        {label}
+      </Text>
+      <Text as="div" size="2" className="mono metric-value">
+        {value}
+      </Text>
+      <Badge color={tone} variant="soft">
+        {tone === "green" ? "OK" : tone === "red" ? "Issue" : "Check"}
+      </Badge>
+    </Grid>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <Box>
+      <Text as="div" size="1" color="gray">
+        {label}
+      </Text>
+      <Text as="div" size="2" className="mono metric-value">
+        {value}
+      </Text>
+    </Box>
+  );
+}
+
+function EmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <Box className="empty-state">
+      <Heading size="3">{title}</Heading>
+      <Text as="p" size="2" color="gray">
+        {body}
+      </Text>
     </Box>
   );
 }
@@ -1182,6 +1629,15 @@ function formatGiB(bytes: number): string {
   return `${Math.round(bytes / 1024 / 1024 / 1024)} GB`;
 }
 
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "00:00:00";
+  const total = Math.floor(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return [hours, minutes, secs].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
 function SetupSection({
   className,
   icon: Icon,
@@ -1232,14 +1688,6 @@ function LogWindow({ rows }: { rows: LogRow[] }) {
   return (
     <Card size="3" variant="surface" className="pane">
       <Flex direction="column" height="100%" minHeight="0">
-        <Flex align="center" justify="between" gap="3">
-          <Box>
-            <Heading size="4">Setup log</Heading>
-          </Box>
-        </Flex>
-
-        <Separator size="4" my="3" />
-
         <Box className="log-body" ref={bodyRef}>
           <Flex direction="column" gap="0">
             {rows.map((row, index) => (

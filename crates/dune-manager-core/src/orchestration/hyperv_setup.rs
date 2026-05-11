@@ -644,6 +644,10 @@ mod tests {
                 memory_assigned_bytes: 0,
                 uptime_seconds: 0,
                 ipv4_addresses: vec![],
+                hard_disk_paths: vec![],
+                disk_size_bytes: 0,
+                disk_file_size_bytes: 0,
+                switch_names: vec![],
             }),
         };
         let orchestrator = HyperVVmSetupOrchestrator::new(MockHost, vm);

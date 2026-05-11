@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::CommandResult;
+use crate::{errors::failure, models::CommandResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -124,6 +124,14 @@ pub struct VmInventoryRecord {
     pub uptime_seconds: u64,
     /// IPv4 addresses reported for the VM.
     pub ipv4_addresses: Vec<String>,
+    /// Attached virtual hard disk paths.
+    pub hard_disk_paths: Vec<String>,
+    /// Sum of attached virtual hard disk maximum sizes in bytes.
+    pub disk_size_bytes: u64,
+    /// Sum of attached virtual hard disk file sizes in bytes.
+    pub disk_file_size_bytes: u64,
+    /// Connected Hyper-V switch names.
+    pub switch_names: Vec<String>,
 }
 
 /// Compatibility result for importing a packaged VM.
@@ -212,6 +220,10 @@ where
 
 /// VM lifecycle and import provider.
 pub trait VmProvider {
+    /// Lists all VMs known to the provider.
+    fn list_vms(&self) -> CommandResult<Vec<VmInventoryRecord>> {
+        Err(failure("VM listing is not supported by this provider"))
+    }
     /// Returns a VM inventory record by name, or `None` when absent.
     fn get_vm(&self, name: &str) -> CommandResult<Option<VmInventoryRecord>>;
     /// Checks whether a packaged VM import is compatible.
@@ -243,6 +255,10 @@ impl<T> VmProvider for &T
 where
     T: VmProvider + ?Sized,
 {
+    fn list_vms(&self) -> CommandResult<Vec<VmInventoryRecord>> {
+        (*self).list_vms()
+    }
+
     fn get_vm(&self, name: &str) -> CommandResult<Option<VmInventoryRecord>> {
         (*self).get_vm(name)
     }

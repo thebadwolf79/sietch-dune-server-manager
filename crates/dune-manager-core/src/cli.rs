@@ -10,13 +10,14 @@ use crate::{
     orchestration::{
         battlegroup_command_catalog, detect_player_address_candidates, hyperv_initial_setup_flow,
         BattlegroupManagementOrchestrator, BattlegroupRef, BattlegroupUpdateOrchestrator,
-        ExperimentalSwapOrchestrator, ExperimentalSwapRequest, GuestBootstrapOrchestrator,
-        GuestBootstrapPlan, GuestNetworkConfig, HyperVVmLifecycleOrchestrator,
-        HyperVVmSetupOrchestrator, HyperVVmSetupRequest, InstanceMap, ManagerApiInstallRequest,
-        ManagerApiInstaller, MapInstanceOrchestrator, MemoryProfile, OpenSshGuestProvider,
-        OpenSshRunner, OpenSshTarget, OrchestrationEvent, SetMapInstancesRequest,
-        SshGuestBootstrapProvider, StrictPowerShellHyperV, StructuredBattlegroupOps,
-        StructuredKubectl, VecOperationSink, VmProvider, DEFAULT_VM_DISK_BYTES,
+        DuneVmDetector, ExperimentalSwapOrchestrator, ExperimentalSwapRequest,
+        GuestBootstrapOrchestrator, GuestBootstrapPlan, GuestNetworkConfig,
+        HyperVVmLifecycleOrchestrator, HyperVVmSetupOrchestrator, HyperVVmSetupRequest,
+        InstanceMap, ManagerApiInstallRequest, ManagerApiInstaller, MapInstanceOrchestrator,
+        MemoryProfile, OpenSshGuestProvider, OpenSshRunner, OpenSshTarget, OrchestrationEvent,
+        SetMapInstancesRequest, SshGuestBootstrapProvider, StrictPowerShellHyperV,
+        StructuredBattlegroupOps, StructuredKubectl, VecOperationSink, VmProvider,
+        DEFAULT_VM_DISK_BYTES,
     },
     toolchain::{ManagedTool, Toolchain},
 };
@@ -120,6 +121,10 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
         ["vm", "get"] => {
             let name = args.required("--name")?;
             to_json(StrictPowerShellHyperV::new().get_vm(&name)?)
+        }
+        ["vm", "list"] => to_json(StrictPowerShellHyperV::new().list_vms()?),
+        ["vm", "detect-dune"] => {
+            to_json(DuneVmDetector::new(StrictPowerShellHyperV::new()).detect()?)
         }
         ["vm", "start"] => {
             let name = args.required("--name")?;
@@ -657,6 +662,8 @@ fn usage() -> Vec<&'static str> {
         "dune-manager-cli tools install --tool steamcmd|openssh|all [--tools-root PATH] [--force] [--source-url URL]",
         "dune-manager-cli tools path --tool steamcmd|openssh [--tools-root PATH]",
         "dune-manager-cli vm get --name NAME",
+        "dune-manager-cli vm list",
+        "dune-manager-cli vm detect-dune",
         "dune-manager-cli vm start --name NAME",
         "dune-manager-cli vm stop --name NAME",
         "dune-manager-cli setup create-vm --install-path PATH --destination PATH --vm-name NAME --switch NAME --adapter NAME [--memory-gb 20] [--disk-gb 100] [--replace-existing] [--clear-destination]",

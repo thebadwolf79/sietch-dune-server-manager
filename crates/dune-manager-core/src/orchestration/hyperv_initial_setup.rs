@@ -286,6 +286,10 @@ mod tests {
                 memory_assigned_bytes: 0,
                 uptime_seconds: 0,
                 ipv4_addresses: vec!["10.0.0.4".to_string()],
+                hard_disk_paths: vec![],
+                disk_size_bytes: 0,
+                disk_file_size_bytes: 0,
+                switch_names: vec![],
             }))
         }
 

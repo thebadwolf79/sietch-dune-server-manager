@@ -64,6 +64,10 @@ struct RawVmRecord {
     memory_assigned_bytes: Option<u64>,
     uptime_seconds: Option<u64>,
     ipv4_addresses: Vec<String>,
+    hard_disk_paths: Vec<String>,
+    disk_size_bytes: Option<u64>,
+    disk_file_size_bytes: Option<u64>,
+    switch_names: Vec<String>,
 }
 
 impl From<RawVmRecord> for VmInventoryRecord {
@@ -77,6 +81,10 @@ impl From<RawVmRecord> for VmInventoryRecord {
             memory_assigned_bytes: value.memory_assigned_bytes.unwrap_or_default(),
             uptime_seconds: value.uptime_seconds.unwrap_or_default(),
             ipv4_addresses: value.ipv4_addresses,
+            hard_disk_paths: value.hard_disk_paths,
+            disk_size_bytes: value.disk_size_bytes.unwrap_or_default(),
+            disk_file_size_bytes: value.disk_file_size_bytes.unwrap_or_default(),
+            switch_names: value.switch_names,
         }
     }
 }
@@ -211,6 +219,47 @@ ConvertTo-Json -InputObject $items -Compress -Depth 5
 }
 
 impl VmProvider for StrictPowerShellHyperV {
+    fn list_vms(&self) -> CommandResult<Vec<VmInventoryRecord>> {
+        let raw: Vec<RawVmRecord> = self.run_json(
+            "hyperv.vm.list",
+            r#"
+$ErrorActionPreference = 'Stop'
+$items = @(Get-VM | Sort-Object Name | ForEach-Object {
+  $vm = $_
+  $adapters = @(Get-VMNetworkAdapter -VMName $vm.Name -ErrorAction SilentlyContinue)
+  $ips = @($adapters.IPAddresses | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' })
+  $switches = @($adapters | ForEach-Object { $_.SwitchName } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+  $disks = @(Get-VMHardDiskDrive -VMName $vm.Name -ErrorAction SilentlyContinue | ForEach-Object { $_.Path })
+  $diskSizeBytes = [uint64]0
+  $diskFileSizeBytes = [uint64]0
+  foreach ($diskPath in $disks) {
+    $vhd = Get-VHD -Path $diskPath -ErrorAction SilentlyContinue
+    if ($vhd) {
+      $diskSizeBytes += [uint64]$vhd.Size
+      $diskFileSizeBytes += [uint64]$vhd.FileSize
+    }
+  }
+  [pscustomobject]@{
+    name = $vm.Name
+    state = $vm.State.ToString()
+    configurationLocation = $vm.ConfigurationLocation
+    path = $vm.Path
+    memoryAssignedBytes = [uint64]$vm.MemoryAssigned
+    uptimeSeconds = [uint64]$vm.Uptime.TotalSeconds
+    ipv4Addresses = $ips
+    hardDiskPaths = $disks
+    diskSizeBytes = $diskSizeBytes
+    diskFileSizeBytes = $diskFileSizeBytes
+    switchNames = $switches
+  }
+})
+ConvertTo-Json -InputObject $items -Compress -Depth 6
+"#
+            .to_string(),
+        )?;
+        Ok(raw.into_iter().map(Into::into).collect())
+    }
+
     fn get_vm(&self, name: &str) -> CommandResult<Option<VmInventoryRecord>> {
         let raw: Option<RawVmRecord> = self.run_json(
             "hyperv.vm.get",
@@ -223,7 +272,19 @@ if (-not $vm) {{
   [Console]::Out.Write('null')
   exit 0
 }}
-$ips = @((Get-VMNetworkAdapter -VMName $vm.Name).IPAddresses | Where-Object {{ $_ -match '^\d+\.\d+\.\d+\.\d+$' }})
+$adapters = @(Get-VMNetworkAdapter -VMName $vm.Name -ErrorAction SilentlyContinue)
+$ips = @($adapters.IPAddresses | Where-Object {{ $_ -match '^\d+\.\d+\.\d+\.\d+$' }})
+$switches = @($adapters | ForEach-Object {{ $_.SwitchName }} | Where-Object {{ -not [string]::IsNullOrWhiteSpace($_) }} | Sort-Object -Unique)
+$disks = @(Get-VMHardDiskDrive -VMName $vm.Name -ErrorAction SilentlyContinue | ForEach-Object {{ $_.Path }})
+$diskSizeBytes = [uint64]0
+$diskFileSizeBytes = [uint64]0
+foreach ($diskPath in $disks) {{
+  $vhd = Get-VHD -Path $diskPath -ErrorAction SilentlyContinue
+  if ($vhd) {{
+    $diskSizeBytes += [uint64]$vhd.Size
+    $diskFileSizeBytes += [uint64]$vhd.FileSize
+  }}
+}}
 [pscustomobject]@{{
   name = $vm.Name
   state = $vm.State.ToString()
@@ -232,6 +293,10 @@ $ips = @((Get-VMNetworkAdapter -VMName $vm.Name).IPAddresses | Where-Object {{ $
   memoryAssignedBytes = [uint64]$vm.MemoryAssigned
   uptimeSeconds = [uint64]$vm.Uptime.TotalSeconds
   ipv4Addresses = $ips
+  hardDiskPaths = $disks
+  diskSizeBytes = $diskSizeBytes
+  diskFileSizeBytes = $diskFileSizeBytes
+  switchNames = $switches
 }} | ConvertTo-Json -Compress -Depth 5
 "#,
                 name = ps_single_quoted(name)

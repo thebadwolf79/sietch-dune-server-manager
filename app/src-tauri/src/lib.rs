@@ -3,12 +3,13 @@ use std::path::PathBuf;
 use dune_manager_core::environment::{detect_setup_environment, SetupEnvironment};
 use dune_manager_core::models::CommandResult;
 use dune_manager_core::orchestration::{
-    BattlegroupManagementOrchestrator, BattlegroupRef, ExperimentalSwapOrchestrator,
-    ExperimentalSwapRequest, GuestBootstrapPlan, GuestNetworkConfig, GuestNetworkPlan,
-    HyperVInitialSetupOrchestrator, HyperVInitialSetupRequest, HyperVVmSetupRequest, InstanceMap,
-    MapInstanceOrchestrator, MemoryProfile, OpenSshGuestProvider, OpenSshRunner, OpenSshTarget,
-    OperationSink, OrchestrationEvent, SetMapInstancesRequest, SshGuestBootstrapProvider,
-    StrictPowerShellHyperV, StructuredKubectl, VmProvider,
+    BattlegroupManagementOrchestrator, BattlegroupRef, DuneVmCandidate, DuneVmDetector,
+    ExperimentalSwapOrchestrator, ExperimentalSwapRequest, GuestBootstrapPlan, GuestNetworkConfig,
+    GuestNetworkPlan, HyperVInitialSetupOrchestrator, HyperVInitialSetupRequest,
+    HyperVVmSetupRequest, InstanceMap, MapInstanceOrchestrator, MemoryProfile,
+    OpenSshGuestProvider, OpenSshRunner, OpenSshTarget, OperationSink, OrchestrationEvent,
+    SetMapInstancesRequest, SshGuestBootstrapProvider, StrictPowerShellHyperV, StructuredKubectl,
+    VmProvider,
 };
 use dune_manager_core::shell::{ps_single_quoted, run_powershell};
 use dune_manager_core::toolchain::{
@@ -47,6 +48,17 @@ async fn vm_destination_has_vm(path: String) -> Result<bool, String> {
     })
     .await
     .map_err(|err| format!("Path check worker failed: {err}"))?
+}
+
+#[tauri::command]
+async fn detect_dune_vms() -> Result<Vec<DuneVmCandidate>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        DuneVmDetector::new(StrictPowerShellHyperV::new())
+            .detect()
+            .map_err(|err| err.message)
+    })
+    .await
+    .map_err(|err| format!("Dune VM detection worker failed: {err}"))?
 }
 
 fn destination_has_vm_artifacts(path: &std::path::Path) -> bool {
@@ -583,6 +595,7 @@ pub fn run() {
             detect_environment,
             default_vm_location,
             vm_destination_has_vm,
+            detect_dune_vms,
             start_full_setup,
             rollback_setup
         ])
