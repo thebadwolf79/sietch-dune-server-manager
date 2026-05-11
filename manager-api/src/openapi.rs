@@ -141,7 +141,20 @@ pub fn document() -> Value {
             },
             "/api/director/battlegroup": director_get("Director battlegroup runtime data"),
             "/api/director/players/summary": director_get("Director player summary"),
-            "/api/director/players": director_get("Director player lists"),
+            "/api/director/players": {
+                "get": {
+                    "summary": "Director player lists",
+                    "description": "Fast by default. Set full=true to include slower in-transit, grace-period, completion, and queued buckets.",
+                    "parameters": [
+                        { "name": "full", "in": "query", "required": false, "schema": { "type": "boolean", "default": false } }
+                    ],
+                    "responses": {
+                        "200": { "description": "Director player lists" },
+                        "401": { "$ref": "#/components/responses/Unauthorized" },
+                        "502": { "$ref": "#/components/responses/Error" }
+                    }
+                }
+            },
             "/api/director/maps": director_get("Director map summaries"),
             "/api/director/config/fls": director_config_path("FLS report settings"),
             "/api/director/config/character-transfer": director_config_path("Character transfer settings"),

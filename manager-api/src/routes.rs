@@ -13,6 +13,7 @@ use axum::{
 use futures::{SinkExt, StreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{api::LogParams, Api};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{env, sync::Arc, time::Duration};
 use tokio::time;
@@ -129,10 +130,16 @@ async fn status(
     headers: HeaderMap,
 ) -> ApiResponse<StatusResponse> {
     authorize(&state, &headers, None)?;
-    let battlegroups = list_battlegroups(&state).await?.len();
-    let pods = list_pods(&state).await?.len();
-    let services = list_services(&state).await?.len();
-    let director_configured = resolve_director_base_url(&state).await.is_ok();
+    let (battlegroups, pods, services, director_configured) = tokio::join!(
+        list_battlegroups(&state),
+        list_pods(&state),
+        list_services(&state),
+        resolve_director_base_url(&state),
+    );
+    let battlegroups = battlegroups?.len();
+    let pods = pods?.len();
+    let services = services?.len();
+    let director_configured = director_configured.is_ok();
 
     Ok(Json(StatusResponse {
         api_version: MANAGER_API_VERSION,
@@ -261,10 +268,8 @@ async fn workloads(
     headers: HeaderMap,
 ) -> ApiResponse<WorkloadsResponse> {
     authorize(&state, &headers, None)?;
-    Ok(Json(WorkloadsResponse {
-        pods: list_pods(&state).await?,
-        services: list_services(&state).await?,
-    }))
+    let (pods, services) = tokio::try_join!(list_pods(&state), list_services(&state))?;
+    Ok(Json(WorkloadsResponse { pods, services }))
 }
 
 async fn logs(
@@ -330,14 +335,24 @@ async fn director_players_summary(
 async fn director_players(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Query(query): Query<DirectorPlayersQuery>,
 ) -> ApiResponse<DirectorPlayerLists> {
     authorize(&state, &headers, None)?;
-    let all = director_get_json(&state, "/v0/players").await?;
-    let online = director_get_json(&state, "/v0/players/online").await?;
-    let in_transit = director_get_json(&state, "/v0/players/intransit").await?;
-    let grace_period = director_get_json(&state, "/v0/players/graceperiod").await?;
-    let completion = director_get_json(&state, "/v0/players/completion").await?;
-    let queued = director_get_json(&state, "/v0/players/queued").await?;
+    let base_url = ensure_director_available(&state).await?;
+    let all = director_get_json_with_base(&state, &base_url, "/v0/players").await?;
+    let online = director_get_json_with_base(&state, &base_url, "/v0/players/online").await?;
+
+    let (in_transit, grace_period, completion, queued) = if query.full.unwrap_or(false) {
+        (
+            director_get_json_with_base(&state, &base_url, "/v0/players/intransit").await?,
+            director_get_json_with_base(&state, &base_url, "/v0/players/graceperiod").await?,
+            director_get_json_with_base(&state, &base_url, "/v0/players/completion").await?,
+            director_get_json_with_base(&state, &base_url, "/v0/players/queued").await?,
+        )
+    } else {
+        let empty = json!([]);
+        (empty.clone(), empty.clone(), empty.clone(), empty)
+    };
     Ok(Json(director_player_lists(
         &all,
         &online,
@@ -346,6 +361,11 @@ async fn director_players(
         &completion,
         &queued,
     )))
+}
+
+#[derive(Debug, Deserialize)]
+struct DirectorPlayersQuery {
+    full: Option<bool>,
 }
 
 async fn director_maps(
@@ -685,9 +705,11 @@ async fn telemetry_socket(socket: WebSocket, state: Arc<AppState>) {
 }
 
 async fn telemetry_snapshot(state: &AppState) -> Result<Value> {
-    let battlegroups = list_battlegroups(state).await?;
-    let pods = list_pods(state).await?;
-    let services = list_services(state).await?;
+    let (battlegroups, pods, services) = tokio::try_join!(
+        list_battlegroups(state),
+        list_pods(state),
+        list_services(state)
+    )?;
 
     Ok(json!({
         "namespace": state.namespace,

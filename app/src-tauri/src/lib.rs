@@ -6,10 +6,10 @@ use dune_manager_core::orchestration::{
     BattlegroupManagementOrchestrator, BattlegroupRef, DuneVmCandidate, DuneVmDetector,
     ExperimentalSwapOrchestrator, ExperimentalSwapRequest, GuestBootstrapPlan, GuestNetworkConfig,
     GuestNetworkPlan, HyperVInitialSetupOrchestrator, HyperVInitialSetupRequest,
-    HyperVVmSetupRequest, InstanceMap, MapInstanceOrchestrator, MemoryProfile,
-    OpenSshGuestProvider, OpenSshRunner, OpenSshTarget, OperationSink, OrchestrationEvent,
-    SetMapInstancesRequest, SshGuestBootstrapProvider, StrictPowerShellHyperV, StructuredKubectl,
-    VmProvider,
+    HyperVVmSetupRequest, InstanceMap, ManagerApiInstallRequest, ManagerApiInstaller,
+    MapInstanceOrchestrator, MemoryProfile, OpenSshGuestProvider, OpenSshRunner, OpenSshTarget,
+    OperationSink, OrchestrationEvent, SetMapInstancesRequest, SshGuestBootstrapProvider,
+    StrictPowerShellHyperV, StructuredKubectl, VmProvider,
 };
 use dune_manager_core::shell::{ps_single_quoted, run_powershell};
 use dune_manager_core::toolchain::{
@@ -17,7 +17,7 @@ use dune_manager_core::toolchain::{
     Toolchain,
 };
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
+use tauri::{path::BaseDirectory, Emitter, Manager};
 
 #[tauri::command]
 async fn detect_environment() -> Result<SetupEnvironment, String> {
@@ -195,7 +195,8 @@ async fn start_full_setup(
     tauri::async_runtime::spawn_blocking(move || {
         let mut sink = TauriOperationSink { app: worker_app };
         sink.info("setup", "Starting full setup workflow.");
-        match run_full_setup(request, &mut sink) {
+        let manager_api_binary = bundled_manager_api_binary(&sink.app);
+        match run_full_setup(request, manager_api_binary, &mut sink) {
             Ok(result) => {
                 sink.info("setup", "Full setup workflow completed.");
                 Ok(result)
@@ -292,6 +293,7 @@ fn rollback_setup_inner(
 
 fn run_full_setup(
     request: SetupRequest,
+    manager_api_binary: Option<PathBuf>,
     sink: &mut TauriOperationSink,
 ) -> CommandResult<SetupRunResult> {
     let toolchain = Toolchain::from_default_root()?;
@@ -416,7 +418,7 @@ fn run_full_setup(
     };
     sink.info("bg", "Starting battlegroup after setup.");
     let director_node_port =
-        BattlegroupManagementOrchestrator::new(StructuredKubectl::new(bootstrap_runner))
+        BattlegroupManagementOrchestrator::new(StructuredKubectl::new(bootstrap_runner.clone()))
             .start_and_wait_director(&battlegroup, 180, sink)?;
     if let Some(port) = director_node_port {
         sink.info(
@@ -424,10 +426,24 @@ fn run_full_setup(
             format!("Director is available on NodePort {port}."),
         );
     }
-    sink.warn(
-        "manager-api",
-        "Manager API install is not part of this setup run yet; configure a Manager admin token before exposing :8787.",
-    );
+    if let Some(binary_path) = manager_api_binary {
+        sink.info(
+            "manager-api",
+            "Installing Manager API with the Self-Host Service Token.",
+        );
+        let manager_request = ManagerApiInstallRequest::new(
+            binary_path,
+            request.self_host_token.trim().to_string(),
+            result.bootstrap.namespace.clone(),
+        );
+        ManagerApiInstaller::new(bootstrap_runner).install(&manager_request, sink)?;
+        sink.info("manager-api", "Manager API installed and healthy.");
+    } else {
+        sink.warn(
+            "manager-api",
+            "Bundled Manager API binary was not found; skipping Manager API install.",
+        );
+    }
 
     Ok(SetupRunResult {
         namespace: result.bootstrap.namespace,
@@ -435,6 +451,22 @@ fn run_full_setup(
         world_unique_name: result.bootstrap.world_unique_name,
         director_node_port,
     })
+}
+
+fn bundled_manager_api_binary(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let candidates = [
+        app.path()
+            .resolve("manager-api/dune-manager-api", BaseDirectory::Resource)
+            .ok(),
+        app.path()
+            .resolve(
+                "manager-api/dune-manager-api-x86_64-unknown-linux-musl",
+                BaseDirectory::Resource,
+            )
+            .ok(),
+    ];
+
+    candidates.into_iter().flatten().find(|path| path.is_file())
 }
 
 fn apply_instance_layout(

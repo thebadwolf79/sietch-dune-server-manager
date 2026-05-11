@@ -25,6 +25,14 @@ const DIRECTOR_PROBE_PATH: &str = "/v0/battlegroup";
 
 pub async fn director_get_json(state: &AppState, path: &str) -> Result<Value, ApiError> {
     let base_url = ensure_director_available(state).await?;
+    director_get_json_with_base(state, &base_url, path).await
+}
+
+pub async fn director_get_json_with_base(
+    state: &AppState,
+    base_url: &str,
+    path: &str,
+) -> Result<Value, ApiError> {
     let value = state
         .http
         .get(format!("{base_url}{path}"))
