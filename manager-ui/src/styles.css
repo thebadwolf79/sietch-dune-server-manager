@@ -283,6 +283,51 @@ header,
   font-size: 0.78rem;
 }
 
+.issue-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.issue-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: center;
+  padding: 0.75rem;
+  border: 1px solid rgba(214, 187, 133, 0.13);
+  border-radius: 8px;
+  background: rgba(8, 7, 6, 0.3);
+}
+
+.issue-list article.warning {
+  border-color: rgba(229, 179, 84, 0.3);
+  background: rgba(105, 78, 29, 0.25);
+}
+
+.issue-list article.danger-state {
+  border-color: rgba(220, 95, 79, 0.34);
+  background: rgba(97, 32, 26, 0.28);
+}
+
+.issue-list strong,
+.issue-list p {
+  margin: 0;
+}
+
+.issue-list strong {
+  color: #f2d492;
+}
+
+.issue-list p {
+  margin-top: 0.22rem;
+  color: #d9d1c4;
+  font-size: 0.84rem;
+}
+
+.good-text {
+  color: #91d18b;
+}
+
 .player-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1735,6 +1780,7 @@ header,
   .dashboard-grid.lower,
   .quick-actions,
   .dashboard-metrics,
+  .issue-list article,
   .server-command-grid,
   .server-status-grid {
     grid-template-columns: 1fr;

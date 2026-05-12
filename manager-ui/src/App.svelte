@@ -76,6 +76,13 @@
     buckets: string[];
   };
 
+  type DashboardIssue = {
+    title: string;
+    detail: string;
+    tone: "danger" | "warn" | "info";
+    page?: Page;
+  };
+
   const navItems: NavItem[] = [
     { page: "dashboard", label: "Command Center" },
     { page: "players", label: "Players" },
@@ -207,6 +214,14 @@
   $: visibleDatabaseGuilds = filterDatabaseGuilds(databaseGuilds?.rows ?? [], playerFilter);
   $: serverHealth = deriveServerHealth(overview, battlegroup, notReadyPods);
   $: nextActions = deriveNextActions(battlegroup, overview, databaseMaintenance, lifecycleBusy);
+  $: dashboardIssues = deriveDashboardIssues(
+    battlegroup,
+    overview,
+    notReadyPods,
+    databaseMaintenance,
+    telemetryError,
+    events,
+  );
   $: if (selectedContainer && selectedPodSummary && !selectedPodSummary.containers.includes(selectedContainer)) {
     selectedContainer = "";
   }
@@ -334,6 +349,7 @@
       if (!settingsCatalog) settingsCatalog = await api<UserSettingsCatalog>("/api/config/user-settings");
       if (!databaseMaintenance) void loadDatabaseMaintenance(false);
       if (!playerStatistics) void loadPlayerStatistics(false);
+      if (!events.length && !eventsBusy) void loadEvents(false);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         session = null;
@@ -663,14 +679,14 @@
     }
   }
 
-  async function loadEvents() {
+  async function loadEvents(showError = true) {
     eventsBusy = true;
-    error = "";
+    if (showError) error = "";
     try {
       const result = await api<EventsResponse>("/api/events?tail=120");
       events = result.events;
     } catch (err) {
-      error = message(err);
+      if (showError) error = message(err);
     } finally {
       eventsBusy = false;
     }
@@ -1550,6 +1566,60 @@
     return actions.slice(0, 5);
   }
 
+  function deriveDashboardIssues(
+    battlegroupValue: BattlegroupSummary | null,
+    overviewValue: Overview | null,
+    notReady: PodSummary[],
+    databaseValue: DatabaseMaintenanceResponse | null,
+    telemetryMessage: string,
+    eventItems: EventSummary[],
+  ): DashboardIssue[] {
+    const issues: DashboardIssue[] = [];
+    if (!overviewValue) {
+      issues.push({ title: "Manager is loading", detail: "Waiting for the latest server snapshot.", tone: "info" });
+      return issues;
+    }
+    if (!battlegroupValue) {
+      issues.push({ title: "No server detected", detail: "No battlegroup is available in this namespace.", tone: "danger", page: "settings" });
+    } else if (battlegroupValue.stop) {
+      issues.push({ title: "Server is offline", detail: "Start the server when you are ready for players to connect.", tone: "danger", page: "battlegroup" });
+    }
+    if (notReady.length) {
+      const names = notReady.slice(0, 3).map((pod) => pod.name).join(", ");
+      issues.push({
+        title: `${notReady.length} runtime service${notReady.length === 1 ? "" : "s"} not ready`,
+        detail: names + (notReady.length > 3 ? ` and ${notReady.length - 3} more` : ""),
+        tone: "warn",
+        page: "workloads",
+      });
+    }
+    if (!overviewValue.directorAvailable) {
+      issues.push({ title: "Director telemetry unavailable", detail: "Player and map telemetry may be stale until Director is reachable.", tone: "warn", page: "director" });
+    }
+    if (databaseValue && !databaseValue.backupsReady) {
+      issues.push({
+        title: "Database backups need attention",
+        detail: databaseValue.physicalBackupsEnabled ? databaseValue.backupStorageMessage : databaseValue.physicalBackupsMessage,
+        tone: "warn",
+        page: "database",
+      });
+    }
+    if (telemetryMessage) {
+      issues.push({ title: "Live telemetry disconnected", detail: telemetryMessage, tone: "info", page: "settings" });
+    }
+    const warnings = eventItems.filter((event) => event.eventType === "Warning");
+    if (warnings.length) {
+      const latest = warnings[0];
+      issues.push({
+        title: `${warnings.length} recent warning event${warnings.length === 1 ? "" : "s"}`,
+        detail: `${latest.reason || latest.eventType}: ${latest.message}`,
+        tone: "warn",
+        page: "workloads",
+      });
+    }
+    return issues.slice(0, 6);
+  }
+
   function mapHealthLabel(map: { servers: Array<{ status: string }> }) {
     if (!map.servers.length) return "No servers";
     const running = map.servers.filter((server) => server.status === "Running").length;
@@ -1656,6 +1726,32 @@
             </div>
             {#if telemetryError}<p class="warn">{telemetryError}</p>{/if}
           </section>
+          <section class="panel issue-panel">
+            <div class="split-heading">
+              <div>
+                <h2>Attention</h2>
+                <p class="muted">Current risks and follow-up items from server health, backups, telemetry, and events.</p>
+              </div>
+              <button class="inline" on:click={() => openPage("workloads")}>Health</button>
+            </div>
+            {#if dashboardIssues.length}
+              <div class="issue-list">
+                {#each dashboardIssues as issue}
+                  <article class:danger-state={issue.tone === "danger"} class:warning={issue.tone === "warn"}>
+                    <div>
+                      <strong>{issue.title}</strong>
+                      <p>{issue.detail}</p>
+                    </div>
+                    {#if issue.page}<button class="inline" on:click={() => issue.page && openPage(issue.page)}>Open</button>{/if}
+                  </article>
+                {/each}
+              </div>
+            {:else}
+              <p class="good-text">No current issues detected.</p>
+            {/if}
+          </section>
+        </section>
+        <section class="dashboard-grid lower">
           <section class="panel player-panel">
             <div class="split-heading">
               <div>
@@ -1673,8 +1769,6 @@
               <div><span>Guilds</span><b>{playerStatistics?.statistics.guilds ?? "..."}</b></div>
             </div>
           </section>
-        </section>
-        <section class="dashboard-grid lower">
           <section class="panel">
             <div class="split-heading">
               <div>
