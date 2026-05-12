@@ -177,6 +177,24 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Redacted log lines" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/config/user-settings": {
+                "get": {
+                    "summary": "List editable user settings files",
+                    "responses": { "200": { "description": "Editable file catalog" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/config/user-settings/{file}": {
+                "get": {
+                    "summary": "Read UserEngine.ini or UserGame.ini",
+                    "parameters": [{ "name": "file", "in": "path", "required": true, "schema": { "type": "string", "enum": ["engine", "game"] } }],
+                    "responses": { "200": { "description": "Settings file content and parsed sections" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/Error" } }
+                },
+                "put": {
+                    "summary": "Replace UserEngine.ini or UserGame.ini",
+                    "parameters": [{ "name": "file", "in": "path", "required": true, "schema": { "type": "string", "enum": ["engine", "game"] } }],
+                    "responses": { "200": { "description": "Updated settings file content and parsed sections" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/Error" } }
+                }
+            },
             "/api/director/capabilities": {
                 "get": {
                     "summary": "List Director proxy capabilities",

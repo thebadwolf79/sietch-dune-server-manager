@@ -1,9 +1,20 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Card from "./Card.svelte";
-  import { ApiError, api, type BattlegroupSummary, type LogsResponse, type Overview, type Session, type WorldLayout } from "./api";
+  import {
+    ApiError,
+    api,
+    type BattlegroupSummary,
+    type LogsResponse,
+    type Overview,
+    type Session,
+    type UserSettingsCatalog,
+    type UserSettingsFile,
+    type UserSettingsUpdateResponse,
+    type WorldLayout,
+  } from "./api";
 
-  type Page = "dashboard" | "battlegroup" | "layout" | "players" | "logs" | "settings";
+  type Page = "dashboard" | "battlegroup" | "layout" | "config" | "players" | "logs" | "settings";
 
   let session: Session | null = null;
   let token = "";
@@ -17,6 +28,12 @@
   let selectedContainer = "";
   let logLines: string[] = [];
   let titleDraft = "";
+  let settingsCatalog: UserSettingsCatalog | null = null;
+  let selectedSettingsFile = "game";
+  let settingsFile: UserSettingsFile | null = null;
+  let settingsDraft = "";
+  let settingsSaving = false;
+  let settingsNotice = "";
 
   $: battlegroup = overview?.battlegroups[0] ?? null;
   $: pods = overview?.workloads.pods ?? [];
@@ -63,6 +80,8 @@
     session = null;
     overview = null;
     layout = null;
+    settingsCatalog = null;
+    settingsFile = null;
   }
 
   async function refresh(showError = true) {
@@ -73,6 +92,7 @@
         titleDraft = titleDraft || battlegroup.title;
         layout = await api<WorldLayout>(`/api/battlegroups/${battlegroup.namespace}/${battlegroup.name}/layout`);
       }
+      if (!settingsCatalog) settingsCatalog = await api<UserSettingsCatalog>("/api/config/user-settings");
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) session = null;
       if (showError) error = message(err);
@@ -140,6 +160,40 @@
     }
   }
 
+  async function loadSettingsFile(file = selectedSettingsFile) {
+    error = "";
+    settingsNotice = "";
+    selectedSettingsFile = file;
+    try {
+      settingsFile = await api<UserSettingsFile>(`/api/config/user-settings/${file}`);
+      settingsDraft = settingsFile.content;
+    } catch (err) {
+      error = message(err);
+    }
+  }
+
+  async function saveSettingsFile() {
+    if (!settingsFile) return;
+    settingsSaving = true;
+    error = "";
+    settingsNotice = "";
+    try {
+      const result = await api<UserSettingsUpdateResponse>(`/api/config/user-settings/${settingsFile.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ content: settingsDraft }),
+      });
+      settingsFile = result.file;
+      settingsDraft = result.file.content;
+      settingsNotice = result.restartRecommended
+        ? "Saved. Restart the battlegroup for every runtime system to pick up the change."
+        : "Saved.";
+    } catch (err) {
+      error = message(err);
+    } finally {
+      settingsSaving = false;
+    }
+  }
+
   function message(err: unknown) {
     return err instanceof Error ? err.message : "Operation failed.";
   }
@@ -171,7 +225,7 @@
         <strong>Dune Manager</strong>
         <span>{session.namespace}</span>
       </div>
-      {#each ["dashboard", "battlegroup", "layout", "players", "logs", "settings"] as item}
+      {#each ["dashboard", "battlegroup", "layout", "config", "players", "logs", "settings"] as item}
         <button class:active={page === item} on:click={() => (page = item as Page)}>{item}</button>
       {/each}
       <button class="ghost" on:click={logout}>Sign out</button>
@@ -225,6 +279,50 @@
           <label>Deep Desert PvP <input type="number" min="0" max="64" bind:value={layout.deepDesertPvpInstances} /></label>
           <button on:click={saveLayout}>Apply layout</button>
           {#if layout.restartRequired}<p class="warn">Restart required for all changes to converge.</p>{/if}
+        </section>
+      {:else if page === "config"}
+        <section class="panel form">
+          <div class="split-heading">
+            <div>
+              <h2>User Settings</h2>
+              <p class="muted">Edit the runtime ini files mounted through the filebrowser volume.</p>
+            </div>
+            {#if settingsFile}
+              <button disabled={settingsSaving || settingsDraft === settingsFile.content} on:click={saveSettingsFile}>
+                {settingsSaving ? "Saving..." : "Save file"}
+              </button>
+            {/if}
+          </div>
+          <div class="file-tabs">
+            {#each settingsCatalog?.files ?? [] as file}
+              <button class:active={selectedSettingsFile === file.id} on:click={() => loadSettingsFile(file.id)}>
+                {file.fileName}
+              </button>
+            {/each}
+          </div>
+          {#if !settingsFile}
+            <button on:click={() => loadSettingsFile()}>Load settings file</button>
+          {:else}
+            <div class="rows compact">
+              <div class="row"><span>Path</span><b>{settingsFile.path}</b></div>
+              <div class="row"><span>Size</span><b>{settingsFile.sizeBytes} bytes</b></div>
+              <div class="row"><span>Sections</span><b>{settingsFile.sections.length}</b></div>
+            </div>
+            <textarea bind:value={settingsDraft} spellcheck="false"></textarea>
+            {#if settingsNotice}<p class="warn">{settingsNotice}</p>{/if}
+            <div class="section-list">
+              {#each settingsFile.sections.slice(0, 12) as section}
+                <details>
+                  <summary>{section.name} <span>{section.entries.length}</span></summary>
+                  <div class="rows compact">
+                    {#each section.entries.slice(0, 12) as entry}
+                      <div class="row"><span>{entry.key}</span><b>{entry.value}</b></div>
+                    {/each}
+                  </div>
+                </details>
+              {/each}
+            </div>
+          {/if}
         </section>
       {:else if page === "players"}
         <div class="grid">

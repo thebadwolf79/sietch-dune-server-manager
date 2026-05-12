@@ -25,6 +25,7 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::{
     auth::authorize,
     clock::now_unix_ms,
+    config_files_domain::*,
     director_domain::*,
     director_proxy::*,
     errors::*,
@@ -80,6 +81,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/services", get(services))
         .route("/api/workloads", get(workloads))
         .route("/api/logs", get(logs))
+        .route(
+            "/api/config/user-settings",
+            get(user_settings_catalog_route),
+        )
+        .route(
+            "/api/config/user-settings/:file",
+            get(user_settings_file).put(update_user_settings_file),
+        )
         .route("/api/director/battlegroup", get(director_battlegroup))
         .route("/api/director/capabilities", get(director_capabilities))
         .route(
@@ -401,6 +410,36 @@ async fn update_battlegroup_settings(
         ));
     }
     Err(ApiError::bad_request("no supported settings were provided"))
+}
+
+async fn user_settings_catalog_route(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<UserSettingsCatalog> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(user_settings_catalog()))
+}
+
+async fn user_settings_file(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(file): Path<String>,
+) -> ApiResponse<UserSettingsFile> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(read_user_settings_file(&state, &file).await?))
+}
+
+async fn update_user_settings_file(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(file): Path<String>,
+    Json(request): Json<UserSettingsUpdateRequest>,
+) -> ApiResponse<UserSettingsUpdateResponse> {
+    authorize(&state, &headers, None)?;
+    audit_action("config.user-settings.update", Some(&file));
+    Ok(Json(
+        write_user_settings_file(&state, &file, request.content).await?,
+    ))
 }
 
 async fn pods(

@@ -53,13 +53,20 @@ button:disabled {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   border: 1px solid rgba(214, 175, 105, 0.24);
   border-radius: 8px;
   padding: 0.7rem 0.8rem;
   color: #f3eadc;
   background: rgba(18, 16, 13, 0.72);
+}
+
+textarea {
+  min-height: 420px;
+  resize: vertical;
+  font: 0.875rem/1.45 "Cascadia Mono", "Consolas", monospace;
 }
 
 h1,
@@ -161,6 +168,56 @@ header,
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1rem;
+}
+
+.split-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.muted {
+  color: #b9aa91;
+}
+
+.file-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.file-tabs button {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.file-tabs button.active {
+  border-color: rgba(239, 198, 126, 0.78);
+  background: rgba(183, 133, 59, 0.26);
+}
+
+.compact {
+  font-size: 0.875rem;
+}
+
+.section-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.section-list details {
+  border: 1px solid rgba(214, 175, 105, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.section-list summary {
+  cursor: pointer;
+  padding: 0.75rem 0.85rem;
+}
+
+.section-list summary span {
+  color: #b9aa91;
 }
 
 .metric-card,

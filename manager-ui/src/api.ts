@@ -85,6 +85,35 @@ export type LogsResponse = {
   lines: string[];
 };
 
+export type UserSettingsCatalog = {
+  files: UserSettingsFileSummary[];
+};
+
+export type UserSettingsFileSummary = {
+  id: string;
+  fileName: string;
+  description: string;
+};
+
+export type UserSettingsFile = {
+  id: string;
+  fileName: string;
+  path: string;
+  content: string;
+  sizeBytes: number;
+  sections: IniSection[];
+};
+
+export type IniSection = {
+  name: string;
+  entries: Array<{ key: string; value: string; line: number }>;
+};
+
+export type UserSettingsUpdateResponse = {
+  file: UserSettingsFile;
+  restartRecommended: boolean;
+};
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
