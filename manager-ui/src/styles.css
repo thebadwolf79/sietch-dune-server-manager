@@ -1798,6 +1798,10 @@ header,
   gap: 0.5rem;
 }
 
+.profile-tag-add {
+  margin-top: 0.55rem;
+}
+
 .tag-remove {
   margin-left: 0.35rem;
   padding: 0.12rem 0.35rem;

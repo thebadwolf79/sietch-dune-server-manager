@@ -692,6 +692,23 @@
     await updatePlayerTags(player.accountId, tag, "DELETE");
   }
 
+  async function saveSelectedPlayerTag() {
+    if (!selectedPlayerProfile) return;
+    const accountId = selectedPlayerProfile.profile.accountId;
+    const tag = (playerTagDrafts[accountId] || "").trim();
+    if (!tag) {
+      error = "Enter a tag before adding it.";
+      return;
+    }
+    await updatePlayerTags(accountId, tag, "POST");
+    playerTagDrafts = { ...playerTagDrafts, [accountId]: "" };
+  }
+
+  async function removeSelectedPlayerTag(tag: string) {
+    if (!selectedPlayerProfile) return;
+    await updatePlayerTags(selectedPlayerProfile.profile.accountId, tag, "DELETE");
+  }
+
   async function updatePlayerTags(accountId: number, tag: string, method: "POST" | "DELETE") {
     playerTagBusy = { ...playerTagBusy, [accountId]: true };
     error = "";
@@ -3032,9 +3049,33 @@
                 <h3>Operator tags</h3>
                 <div class="tag-row">
                   {#each selectedPlayerProfile.profile.tags as tag}
-                    <span>{tag}</span>
+                    <span>
+                      {tag}
+                      <button
+                        class="tag-remove"
+                        disabled={playerTagBusy[selectedPlayerProfile.profile.accountId]}
+                        on:click={() => removeSelectedPlayerTag(tag)}
+                      >
+                        Remove
+                      </button>
+                    </span>
                   {/each}
                   {#if !selectedPlayerProfile.profile.tags.length}<em>No tags</em>{/if}
+                </div>
+                <div class="tag-add profile-tag-add">
+                  <input
+                    value={playerTagDrafts[selectedPlayerProfile.profile.accountId] || ""}
+                    maxlength="64"
+                    placeholder="Add support tag"
+                    on:input={(event) => updatePlayerTagDraft(selectedPlayerProfile.profile.accountId, event.currentTarget.value)}
+                  />
+                  <button
+                    class="inline"
+                    disabled={playerTagBusy[selectedPlayerProfile.profile.accountId]}
+                    on:click={saveSelectedPlayerTag}
+                  >
+                    {playerTagBusy[selectedPlayerProfile.profile.accountId] ? "Saving..." : "Add tag"}
+                  </button>
                 </div>
               </div>
               <div>
