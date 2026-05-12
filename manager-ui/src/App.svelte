@@ -23,6 +23,7 @@
     type UserSettingsRestoreResponse,
     type UserSettingsUpdateResponse,
     type WorldLayout,
+    type WorldLayoutUpdateResponse,
   } from "./api";
 
   type Page =
@@ -45,6 +46,8 @@
   let page: Page = "dashboard";
   let overview: Overview | null = null;
   let layout: WorldLayout | null = null;
+  let layoutSaving = false;
+  let layoutNotice = "";
   let selectedPod = "";
   let selectedContainer = "";
   let logLines: string[] = [];
@@ -95,6 +98,14 @@
   $: visibleSettingsSections = filterIniSections(settingsDraftSections, settingsFilter).slice(0, 16);
   $: visiblePods = filterPods(pods, workloadFilter);
   $: visibleServices = filterServices(services, workloadFilter);
+  $: layoutMemory = layout ? estimateLayoutMemory(layout) : null;
+  $: layoutDeepDesertMode = layout
+    ? layout.deepDesertPvpInstances > 0
+      ? "pvp"
+      : layout.deepDesertPveInstances > 0
+        ? "pve"
+        : "off"
+    : "off";
   $: if (selectedContainer && selectedPodSummary && !selectedPodSummary.containers.includes(selectedContainer)) {
     selectedContainer = "";
   }
@@ -271,8 +282,10 @@
   async function saveLayout() {
     if (!battlegroup || !layout) return;
     error = "";
+    layoutNotice = "";
+    layoutSaving = true;
     try {
-      const result = await api<{ layout: WorldLayout; warnings: string[] }>(
+      const result = await api<WorldLayoutUpdateResponse>(
         `/api/battlegroups/${battlegroup.namespace}/${battlegroup.name}/layout`,
         {
           method: "PUT",
@@ -285,11 +298,26 @@
         },
       );
       layout = result.layout;
+      layoutNotice = result.restartRequired
+        ? "Layout saved. Restart the battlegroup for every runtime component to converge."
+        : "Layout saved.";
       if (result.warnings.length) error = result.warnings.join(" ");
       await refresh(false);
     } catch (err) {
       error = message(err);
+    } finally {
+      layoutSaving = false;
     }
+  }
+
+  function setDeepDesertMode(mode: "off" | "pve" | "pvp") {
+    if (!layout) return;
+    layout = {
+      ...layout,
+      deepDesertPveInstances: mode === "pve" ? 1 : 0,
+      deepDesertPvpInstances: mode === "pvp" ? 1 : 0,
+    };
+    layoutNotice = "";
   }
 
   async function saveTitle() {
@@ -747,6 +775,19 @@
     }
   }
 
+  function estimateLayoutMemory(value: WorldLayout) {
+    const hagga = Math.max(1, Number(value.haggaBasinInstances) || 1);
+    const deepDesert = Math.min(1, Math.max(0, Number(value.deepDesertPveInstances) || 0) + Math.max(0, Number(value.deepDesertPvpInstances) || 0));
+    const social = value.socialHubsEnabled || deepDesert > 0;
+    const lines = [`${hagga} Hagga Basin ${hagga === 1 ? "instance" : "instances"} x 20 GB`];
+    if (social) lines.push("Social Hubs x 10 GB");
+    if (deepDesert) lines.push("Deep Desert x 10 GB");
+    return {
+      gb: hagga * 20 + (social ? 10 : 0) + deepDesert * 10,
+      lines,
+    };
+  }
+
   function message(err: unknown) {
     return err instanceof Error ? err.message : "Operation failed.";
   }
@@ -921,15 +962,94 @@
           </div>
         </section>
       {:else if page === "layout" && layout}
-        <section class="panel form">
-          <h2>World Layout</h2>
-          <label>Hagga Basin instances <input type="number" min="1" max="64" bind:value={layout.haggaBasinInstances} /></label>
-          <label>Social Hubs <input type="checkbox" bind:checked={layout.socialHubsEnabled} /></label>
-          <label>Deep Desert PvE <input type="number" min="0" max="1" bind:value={layout.deepDesertPveInstances} /></label>
-          <label>Deep Desert PvP <input type="number" min="0" max="1" bind:value={layout.deepDesertPvpInstances} /></label>
-          <p class="muted">Current builds support one Deep Desert instance total.</p>
-          <button on:click={saveLayout}>Apply layout</button>
-          {#if layout.restartRequired}<p class="warn">Restart required for all changes to converge.</p>{/if}
+        <section class="panel layout-panel">
+          <div class="split-heading">
+            <div>
+              <p class="eyebrow">Runtime topology</p>
+              <h2>World Layout</h2>
+              <p class="muted">Scale map families and mark the single supported Deep Desert shard as PvE or PvP.</p>
+            </div>
+            <div class="layout-actions">
+              {#if layout.restartRequired}
+                <button disabled={!battlegroup || battlegroupStopped || !!lifecycleBusy} on:click={() => lifecycle("restart")}>
+                  {lifecycleBusy === "restart" ? "Restarting..." : "Restart to apply"}
+                </button>
+              {/if}
+              <button disabled={layoutSaving} on:click={saveLayout}>
+                {layoutSaving ? "Applying..." : "Apply layout"}
+              </button>
+            </div>
+          </div>
+
+          <div class="layout-board">
+            <article class="layout-control primary">
+              <div>
+                <span>Hagga Basin</span>
+                <strong>{layout.haggaBasinInstances}</strong>
+              </div>
+              <p>Survival map dimensions. Each instance adds another dimension for the same map family.</p>
+              <input
+                aria-label="Hagga Basin instances"
+                type="number"
+                min="1"
+                max="64"
+                bind:value={layout.haggaBasinInstances}
+                on:input={() => (layoutNotice = "")}
+              />
+            </article>
+
+            <article class="layout-control">
+              <div>
+                <span>Social Hubs</span>
+                <strong>{layout.socialHubsEnabled ? "Online" : "Off"}</strong>
+              </div>
+              <p>Arrakeen and HarkoVillage social services. Required when Deep Desert is enabled.</p>
+              <label class="switch-row">
+                <input
+                  type="checkbox"
+                  bind:checked={layout.socialHubsEnabled}
+                  disabled={layoutDeepDesertMode !== "off"}
+                  on:change={() => (layoutNotice = "")}
+                />
+                <span>{layoutDeepDesertMode !== "off" ? "Required by Deep Desert" : "Enable Social Hubs"}</span>
+              </label>
+            </article>
+
+            <article class="layout-control span-2">
+              <div>
+                <span>Deep Desert</span>
+                <strong>{layoutDeepDesertMode === "off" ? "Disabled" : layoutDeepDesertMode.toUpperCase()}</strong>
+              </div>
+              <p>Current builds support one Deep Desert instance total. More shards stay blocked until routing is fully understood.</p>
+              <div class="segmented">
+                <button class:active={layoutDeepDesertMode === "off"} on:click={() => setDeepDesertMode("off")}>Off</button>
+                <button class:active={layoutDeepDesertMode === "pve"} on:click={() => setDeepDesertMode("pve")}>PvE</button>
+                <button class:active={layoutDeepDesertMode === "pvp"} on:click={() => setDeepDesertMode("pvp")}>PvP</button>
+              </div>
+            </article>
+          </div>
+
+          <div class="layout-summary">
+            <div>
+              <span>Estimated memory</span>
+              <strong>{layoutMemory?.gb ?? 0} GB</strong>
+            </div>
+            <ul>
+              {#each layoutMemory?.lines ?? [] as line}
+                <li>{line}</li>
+              {/each}
+            </ul>
+          </div>
+
+          {#if layoutNotice}<p class="warn">{layoutNotice}</p>{/if}
+          {#if layout.restartRequired && !layoutNotice}<p class="warn">Restart required for all changes to converge.</p>{/if}
+          {#if layout.warnings.length}
+            <div class="warning-list">
+              {#each layout.warnings as warning}
+                <p>{warning}</p>
+              {/each}
+            </div>
+          {/if}
         </section>
       {:else if page === "config"}
         <section class="panel form">

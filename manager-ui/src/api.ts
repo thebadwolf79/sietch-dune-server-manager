@@ -139,6 +139,14 @@ export type WorldLayout = {
   warnings: string[];
 };
 
+export type WorldLayoutUpdateResponse = {
+  layout: WorldLayout;
+  battlegroupPatched: boolean;
+  pvpConfigUpdated: boolean;
+  restartRequired: boolean;
+  warnings: string[];
+};
+
 export type LogsResponse = {
   pod: string;
   container?: string;

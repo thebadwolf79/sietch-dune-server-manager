@@ -221,12 +221,7 @@ pub async fn patch_battlegroup_layout(
         || request.deep_desert_pve_instances.is_some()
         || request.deep_desert_pvp_instances.is_some()
     {
-        append_partition_patch(
-            &data,
-            "DeepDesert_1",
-            deep_desert_total.max(1),
-            &mut operations,
-        )?;
+        append_partition_patch(&data, "DeepDesert_1", deep_desert_total, &mut operations)?;
     }
     if let Some(enabled) = request.social_hubs_enabled {
         append_social_hubs_patch(&data, enabled, &mut operations)?;
@@ -536,7 +531,7 @@ fn append_partition_patch(
     let current = world_partitions[map_index]["partitions"]
         .as_array()
         .ok_or_else(|| ApiError::bad_request(format!("{map_name} partitions is not an array")))?;
-    if current.is_empty() {
+    if current.is_empty() && count > 0 {
         return Err(ApiError::bad_request(format!(
             "{map_name} has no template partition to clone"
         )));
@@ -728,6 +723,20 @@ mod tests {
             operations[1]["path"],
             "/spec/serverGroup/template/spec/sets/2/replicas"
         );
+    }
+
+    #[test]
+    fn builds_empty_deep_desert_partition_patch_when_disabled() {
+        let data = sample_battlegroup_data();
+        let mut operations = Vec::new();
+        append_partition_patch(&data, "DeepDesert_1", 0, &mut operations).unwrap();
+
+        assert_eq!(operations.len(), 1);
+        assert_eq!(
+            operations[0]["path"],
+            "/spec/database/template/spec/deployment/spec/worldPartitions/1/partitions"
+        );
+        assert_eq!(operations[0]["value"], json!([]));
     }
 
     #[test]
