@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import Card from "./Card.svelte";
   import PlayerBucket from "./PlayerBucket.svelte";
   import {
@@ -31,6 +31,10 @@
   let selectedPod = "";
   let selectedContainer = "";
   let logLines: string[] = [];
+  let logViewer: HTMLDivElement | null = null;
+  let logStreamSocket: WebSocket | null = null;
+  let logStreaming = false;
+  let logStreamError = "";
   let titleDraft = "";
   let lifecycleBusy = "";
   let settingsCatalog: UserSettingsCatalog | null = null;
@@ -59,6 +63,9 @@
   $: pods = overview?.workloads.pods ?? [];
   $: selectedPodSummary = pods.find((pod) => pod.name === selectedPod);
   $: battlegroupStopped = battlegroup?.stop ?? true;
+  $: if (selectedContainer && selectedPodSummary && !selectedPodSummary.containers.includes(selectedContainer)) {
+    selectedContainer = "";
+  }
 
   onMount(async () => {
     await loadSession();
@@ -103,6 +110,7 @@
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
     stopTelemetry();
+    stopLogStream();
     session = null;
     overview = null;
     layout = null;
@@ -247,6 +255,7 @@
 
   async function loadLogs() {
     if (!selectedPod) return;
+    stopLogStream();
     const query = new URLSearchParams({ pod: selectedPod, tail: "400" });
     if (selectedContainer) query.set("container", selectedContainer);
     try {
@@ -255,6 +264,53 @@
     } catch (err) {
       error = message(err);
     }
+  }
+
+  function startLogStream() {
+    if (!selectedPod) return;
+    stopLogStream();
+    logStreamError = "";
+    logLines = [];
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const query = new URLSearchParams({ pod: selectedPod, tail: "150" });
+    if (selectedContainer) query.set("container", selectedContainer);
+    const socket = new WebSocket(`${protocol}//${window.location.host}/api/logs/stream?${query}`);
+    logStreamSocket = socket;
+
+    socket.onopen = () => {
+      logStreaming = true;
+    };
+    socket.onclose = () => {
+      if (logStreamSocket === socket) logStreamSocket = null;
+      logStreaming = false;
+    };
+    socket.onerror = () => {
+      logStreamError = "Log stream failed.";
+    };
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data) as { type: "line" | "error"; line?: string; message?: string };
+        if (payload.type === "line") appendLogLine(payload.line || "");
+        if (payload.type === "error") logStreamError = payload.message || "Log stream reported an error.";
+      } catch {
+        appendLogLine(String(event.data));
+      }
+    };
+  }
+
+  function stopLogStream() {
+    const socket = logStreamSocket;
+    logStreamSocket = null;
+    logStreaming = false;
+    if (socket && socket.readyState <= WebSocket.OPEN) socket.close();
+  }
+
+  async function appendLogLine(line: string) {
+    const nearEnd = !logViewer || logViewer.scrollTop + logViewer.clientHeight >= logViewer.scrollHeight - 24;
+    logLines = [...logLines.slice(-999), line];
+    await tick();
+    if (nearEnd && logViewer) logViewer.scrollTop = logViewer.scrollHeight;
   }
 
   async function loadPlayerLists(full = playersFull) {
@@ -709,7 +765,13 @@
         </section>
       {:else if page === "logs"}
         <section class="panel form">
-          <h2>Logs</h2>
+          <div class="split-heading">
+            <div>
+              <h2>Logs</h2>
+              <p class="muted">Read a tail snapshot or follow live Kubernetes pod logs.</p>
+            </div>
+            <b class:good={logStreaming}>{logStreaming ? "Streaming" : "Idle"}</b>
+          </div>
           <select bind:value={selectedPod}>
             {#each pods as pod}<option>{pod.name}</option>{/each}
           </select>
@@ -717,8 +779,13 @@
             <option value="">Default container</option>
             {#each selectedPodSummary?.containers ?? [] as container}<option>{container}</option>{/each}
           </select>
-          <button on:click={loadLogs}>Load logs</button>
-          <div class="logs">{#each logLines as line}<div>{line}</div>{/each}</div>
+          <div class="actions">
+            <button disabled={!selectedPod || logStreaming} on:click={loadLogs}>Load tail</button>
+            <button disabled={!selectedPod || logStreaming} on:click={startLogStream}>Follow live</button>
+            <button disabled={!logStreaming} class="danger" on:click={stopLogStream}>Stop stream</button>
+          </div>
+          {#if logStreamError}<p class="warn">{logStreamError}</p>{/if}
+          <div class="logs" bind:this={logViewer}>{#each logLines as line}<div>{line}</div>{/each}</div>
         </section>
       {:else if page === "settings"}
         <section class="panel form">

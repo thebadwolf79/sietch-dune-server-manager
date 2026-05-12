@@ -177,6 +177,17 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Redacted log lines" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/logs/stream": {
+                "get": {
+                    "summary": "Stream pod logs over websocket",
+                    "parameters": [
+                        { "name": "pod", "in": "query", "required": true, "schema": { "type": "string" } },
+                        { "name": "container", "in": "query", "required": false, "schema": { "type": "string" } },
+                        { "name": "tail", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 5000 } }
+                    ],
+                    "responses": { "101": { "description": "WebSocket log stream" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
             "/api/config/user-settings": {
                 "get": {
                     "summary": "List editable user settings files",

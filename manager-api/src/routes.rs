@@ -10,7 +10,7 @@ use axum::{
     routing::{any, get, post},
     Json, Router,
 };
-use futures::{SinkExt, StreamExt};
+use futures::{AsyncBufReadExt, SinkExt, StreamExt};
 use k8s_openapi::api::core::v1::Pod;
 use kube::{api::LogParams, Api};
 use serde::Deserialize;
@@ -81,6 +81,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/services", get(services))
         .route("/api/workloads", get(workloads))
         .route("/api/logs", get(logs))
+        .route("/api/logs/stream", get(logs_stream))
         .route(
             "/api/config/user-settings",
             get(user_settings_catalog_route),
@@ -496,6 +497,68 @@ async fn logs(
         "container": query.container,
         "lines": redact_text(&text).lines().collect::<Vec<_>>()
     })))
+}
+
+async fn logs_stream(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<LogStreamQuery>,
+) -> Result<Response, ApiError> {
+    authorize(&state, &headers, query.token.as_deref())?;
+    validate_kube_name(&query.pod)?;
+    if let Some(container) = &query.container {
+        validate_kube_name(container)?;
+    }
+    Ok(ws.on_upgrade(move |socket| logs_stream_socket(socket, state, query)))
+}
+
+async fn logs_stream_socket(socket: WebSocket, state: Arc<AppState>, query: LogStreamQuery) {
+    let (mut sender, mut receiver) = socket.split();
+    let pods: Api<Pod> = Api::namespaced(state.client.clone(), &state.namespace);
+    let params = LogParams {
+        follow: true,
+        container: query.container.clone(),
+        tail_lines: Some(query.tail.unwrap_or(100).clamp(1, 5000)),
+        ..LogParams::default()
+    };
+
+    let mut lines = match pods.log_stream(&query.pod, &params).await {
+        Ok(stream) => stream.lines(),
+        Err(err) => {
+            let payload = json!({ "type": "error", "message": err.to_string() }).to_string();
+            let _ = sender.send(Message::Text(payload)).await;
+            return;
+        }
+    };
+
+    loop {
+        tokio::select! {
+            line = lines.next() => {
+                match line {
+                    Some(Ok(line)) => {
+                        let payload = json!({ "type": "line", "line": redact_text(&line) }).to_string();
+                        if sender.send(Message::Text(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Err(err)) => {
+                        let payload = json!({ "type": "error", "message": err.to_string() }).to_string();
+                        let _ = sender.send(Message::Text(payload)).await;
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            incoming = receiver.next() => {
+                match incoming {
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) => break,
+                }
+            }
+        }
+    }
 }
 
 async fn director_battlegroup(
