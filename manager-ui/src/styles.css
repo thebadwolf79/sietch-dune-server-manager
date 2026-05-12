@@ -348,6 +348,87 @@ header,
   gap: 1rem;
 }
 
+.server-control-panel {
+  gap: 1rem;
+}
+
+.server-command-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.server-command-grid button {
+  display: grid;
+  min-height: 6rem;
+  align-content: center;
+  gap: 0.3rem;
+  text-align: left;
+}
+
+.server-command-grid button strong,
+.server-command-grid button span {
+  display: block;
+}
+
+.server-command-grid button span {
+  color: #d6c6a8;
+  font-size: 0.78rem;
+}
+
+.server-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.server-status-grid article {
+  min-height: 7rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(214, 187, 133, 0.13);
+  border-radius: 8px;
+  background: rgba(8, 7, 6, 0.3);
+}
+
+.server-status-grid span,
+.server-status-grid strong {
+  display: block;
+}
+
+.server-status-grid span {
+  color: #b9aa91;
+  font-size: 0.78rem;
+}
+
+.server-status-grid strong {
+  margin-top: 0.25rem;
+  color: #f2d492;
+  font-size: 1.12rem;
+}
+
+.server-status-grid p {
+  margin: 0.55rem 0 0;
+  color: #d9d1c4;
+  font-size: 0.86rem;
+}
+
+.technical-details {
+  padding: 0.85rem;
+  border: 1px solid rgba(214, 187, 133, 0.13);
+  border-radius: 8px;
+  background: rgba(8, 7, 6, 0.26);
+}
+
+.technical-details summary {
+  cursor: pointer;
+  color: #f2d492;
+  font-weight: 700;
+}
+
+.technical-details .rows {
+  margin-top: 0.75rem;
+}
+
 .layout-panel {
   position: relative;
   overflow: hidden;
@@ -1567,7 +1648,9 @@ header,
   .dashboard-grid,
   .dashboard-grid.lower,
   .quick-actions,
-  .dashboard-metrics {
+  .dashboard-metrics,
+  .server-command-grid,
+  .server-status-grid {
     grid-template-columns: 1fr;
   }
 

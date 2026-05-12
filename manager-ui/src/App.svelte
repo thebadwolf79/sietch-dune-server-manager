@@ -1886,25 +1886,65 @@
           {/if}
         </section>
       {:else if page === "battlegroup"}
-        <section class="panel">
-          <h2>Battlegroup</h2>
-          <div class="actions">
+        <section class="panel server-control-panel">
+          <div class="split-heading">
+            <div>
+              <p class="eyebrow">Server operations</p>
+              <h2>Server Control</h2>
+              <p class="muted">Start, stop, or restart the live server and check the runtime state before taking action.</p>
+            </div>
+            <div class:good={serverHealth.tone === "good"} class:warning={serverHealth.tone === "warn"} class:danger-state={serverHealth.tone === "danger"} class="health-badge">
+              <span>{battlegroup?.phase || "Unknown"}</span>
+              <strong>{battlegroup?.stop ? "Offline" : "Online"}</strong>
+            </div>
+          </div>
+          <div class="server-command-grid">
             <button disabled={!battlegroup || !battlegroupStopped || !!lifecycleBusy} on:click={() => lifecycle("start")}>
-              {lifecycleBusy === "start" ? "Starting..." : "Start"}
+              <strong>{lifecycleBusy === "start" ? "Starting..." : "Start Server"}</strong>
+              <span>{battlegroupStopped ? "Bring the server online for players." : "Already online."}</span>
             </button>
             <button disabled={!battlegroup || battlegroupStopped || !!lifecycleBusy} on:click={() => lifecycle("restart")}>
-              {lifecycleBusy === "restart" ? "Restarting..." : "Restart"}
+              <strong>{lifecycleBusy === "restart" ? "Restarting..." : "Restart Server"}</strong>
+              <span>{layout?.restartRequired ? "Apply pending layout or settings changes." : "Cycle runtime services cleanly."}</span>
             </button>
             <button disabled={!battlegroup || battlegroupStopped || !!lifecycleBusy} class="danger" on:click={() => lifecycle("stop")}>
-              {lifecycleBusy === "stop" ? "Stopping..." : "Stop"}
+              <strong>{lifecycleBusy === "stop" ? "Stopping..." : "Stop Server"}</strong>
+              <span>{battlegroupStopped ? "Already offline." : "Connected players may be disconnected."}</span>
             </button>
           </div>
-          <div class="rows">
-            <div class="row"><span>Name</span><b>{battlegroup?.name}</b></div>
-            <div class="row"><span>Namespace</span><b>{battlegroup?.namespace}</b></div>
-            <div class="row"><span>Stopped</span><b>{battlegroup?.stop ? "Yes" : "No"}</b></div>
-            <div class="row"><span>Image</span><b>{battlegroup?.serverImage}</b></div>
+          <div class="server-status-grid">
+            <article>
+              <span>Health</span>
+              <strong>{serverHealth.label}</strong>
+              <p>{serverHealth.summary}</p>
+            </article>
+            <article>
+              <span>Players</span>
+              <strong>{overview?.players?.active ?? 0} active</strong>
+              <p>{overview?.players?.queued ?? 0} queued, {overview?.players?.inTransit ?? 0} traveling.</p>
+            </article>
+            <article>
+              <span>Maps</span>
+              <strong>{onlineMaps}/{overview?.maps.length ?? 0} online</strong>
+              <p>{runningPods}/{pods.length} workloads ready.</p>
+            </article>
+            <article>
+              <span>Backups</span>
+              <strong>{databaseMaintenance?.backupsReady ? "Ready" : "Needs attention"}</strong>
+              <p>{databaseMaintenance?.backupsReady ? "Manual backups can be requested." : "Open Backups to review readiness."}</p>
+            </article>
           </div>
+          <details class="technical-details">
+            <summary>Runtime identifiers</summary>
+            <div class="rows">
+              <div class="row"><span>Server name</span><b>{battlegroup?.title || "Unknown"}</b></div>
+              <div class="row"><span>Internal name</span><b>{battlegroup?.name}</b></div>
+              <div class="row"><span>Namespace</span><b>{battlegroup?.namespace}</b></div>
+              <div class="row"><span>Stop requested</span><b>{battlegroup?.stop ? "Yes" : "No"}</b></div>
+              <div class="row"><span>Server sets</span><b>{battlegroup?.serverSets ?? 0}</b></div>
+              <div class="row"><span>Image</span><b>{battlegroup?.serverImage}</b></div>
+            </div>
+          </details>
         </section>
       {:else if page === "layout" && layout}
         <section class="panel layout-panel">
