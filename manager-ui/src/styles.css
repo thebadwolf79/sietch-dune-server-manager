@@ -434,6 +434,12 @@ header,
   margin-top: auto;
 }
 
+.inline {
+  width: auto;
+  margin-top: 0;
+  padding: 0.45rem 0.65rem;
+}
+
 .error,
 .warn {
   border: 1px solid rgba(220, 95, 79, 0.35);
@@ -447,6 +453,10 @@ header,
   border-color: rgba(229, 179, 84, 0.35);
   color: #ffe3a9;
   background: rgba(105, 78, 29, 0.45);
+}
+
+.error p:last-child {
+  margin-bottom: 0;
 }
 
 .logs {

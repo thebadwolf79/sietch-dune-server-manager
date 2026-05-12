@@ -35,6 +35,7 @@
   let loading = true;
   let signingIn = false;
   let error = "";
+  let uiErrors: string[] = [];
   let page: Page = "dashboard";
   let overview: Overview | null = null;
   let layout: WorldLayout | null = null;
@@ -84,18 +85,38 @@
     selectedContainer = "";
   }
 
-  onMount(async () => {
+  onMount(() => {
+    const reportError = (value: unknown) => {
+      const text = value instanceof Error ? value.message : String(value || "Unexpected UI error");
+      uiErrors = [text, ...uiErrors].slice(0, 4);
+    };
+    const errorHandler = (event: ErrorEvent) => reportError(event.error || event.message);
+    const rejectionHandler = (event: PromiseRejectionEvent) => reportError(event.reason);
+
+    window.addEventListener("error", errorHandler);
+    window.addEventListener("unhandledrejection", rejectionHandler);
+    void initialize();
+    const timer = window.setInterval(() => {
+      if (session) void refresh(false);
+    }, 10000);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("error", errorHandler);
+      window.removeEventListener("unhandledrejection", rejectionHandler);
+      stopTelemetry();
+      stopLogStream();
+    };
+  });
+
+  async function initialize() {
     await loadSession();
     if (session) {
       await refresh();
       startTelemetry();
     }
     loading = false;
-    const timer = window.setInterval(() => {
-      if (session) void refresh(false);
-    }, 10000);
-    return () => window.clearInterval(timer);
-  });
+  }
 
   async function loadSession() {
     try {
@@ -638,6 +659,15 @@
         </div>
         <button on:click={() => refresh()}>Refresh</button>
       </header>
+      {#if uiErrors.length}
+        <section class="error">
+          <div class="split-heading">
+            <strong>UI Error</strong>
+            <button class="ghost inline" on:click={() => (uiErrors = [])}>Dismiss</button>
+          </div>
+          {#each uiErrors as item}<p>{item}</p>{/each}
+        </section>
+      {/if}
       {#if error}<p class="error">{error}</p>{/if}
 
       {#if page === "dashboard"}
