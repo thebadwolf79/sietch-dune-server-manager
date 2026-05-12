@@ -18,3 +18,17 @@ pub struct DatabaseWorldPartitionsResponse {
     pub namespace: String,
     pub rows: Vec<DatabaseWorldPartition>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseWorldPartitionUpdateRequest {
+    pub blocked: bool,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseWorldPartitionUpdateResponse {
+    pub namespace: String,
+    pub row: DatabaseWorldPartition,
+}

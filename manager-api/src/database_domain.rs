@@ -6,11 +6,51 @@ use kube::{
 };
 use tokio::io::AsyncReadExt;
 
-use crate::{models::DatabaseWorldPartition, state::AppState};
+use crate::{
+    errors::ApiError,
+    models::{DatabaseWorldPartition, DatabaseWorldPartitionUpdateRequest},
+    state::AppState,
+};
 
 const WORLD_PARTITIONS_QUERY: &str = "select coalesce(json_agg(t), '[]'::json) from (select partition_id, server_id, map, partition_definition::text as partition_definition, dimension_index, blocked, label from world_partition order by map, partition_id) t";
+const WORLD_PARTITION_SELECT: &str =
+    "partition_id, server_id, map, partition_definition::text as partition_definition, dimension_index, blocked, label";
 
 pub async fn list_world_partitions(state: &AppState) -> Result<Vec<DatabaseWorldPartition>> {
+    let stdout = exec_database_psql_json(state, WORLD_PARTITIONS_QUERY).await?;
+
+    serde_json::from_str(stdout.trim())
+        .with_context(|| "failed to parse world_partition query output".to_string())
+}
+
+pub async fn update_world_partition(
+    state: &AppState,
+    partition_id: i64,
+    request: DatabaseWorldPartitionUpdateRequest,
+) -> Result<Option<DatabaseWorldPartition>, ApiError> {
+    if partition_id <= 0 {
+        return Err(ApiError::bad_request("partition id must be positive"));
+    }
+    let label = validate_partition_label(request.label)?;
+    let label_sql = match label {
+        Some(value) => format!(
+            "convert_from(decode('{}', 'hex'), 'UTF8')",
+            hex_encode(&value)
+        ),
+        None => "null".to_string(),
+    };
+    let blocked_sql = if request.blocked { "true" } else { "false" };
+    let query = format!(
+        "with updated as (update world_partition set blocked = {blocked_sql}, label = {label_sql} where partition_id = {partition_id} returning {WORLD_PARTITION_SELECT}) select coalesce(json_agg(t), '[]'::json) from (select {WORLD_PARTITION_SELECT} from updated) t",
+    );
+    let stdout = exec_database_psql_json(state, &query).await?;
+    let mut rows: Vec<DatabaseWorldPartition> = serde_json::from_str(stdout.trim())
+        .with_context(|| "failed to parse updated world_partition row".to_string())?;
+
+    Ok(rows.pop())
+}
+
+async fn exec_database_psql_json(state: &AppState, query: &str) -> Result<String> {
     let pod_name = find_database_pod(state).await?;
     let mut attached = Api::<Pod>::namespaced(state.client.clone(), &state.namespace)
         .exec(
@@ -28,7 +68,7 @@ pub async fn list_world_partitions(state: &AppState) -> Result<Vec<DatabaseWorld
                 "-t",
                 "-A",
                 "-c",
-                WORLD_PARTITIONS_QUERY,
+                query,
             ],
             &AttachParams::default().stderr(true),
         )
@@ -54,8 +94,7 @@ pub async fn list_world_partitions(state: &AppState) -> Result<Vec<DatabaseWorld
         .await
         .with_context(|| format!("psql exited with an error: {}", stderr.trim()))?;
 
-    serde_json::from_str(stdout.trim())
-        .with_context(|| "failed to parse world_partition query output".to_string())
+    Ok(stdout)
 }
 
 async fn find_database_pod(state: &AppState) -> Result<String> {
@@ -71,6 +110,37 @@ async fn find_database_pod(state: &AppState) -> Result<String> {
         .ok_or_else(|| anyhow!("database pod was not found"))
 }
 
+fn validate_partition_label(value: Option<String>) -> Result<Option<String>, ApiError> {
+    let Some(value) = value.map(|label| label.trim().to_string()) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > 80 {
+        return Err(ApiError::bad_request(
+            "partition label must be 80 characters or less",
+        ));
+    }
+    if value.chars().any(|character| character.is_control()) {
+        return Err(ApiError::bad_request(
+            "partition label cannot contain control characters",
+        ));
+    }
+    Ok(Some(value))
+}
+
+fn hex_encode(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = value.as_bytes();
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +154,25 @@ mod tests {
         assert_eq!(rows[0].partition_id, 8);
         assert_eq!(rows[0].server_id.as_deref(), Some("server-a"));
         assert_eq!(rows[0].map, "DeepDesert_0");
+    }
+
+    #[test]
+    fn validates_partition_labels() {
+        assert_eq!(
+            validate_partition_label(Some("  Deep Desert PvP  ".to_string()))
+                .unwrap()
+                .as_deref(),
+            Some("Deep Desert PvP")
+        );
+        assert!(validate_partition_label(Some("".to_string()))
+            .unwrap()
+            .is_none());
+        assert!(validate_partition_label(Some("x".repeat(81))).is_err());
+        assert!(validate_partition_label(Some("bad\nlabel".to_string())).is_err());
+    }
+
+    #[test]
+    fn encodes_labels_for_sql_literals() {
+        assert_eq!(hex_encode("PvE 1"), "5076452031");
     }
 }

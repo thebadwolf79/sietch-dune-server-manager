@@ -194,6 +194,30 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "World partition rows" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/database/world-partitions/{partitionId}": {
+                "patch": {
+                    "summary": "Update controlled world partition access fields",
+                    "parameters": [
+                        { "name": "partitionId", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } }
+                    ],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["blocked"],
+                                    "properties": {
+                                        "blocked": { "type": "boolean" },
+                                        "label": { "type": ["string", "null"], "maxLength": 80 }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": { "200": { "description": "Updated world partition row" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/Error" } }
+                }
+            },
             "/api/database-maintenance": {
                 "get": {
                     "summary": "List database backup, restore, migration, schedule, and operation resources",

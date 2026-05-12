@@ -136,6 +136,11 @@ export type DatabaseWorldPartitionsResponse = {
   rows: DatabaseWorldPartition[];
 };
 
+export type DatabaseWorldPartitionUpdateResponse = {
+  namespace: string;
+  row: DatabaseWorldPartition;
+};
+
 export type PlayerSummary = {
   active: number;
   online: number;

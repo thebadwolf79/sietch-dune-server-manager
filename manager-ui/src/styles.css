@@ -1269,6 +1269,17 @@ header,
   color: #ffe3a9;
 }
 
+.partition-controls {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(12rem, 1fr) auto auto;
+  gap: 0.5rem;
+}
+
+.partition-controls input {
+  min-width: 0;
+}
+
 .metric-card,
 .panel {
   padding: 1rem;
@@ -1403,6 +1414,7 @@ header,
   .database-ribbon,
   .database-card,
   .partition-list article,
+  .partition-controls,
   .player-table article {
     grid-template-columns: 1fr;
   }

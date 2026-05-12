@@ -90,6 +90,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/database/world-partitions",
             get(database_world_partitions),
         )
+        .route(
+            "/api/database/world-partitions/:partition_id",
+            axum::routing::patch(update_database_world_partition),
+        )
         .route("/api/database-maintenance", get(database_maintenance))
         .route(
             "/api/database-maintenance/backups",
@@ -616,6 +620,26 @@ async fn database_world_partitions(
     Ok(Json(DatabaseWorldPartitionsResponse {
         namespace: state.namespace.clone(),
         rows: list_world_partitions(&state).await?,
+    }))
+}
+
+async fn update_database_world_partition(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(partition_id): Path<i64>,
+    Json(request): Json<DatabaseWorldPartitionUpdateRequest>,
+) -> ApiResponse<DatabaseWorldPartitionUpdateResponse> {
+    authorize(&state, &headers, None)?;
+    audit_action(
+        "database.world_partition.update",
+        Some(&partition_id.to_string()),
+    );
+    let row = update_world_partition(&state, partition_id, request)
+        .await?
+        .ok_or_else(|| ApiError::not_found("world partition was not found"))?;
+    Ok(Json(DatabaseWorldPartitionUpdateResponse {
+        namespace: state.namespace.clone(),
+        row,
     }))
 }
 

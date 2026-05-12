@@ -9,6 +9,7 @@
     type DatabaseMaintenanceItem,
     type DatabaseMaintenanceResponse,
     type DatabaseWorldPartition,
+    type DatabaseWorldPartitionUpdateResponse,
     type DatabaseWorldPartitionsResponse,
     type DirectorCapabilities,
     type DirectorMapConfigDetail,
@@ -148,6 +149,8 @@
   let databaseWorldPartitions: DatabaseWorldPartitionsResponse | null = null;
   let databaseBusy = false;
   let databaseTablesBusy = false;
+  let partitionSaving: Record<number, boolean> = {};
+  let partitionLabelDrafts: Record<number, string> = {};
   let databaseActionBusy = false;
   let databaseFilter = "";
   let databaseNotice = "";
@@ -592,10 +595,58 @@
     error = "";
     try {
       databaseWorldPartitions = await api<DatabaseWorldPartitionsResponse>("/api/database/world-partitions");
+      syncPartitionLabelDrafts(databaseWorldPartitions.rows);
     } catch (err) {
       error = message(err);
     } finally {
       databaseTablesBusy = false;
+    }
+  }
+
+  function syncPartitionLabelDrafts(rows: DatabaseWorldPartition[]) {
+    const next = { ...partitionLabelDrafts };
+    for (const row of rows) {
+      if (next[row.partitionId] === undefined) next[row.partitionId] = row.label || "";
+    }
+    partitionLabelDrafts = next;
+  }
+
+  function updatePartitionLabelDraft(partitionId: number, value: string) {
+    partitionLabelDrafts = { ...partitionLabelDrafts, [partitionId]: value };
+  }
+
+  async function saveWorldPartition(partition: DatabaseWorldPartition, blocked = partition.blocked) {
+    partitionSaving = { ...partitionSaving, [partition.partitionId]: true };
+    databaseNotice = "";
+    error = "";
+    try {
+      const result = await api<DatabaseWorldPartitionUpdateResponse>(
+        `/api/database/world-partitions/${partition.partitionId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            blocked,
+            label: partitionLabelDrafts[partition.partitionId] || null,
+          }),
+        },
+      );
+      if (databaseWorldPartitions) {
+        databaseWorldPartitions = {
+          ...databaseWorldPartitions,
+          rows: databaseWorldPartitions.rows.map((row) =>
+            row.partitionId === result.row.partitionId ? result.row : row,
+          ),
+        };
+      }
+      partitionLabelDrafts = {
+        ...partitionLabelDrafts,
+        [result.row.partitionId]: result.row.label || "",
+      };
+      databaseNotice = `Updated ${result.row.map} partition #${result.row.partitionId}.`;
+    } catch (err) {
+      error = message(err);
+    } finally {
+      partitionSaving = { ...partitionSaving, [partition.partitionId]: false };
     }
   }
 
@@ -1680,7 +1731,7 @@
             <div class="editor-title">
               <div>
                 <h3>World partitions</h3>
-                <p class="muted">Approved read-only view of partition IDs, maps, dimensions, labels, and active server assignment.</p>
+                <p class="muted">Controlled access to partition labels and open/blocked state. Raw SQL is never exposed.</p>
               </div>
               <button disabled={databaseTablesBusy} on:click={loadDatabaseWorldPartitions}>
                 {databaseTablesBusy ? "Loading..." : databaseWorldPartitions ? "Refresh" : "Load"}
@@ -1698,6 +1749,30 @@
                       <b>#{partition.partitionId}</b>
                       <span>{partition.serverId || "No server"}</span>
                       <em class:warning={partition.blocked}>{partition.blocked ? "Blocked" : "Open"}</em>
+                    </div>
+                    <div class="partition-controls">
+                      <input
+                        value={partitionLabelDrafts[partition.partitionId] ?? partition.label ?? ""}
+                        maxlength="80"
+                        placeholder="Operator label"
+                        on:input={(event) =>
+                          updatePartitionLabelDraft(partition.partitionId, event.currentTarget.value)}
+                      />
+                      <button
+                        class="inline"
+                        disabled={partitionSaving[partition.partitionId]}
+                        on:click={() => saveWorldPartition(partition)}
+                      >
+                        {partitionSaving[partition.partitionId] ? "Saving..." : "Save label"}
+                      </button>
+                      <button
+                        class:danger={!partition.blocked}
+                        class="inline"
+                        disabled={partitionSaving[partition.partitionId]}
+                        on:click={() => saveWorldPartition(partition, !partition.blocked)}
+                      >
+                        {partition.blocked ? "Open partition" : "Block partition"}
+                      </button>
                     </div>
                   </article>
                 {/each}
