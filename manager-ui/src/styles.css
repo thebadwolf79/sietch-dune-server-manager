@@ -910,6 +910,62 @@ header,
   color: #b9aa91;
 }
 
+.player-activity-panel .actions {
+  align-items: stretch;
+}
+
+.player-table {
+  display: grid;
+  gap: 0.55rem;
+  max-height: 34rem;
+  overflow: auto;
+}
+
+.player-table article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.8rem;
+  align-items: center;
+  padding: 0.78rem 0.85rem;
+  border: 1px solid rgba(214, 187, 133, 0.13);
+  border-radius: 8px;
+  background: rgba(8, 7, 6, 0.3);
+}
+
+.player-table strong,
+.player-table span,
+.player-table b {
+  display: block;
+}
+
+.player-table strong {
+  overflow: hidden;
+  color: #f2d492;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-table span {
+  color: #b9aa91;
+  font-size: 0.78rem;
+}
+
+.player-table b {
+  min-width: 6.5rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid rgba(145, 209, 139, 0.24);
+  border-radius: 999px;
+  color: #d8f2d3;
+  text-align: center;
+  background: rgba(45, 90, 50, 0.26);
+}
+
+.player-table b.warning {
+  border-color: rgba(229, 179, 84, 0.32);
+  color: #ffe3a9;
+  background: rgba(105, 78, 29, 0.34);
+}
+
 .workload-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
@@ -1346,7 +1402,8 @@ header,
   .storage-grid,
   .database-ribbon,
   .database-card,
-  .partition-list article {
+  .partition-list article,
+  .player-table article {
     grid-template-columns: 1fr;
   }
 

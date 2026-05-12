@@ -63,6 +63,12 @@
     kind: "boolean" | "number" | "string" | "null";
   };
 
+  type PlayerActivityRow = {
+    id: string;
+    status: string;
+    buckets: string[];
+  };
+
   const navItems: NavItem[] = [
     { page: "dashboard", label: "Command Center" },
     { page: "players", label: "Players" },
@@ -131,6 +137,7 @@
   let playerLists: DirectorPlayerLists | null = null;
   let playersBusy = false;
   let playersFull = false;
+  let playerFilter = "";
   let workloadFilter = "";
   let events: EventSummary[] = [];
   let eventsBusy = false;
@@ -176,6 +183,8 @@
   $: directorFlsFields = jsonPrimitiveFields(directorFlsDraft).slice(0, 80);
   $: directorTransferFields = jsonPrimitiveFields(directorTransferDraft).slice(0, 80);
   $: directorMapFields = jsonPrimitiveFields(directorMapDraft).slice(0, 80);
+  $: playerRows = playerActivityRows(playerLists);
+  $: visiblePlayerRows = filterPlayerRows(playerRows, playerFilter);
   $: serverHealth = deriveServerHealth(overview, battlegroup, notReadyPods);
   $: nextActions = deriveNextActions(battlegroup, overview, databaseMaintenance, lifecycleBusy);
   $: if (selectedContainer && selectedPodSummary && !selectedPodSummary.containers.includes(selectedContainer)) {
@@ -240,6 +249,9 @@
       void loadDirectorConfig().finally(() => {
         directorAutoLoading = false;
       });
+    }
+    if (nextPage === "players" && !playerLists && !playersBusy) {
+      void loadPlayerLists(false);
     }
   }
 
@@ -937,6 +949,34 @@
         .toLowerCase()
         .includes(text),
     );
+  }
+
+  function playerActivityRows(lists: DirectorPlayerLists | null): PlayerActivityRow[] {
+    if (!lists) return [];
+    const bucketMap = [
+      ["Online", lists.online],
+      ["In transit", lists.inTransit],
+      ["Grace", lists.gracePeriod],
+      ["Completion", lists.completion],
+      ["Queued", lists.queued],
+      ["Active", lists.all],
+    ] as const;
+    const ids = new Set<string>();
+    bucketMap.forEach(([, values]) => values.forEach((id) => ids.add(id)));
+    return [...ids]
+      .map((id) => {
+        const buckets = bucketMap.filter(([, values]) => values.includes(id)).map(([name]) => name);
+        const status =
+          buckets.find((bucket) => bucket !== "Active") ?? (buckets.includes("Active") ? "Active" : "Observed");
+        return { id, status, buckets };
+      })
+      .sort((left, right) => left.status.localeCompare(right.status) || left.id.localeCompare(right.id));
+  }
+
+  function filterPlayerRows(items: PlayerActivityRow[], filter: string) {
+    const text = filter.trim().toLowerCase();
+    if (!text) return items;
+    return items.filter((item) => [item.id, item.status, ...item.buckets].join(" ").toLowerCase().includes(text));
   }
 
   function servicePorts(service: (typeof services)[number]) {
@@ -2187,22 +2227,54 @@
           <Card label="Queued" value={`${overview?.players?.queued ?? 0}`} />
           <Card label="Travel" value={`${overview?.players?.inTransit ?? 0}`} />
         </div>
-        <section class="panel">
+        <section class="panel player-activity-panel">
           <div class="split-heading">
             <div>
-              <h2>Player Lists</h2>
-              <p class="muted">Load Director player IDs by runtime bucket. Full mode includes transit, grace, completion, and queue lists.</p>
+              <h2>Player Activity</h2>
+              <p class="muted">Director player IDs grouped into one operational view. Full mode adds transit, grace, completion, and queue buckets.</p>
             </div>
             <div class="actions">
+              <input bind:value={playerFilter} placeholder="Filter player ID or status" />
               <button disabled={playersBusy} on:click={() => loadPlayerLists(false)}>
-                {playersBusy && !playersFull ? "Loading..." : "Load active"}
+                {playersBusy && !playersFull ? "Loading..." : playerLists && !playersFull ? "Refresh active" : "Load active"}
               </button>
               <button disabled={playersBusy} on:click={() => loadPlayerLists(true)}>
-                {playersBusy && playersFull ? "Loading..." : "Load full"}
+                {playersBusy && playersFull ? "Loading..." : playersFull ? "Refresh full" : "Load full"}
               </button>
             </div>
           </div>
           {#if playerLists}
+            <div class="player-table">
+              {#if visiblePlayerRows.length}
+                {#each visiblePlayerRows as player}
+                  <article>
+                    <div>
+                      <strong>{player.id}</strong>
+                      <span>{player.buckets.join(" · ") || "Observed"}</span>
+                    </div>
+                    <b class:warning={player.status !== "Online" && player.status !== "Active"}>{player.status}</b>
+                  </article>
+                {/each}
+              {:else}
+                <p class="muted">
+                  {playerRows.length
+                    ? "No players match the current filter."
+                    : "No active player IDs are reported by Director right now."}
+                </p>
+              {/if}
+            </div>
+          {:else}
+            <p class="muted">Loading active player buckets. Full player state is available on demand because some Director player queries can be slow.</p>
+          {/if}
+        </section>
+        {#if playerLists}
+          <section class="panel">
+            <div class="editor-title">
+              <div>
+                <h2>Director Buckets</h2>
+                <p class="muted">Detailed bucket lists for diagnosis and support cases.</p>
+              </div>
+            </div>
             <div class="player-columns">
               <PlayerBucket title="All" ids={playerLists.all} />
               <PlayerBucket title="Online" ids={playerLists.online} />
@@ -2211,10 +2283,8 @@
               <PlayerBucket title="Completion" ids={playerLists.completion} />
               <PlayerBucket title="Queued" ids={playerLists.queued} />
             </div>
-          {:else}
-            <p class="muted">Player IDs are loaded on demand because some Director player queries can be slow.</p>
-          {/if}
-        </section>
+          </section>
+        {/if}
         <section class="panel">
           <h2>Maps</h2>
           <div class="rows">
