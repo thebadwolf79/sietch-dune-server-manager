@@ -19,7 +19,16 @@
     type WorldLayout,
   } from "./api";
 
-  type Page = "dashboard" | "battlegroup" | "layout" | "config" | "director" | "players" | "logs" | "settings";
+  type Page =
+    | "dashboard"
+    | "battlegroup"
+    | "workloads"
+    | "layout"
+    | "config"
+    | "director"
+    | "players"
+    | "logs"
+    | "settings";
 
   let session: Session | null = null;
   let token = "";
@@ -60,13 +69,17 @@
   let playerLists: DirectorPlayerLists | null = null;
   let playersBusy = false;
   let playersFull = false;
+  let workloadFilter = "";
 
   $: battlegroup = overview?.battlegroups[0] ?? null;
   $: pods = overview?.workloads.pods ?? [];
+  $: services = overview?.workloads.services ?? [];
   $: selectedPodSummary = pods.find((pod) => pod.name === selectedPod);
   $: battlegroupStopped = battlegroup?.stop ?? true;
   $: settingsDraftSections = settingsDraft ? parseIniSections(settingsDraft) : [];
   $: visibleSettingsSections = filterIniSections(settingsDraftSections, settingsFilter).slice(0, 16);
+  $: visiblePods = filterPods(pods, workloadFilter);
+  $: visibleServices = filterServices(services, workloadFilter);
   $: if (selectedContainer && selectedPodSummary && !selectedPodSummary.containers.includes(selectedContainer)) {
     selectedContainer = "";
   }
@@ -270,6 +283,13 @@
     }
   }
 
+  function openPodLogs(podName: string, container = "") {
+    selectedPod = podName;
+    selectedContainer = container;
+    page = "logs";
+    void loadLogs();
+  }
+
   function startLogStream() {
     if (!selectedPod) return;
     stopLogStream();
@@ -412,6 +432,37 @@
         ),
       }))
       .filter((section) => section.entries.length);
+  }
+
+  function filterPods(items: typeof pods, filter: string) {
+    const text = filter.trim().toLowerCase();
+    if (!text) return items;
+    return items.filter(
+      (pod) =>
+        pod.name.toLowerCase().includes(text) ||
+        pod.phase.toLowerCase().includes(text) ||
+        pod.containers.some((container) => container.toLowerCase().includes(text)),
+    );
+  }
+
+  function filterServices(items: typeof services, filter: string) {
+    const text = filter.trim().toLowerCase();
+    if (!text) return items;
+    return items.filter(
+      (service) =>
+        service.name.toLowerCase().includes(text) ||
+        (service.serviceType || "").toLowerCase().includes(text) ||
+        service.ports.some((port) => `${port.port} ${port.nodePort || ""} ${port.protocol || ""}`.toLowerCase().includes(text)),
+    );
+  }
+
+  function servicePorts(service: (typeof services)[number]) {
+    return service.ports
+      .map((port) => {
+        const node = port.nodePort ? `:${port.nodePort}` : "";
+        return `${port.protocol || "TCP"} ${port.port}${node}`;
+      })
+      .join(", ");
   }
 
   async function loadDirectorConfig() {
@@ -574,7 +625,7 @@
         <strong>Dune Manager</strong>
         <span>{session.namespace}</span>
       </div>
-      {#each ["dashboard", "battlegroup", "layout", "config", "director", "players", "logs", "settings"] as item}
+      {#each ["dashboard", "battlegroup", "workloads", "layout", "config", "director", "players", "logs", "settings"] as item}
         <button class:active={page === item} on:click={() => (page = item as Page)}>{item}</button>
       {/each}
       <button class="ghost" on:click={logout}>Sign out</button>
@@ -612,6 +663,52 @@
             {#each pods as pod}
               <div class="row"><span>{pod.name}</span><b class:good={pod.ready}>{pod.ready ? "Ready" : pod.phase}</b></div>
             {/each}
+          </div>
+        </section>
+      {:else if page === "workloads"}
+        <section class="panel form">
+          <div class="split-heading">
+            <div>
+              <h2>Workloads</h2>
+              <p class="muted">Inspect Kubernetes pods and services in the managed namespace.</p>
+            </div>
+            <input bind:value={workloadFilter} placeholder="Filter workloads" />
+          </div>
+          <div class="workload-grid">
+            <section>
+              <h3>Pods</h3>
+              <div class="workload-list">
+                {#each visiblePods as pod}
+                  <article class="workload-card">
+                    <div>
+                      <strong>{pod.name}</strong>
+                      <span>{pod.phase} · {pod.containers.join(", ")}</span>
+                    </div>
+                    <div class="workload-meta">
+                      <b class:good={pod.ready}>{pod.ready ? "Ready" : "Not ready"}</b>
+                      <span>{pod.restarts} restarts</span>
+                      <button on:click={() => openPodLogs(pod.name, pod.containers[0] || "")}>Logs</button>
+                    </div>
+                  </article>
+                {/each}
+              </div>
+            </section>
+            <section>
+              <h3>Services</h3>
+              <div class="workload-list">
+                {#each visibleServices as service}
+                  <article class="workload-card">
+                    <div>
+                      <strong>{service.name}</strong>
+                      <span>{service.serviceType || "Service"} · {service.clusterIp || "no cluster IP"}</span>
+                    </div>
+                    <div class="workload-meta">
+                      <b>{servicePorts(service) || "No ports"}</b>
+                    </div>
+                  </article>
+                {/each}
+              </div>
+            </section>
           </div>
         </section>
       {:else if page === "battlegroup"}

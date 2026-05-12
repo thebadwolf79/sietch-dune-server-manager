@@ -25,9 +25,25 @@ export type PodSummary = {
   createdAt?: string;
 };
 
+export type ServicePortSummary = {
+  name?: string;
+  port: number;
+  targetPort?: string;
+  nodePort?: number;
+  protocol?: string;
+};
+
+export type ServiceSummary = {
+  name: string;
+  serviceType?: string;
+  clusterIp?: string;
+  externalIps: string[];
+  ports: ServicePortSummary[];
+};
+
 export type Workloads = {
   pods: PodSummary[];
-  services: unknown[];
+  services: ServiceSummary[];
 };
 
 export type PlayerSummary = {
@@ -157,7 +173,7 @@ export type TelemetrySnapshot = {
   namespace: string;
   battlegroups: BattlegroupSummary[];
   pods: PodSummary[];
-  services: unknown[];
+  services: ServiceSummary[];
 };
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
