@@ -59,6 +59,23 @@ pub struct DatabasePlayersResponse {
     pub rows: Vec<DatabasePlayerSummary>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+pub struct DatabaseGuildSummary {
+    pub guild_id: i64,
+    pub guild_name: String,
+    pub guild_description: Option<String>,
+    pub guild_faction: Option<i16>,
+    pub member_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseGuildsResponse {
+    pub namespace: String,
+    pub rows: Vec<DatabaseGuildSummary>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabasePlayerTagRequest {

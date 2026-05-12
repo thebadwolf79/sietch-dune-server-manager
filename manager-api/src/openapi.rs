@@ -224,6 +224,12 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Player directory rows" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/database/guilds": {
+                "get": {
+                    "summary": "List controlled guild directory rows from the game database",
+                    "responses": { "200": { "description": "Guild directory rows" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
             "/api/database/players/{accountId}/tags": {
                 "post": {
                     "summary": "Add a controlled player tag",

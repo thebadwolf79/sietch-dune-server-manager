@@ -6,6 +6,8 @@
     ApiError,
     api,
     type BattlegroupSummary,
+    type DatabaseGuildSummary,
+    type DatabaseGuildsResponse,
     type DatabaseMaintenanceItem,
     type DatabaseMaintenanceResponse,
     type DatabasePlayerStatisticsResponse,
@@ -145,6 +147,8 @@
   let playerFilter = "";
   let databasePlayers: DatabasePlayersResponse | null = null;
   let databasePlayersBusy = false;
+  let databaseGuilds: DatabaseGuildsResponse | null = null;
+  let databaseGuildsBusy = false;
   let playerTagDrafts: Record<number, string> = {};
   let playerTagBusy: Record<number, boolean> = {};
   let playerStatistics: DatabasePlayerStatisticsResponse | null = null;
@@ -200,6 +204,7 @@
   $: playerRows = playerActivityRows(playerLists);
   $: visiblePlayerRows = filterPlayerRows(playerRows, playerFilter);
   $: visibleDatabasePlayers = filterDatabasePlayers(databasePlayers?.rows ?? [], playerFilter);
+  $: visibleDatabaseGuilds = filterDatabaseGuilds(databaseGuilds?.rows ?? [], playerFilter);
   $: serverHealth = deriveServerHealth(overview, battlegroup, notReadyPods);
   $: nextActions = deriveNextActions(battlegroup, overview, databaseMaintenance, lifecycleBusy);
   $: if (selectedContainer && selectedPodSummary && !selectedPodSummary.containers.includes(selectedContainer)) {
@@ -276,6 +281,9 @@
     }
     if (nextPage === "players" && !databasePlayers && !databasePlayersBusy) {
       void loadDatabasePlayers(false);
+    }
+    if (nextPage === "players" && !databaseGuilds && !databaseGuildsBusy) {
+      void loadDatabaseGuilds(false);
     }
     if ((nextPage === "dashboard" || nextPage === "players") && !playerStatistics && !playerStatisticsBusy) {
       void loadPlayerStatistics(false);
@@ -586,6 +594,18 @@
       if (showError) error = message(err);
     } finally {
       databasePlayersBusy = false;
+    }
+  }
+
+  async function loadDatabaseGuilds(showError = true) {
+    databaseGuildsBusy = true;
+    if (showError) error = "";
+    try {
+      databaseGuilds = await api<DatabaseGuildsResponse>("/api/database/guilds");
+    } catch (err) {
+      if (showError) error = message(err);
+    } finally {
+      databaseGuildsBusy = false;
     }
   }
 
@@ -1135,6 +1155,17 @@
         item.guildName,
         ...(item.tags || []),
       ]
+        .join(" ")
+        .toLowerCase()
+        .includes(text),
+    );
+  }
+
+  function filterDatabaseGuilds(items: DatabaseGuildSummary[], filter: string) {
+    const text = filter.trim().toLowerCase();
+    if (!text) return items;
+    return items.filter((item) =>
+      [item.guildId, item.guildName, item.guildDescription, item.guildFaction, item.memberCount]
         .join(" ")
         .toLowerCase()
         .includes(text),
@@ -2618,6 +2649,37 @@
             </p>
           {:else}
             <p class="muted">Loading the player directory. This is a controlled database view, not raw SQL access.</p>
+          {/if}
+        </section>
+        <section class="panel guild-directory-panel">
+          <div class="split-heading">
+            <div>
+              <h2>Guild Directory</h2>
+              <p class="muted">Controlled guild overview with faction and member counts for community management.</p>
+            </div>
+            <button disabled={databaseGuildsBusy} on:click={() => loadDatabaseGuilds()}>
+              {databaseGuildsBusy ? "Loading..." : databaseGuilds ? "Refresh guilds" : "Load guilds"}
+            </button>
+          </div>
+          {#if visibleDatabaseGuilds.length}
+            <div class="guild-directory">
+              {#each visibleDatabaseGuilds as guild}
+                <article>
+                  <div>
+                    <strong>{guild.guildName}</strong>
+                    <span>Guild #{guild.guildId}{guild.guildFaction !== undefined && guild.guildFaction !== null ? ` · faction ${guild.guildFaction}` : ""}</span>
+                  </div>
+                  <b>{guild.memberCount} member{guild.memberCount === 1 ? "" : "s"}</b>
+                  {#if guild.guildDescription}<p>{guild.guildDescription}</p>{/if}
+                </article>
+              {/each}
+            </div>
+          {:else if databaseGuilds}
+            <p class="muted">
+              {databaseGuilds.rows.length ? "No guilds match the current filter." : "The database has no guild rows yet."}
+            </p>
+          {:else}
+            <p class="muted">Loading guilds from a controlled database query.</p>
           {/if}
         </section>
         <section class="panel player-activity-panel">

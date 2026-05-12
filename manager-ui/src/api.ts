@@ -163,6 +163,19 @@ export type DatabasePlayersResponse = {
   rows: DatabasePlayerSummary[];
 };
 
+export type DatabaseGuildSummary = {
+  guildId: number;
+  guildName: string;
+  guildDescription?: string;
+  guildFaction?: number;
+  memberCount: number;
+};
+
+export type DatabaseGuildsResponse = {
+  namespace: string;
+  rows: DatabaseGuildSummary[];
+};
+
 export type DatabasePlayerTagsUpdateResponse = {
   namespace: string;
   result: {
