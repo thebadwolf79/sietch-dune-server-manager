@@ -94,7 +94,7 @@
     { page: "layout", label: "World Layout" },
     { page: "config", label: "Game Settings" },
     { page: "director", label: "Director Rules" },
-    { page: "database", label: "Backups" },
+    { page: "database", label: "Database" },
     { page: "battlegroup", label: "Server Control" },
     { page: "workloads", label: "Server Health" },
     { page: "storage", label: "Data Storage" },
@@ -1676,7 +1676,7 @@
       actions.push({ label: "Stop server", hint: "Disconnects online players", action: "stop", danger: true, disabled: !!busyAction });
     }
     actions.push({
-      label: databaseValue?.backupsReady ? "Create backup" : "Check backups",
+      label: databaseValue?.backupsReady ? "Create backup" : "Check database",
       hint: databaseValue
         ? databaseValue.backupsReady
           ? "Manual database backup is available"
@@ -2113,7 +2113,7 @@
             <article>
               <span>Database backups</span>
               <strong>{databaseMaintenance?.backupsReady ? "Ready" : "Check setup"}</strong>
-              <p>{databaseMaintenance?.backupsReady ? "Backup storage is configured." : "Open Backups for readiness details."}</p>
+              <p>{databaseMaintenance?.backupsReady ? "Backup storage is configured." : "Open Database for readiness details."}</p>
             </article>
           </div>
           {#if visibleStorageClaims.length}
@@ -2144,11 +2144,11 @@
         <section class="panel form">
           <div class="split-heading">
             <div>
-              <h2>Backups</h2>
-              <p class="muted">Check backup readiness, request manual database backups, and review operator backup activity.</p>
+              <h2>Database Maintenance</h2>
+              <p class="muted">Protect the game database, request restores, and review operator backup activity.</p>
             </div>
             <div class="actions">
-              <input bind:value={databaseFilter} placeholder="Filter backup resources" />
+              <input bind:value={databaseFilter} placeholder="Filter backup, restore, migration, or operation" />
               {#if databaseMaintenance && !databaseMaintenance.physicalBackupsEnabled}
                 <button disabled={databaseActionBusy || !battlegroup} on:click={enablePhysicalBackups}>
                   {databaseActionBusy ? "Enabling..." : "Enable backups"}
@@ -2161,7 +2161,7 @@
                 {databaseActionBusy ? "Requesting..." : "Create backup"}
               </button>
               <button disabled={databaseBusy} on:click={loadDatabaseMaintenance}>
-                {databaseBusy ? "Loading..." : databaseMaintenance ? "Refresh backups" : "Load backups"}
+                {databaseBusy ? "Loading..." : databaseMaintenance ? "Refresh database" : "Load database"}
               </button>
             </div>
           </div>
@@ -2233,7 +2233,7 @@
             <p class="muted">
               {databaseMaintenance
                 ? "No backup, restore, migration, or operation resources match the current filter."
-                : "Load backups to inspect operator-managed backup and restore resources."}
+                : "Load database maintenance to inspect operator-managed backup and restore resources."}
             </p>
           {/if}
         </section>
@@ -2283,7 +2283,7 @@
             <article>
               <span>Backups</span>
               <strong>{databaseMaintenance?.backupsReady ? "Ready" : "Needs attention"}</strong>
-              <p>{databaseMaintenance?.backupsReady ? "Manual backups can be requested." : "Open Backups to review readiness."}</p>
+              <p>{databaseMaintenance?.backupsReady ? "Manual backups can be requested." : "Open Database to review readiness."}</p>
             </article>
           </div>
           <details class="technical-details">
