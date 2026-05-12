@@ -197,15 +197,10 @@ pub async fn patch_battlegroup_layout(
 ) -> Result<WorldLayoutUpdateResponse, ApiError> {
     validate_namespace(state, namespace)?;
     validate_kube_name(name)?;
+    validate_world_layout_update(&request)?;
     let pve = request.deep_desert_pve_instances.unwrap_or(0);
     let pvp = request.deep_desert_pvp_instances.unwrap_or(0);
     let deep_desert_total = pve + pvp;
-    if let Some(count) = request.hagga_basin_instances {
-        validate_instance_count(count, "Hagga Basin")?;
-    }
-    if deep_desert_total > 0 {
-        validate_instance_count(deep_desert_total, "Deep Desert")?;
-    }
 
     let item = get_battlegroup_object(state, name).await?;
     let data = serde_json::to_value(item.data.clone()).unwrap_or_else(|_| json!({}));
@@ -528,6 +523,24 @@ fn validate_instance_count(count: usize, label: &str) -> Result<(), ApiError> {
     }
 }
 
+fn validate_world_layout_update(request: &WorldLayoutUpdateRequest) -> Result<(), ApiError> {
+    let pve = request.deep_desert_pve_instances.unwrap_or(0);
+    let pvp = request.deep_desert_pvp_instances.unwrap_or(0);
+    let deep_desert_total = pve + pvp;
+    if let Some(count) = request.hagga_basin_instances {
+        validate_instance_count(count, "Hagga Basin")?;
+    }
+    if deep_desert_total > 0 {
+        validate_instance_count(deep_desert_total, "Deep Desert")?;
+    }
+    if deep_desert_total > 1 {
+        return Err(ApiError::bad_request(
+            "Only one Deep Desert instance is supported in this build",
+        ));
+    }
+    Ok(())
+}
+
 fn collect_partition_ids(world_partitions: &[Value]) -> Vec<i64> {
     world_partitions
         .iter()
@@ -567,4 +580,22 @@ fn string_at_paths(data: &Value, paths: &[&[&str]]) -> String {
         }
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_multiple_deep_desert_instances() {
+        let request = WorldLayoutUpdateRequest {
+            hagga_basin_instances: None,
+            social_hubs_enabled: None,
+            deep_desert_pve_instances: Some(1),
+            deep_desert_pvp_instances: Some(1),
+        };
+
+        let err = validate_world_layout_update(&request).unwrap_err();
+        assert!(err.message.contains("Only one Deep Desert"));
+    }
 }

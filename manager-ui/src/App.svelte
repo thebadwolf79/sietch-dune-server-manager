@@ -275,8 +275,9 @@
           <h2>World Layout</h2>
           <label>Hagga Basin instances <input type="number" min="1" max="64" bind:value={layout.haggaBasinInstances} /></label>
           <label>Social Hubs <input type="checkbox" bind:checked={layout.socialHubsEnabled} /></label>
-          <label>Deep Desert PvE <input type="number" min="0" max="64" bind:value={layout.deepDesertPveInstances} /></label>
-          <label>Deep Desert PvP <input type="number" min="0" max="64" bind:value={layout.deepDesertPvpInstances} /></label>
+          <label>Deep Desert PvE <input type="number" min="0" max="1" bind:value={layout.deepDesertPveInstances} /></label>
+          <label>Deep Desert PvP <input type="number" min="0" max="1" bind:value={layout.deepDesertPvpInstances} /></label>
+          <p class="muted">Current builds support one Deep Desert instance total.</p>
           <button on:click={saveLayout}>Apply layout</button>
           {#if layout.restartRequired}<p class="warn">Restart required for all changes to converge.</p>{/if}
         </section>
