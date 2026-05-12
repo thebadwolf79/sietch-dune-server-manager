@@ -14,10 +14,11 @@ use crate::{
     config_files_domain::{read_deep_desert_pvp_partition_ids, write_deep_desert_pvp_settings},
     errors::ApiError,
     models::{
-        BattleGroupDetail, BattleGroupSummary, ContainerResourceSummary, DatabaseMaintenanceItem,
-        DatabaseMaintenanceResponse, EventSummary, PersistentVolumeClaimSummary, PodSummary,
-        ServerSetSummary, ServicePortSummary, ServiceSummary, WorldLayout,
-        WorldLayoutUpdateRequest, WorldLayoutUpdateResponse,
+        BattleGroupDetail, BattleGroupSummary, ContainerResourceSummary,
+        CreateDatabaseRestoreRequest, DatabaseMaintenanceItem, DatabaseMaintenanceResponse,
+        EventSummary, PersistentVolumeClaimSummary, PodSummary, ServerSetSummary,
+        ServicePortSummary, ServiceSummary, WorldLayout, WorldLayoutUpdateRequest,
+        WorldLayoutUpdateResponse,
     },
     state::AppState,
     validation::{validate_kube_name, validate_namespace},
@@ -206,6 +207,59 @@ pub async fn create_database_backup(
         .await
         .context("failed to create database backup")?;
     Ok(database_maintenance_item("DatabaseBackup", created))
+}
+
+pub async fn create_database_restore(
+    state: &AppState,
+    request: CreateDatabaseRestoreRequest,
+) -> Result<DatabaseMaintenanceItem, ApiError> {
+    let battle_group = match request.battle_group {
+        Some(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => default_battlegroup_name(state).await?,
+    };
+    validate_kube_name(&battle_group)?;
+    let backup = validate_database_backup_identifier(request.backup)?;
+    let originator = request
+        .originator
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("dune-manager")
+        .to_string();
+    validate_originator(&originator)?;
+    let target_time = validate_optional_restore_target_time(request.target_time)?;
+
+    let mut spec = json!({
+        "backup": backup,
+        "battleGroup": battle_group,
+        "originator": originator,
+    });
+    if let Some(target_time) = target_time {
+        spec["targetTime"] = Value::String(target_time);
+    }
+
+    let api: Api<DynamicObject> = Api::namespaced_with(
+        state.client.clone(),
+        &state.namespace,
+        &igw_resource("DatabaseRestore", "databaserestores"),
+    );
+    let object = DynamicObject {
+        types: Some(TypeMeta {
+            api_version: "igw.funcom.com/v1".to_string(),
+            kind: "DatabaseRestore".to_string(),
+        }),
+        metadata: ObjectMeta {
+            generate_name: Some("manual-restore-".to_string()),
+            namespace: Some(state.namespace.clone()),
+            ..ObjectMeta::default()
+        },
+        data: json!({ "spec": spec }),
+    };
+    let created = api
+        .create(&PostParams::default(), &object)
+        .await
+        .context("failed to create database restore")?;
+    Ok(database_maintenance_item("DatabaseRestore", created))
 }
 
 pub async fn enable_database_physical_backups(
@@ -1084,6 +1138,38 @@ fn validate_originator(value: &str) -> Result<(), ApiError> {
     }
 }
 
+fn validate_database_backup_identifier(value: String) -> Result<String, ApiError> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(ApiError::bad_request(
+            "database backup identifier is required",
+        ));
+    }
+    if value.chars().count() > 200 || value.chars().any(|item| item.is_control()) {
+        return Err(ApiError::bad_request(
+            "database backup identifier must be 200 characters or less",
+        ));
+    }
+    Ok(value)
+}
+
+fn validate_optional_restore_target_time(
+    value: Option<String>,
+) -> Result<Option<String>, ApiError> {
+    let Some(value) = value.map(|item| item.trim().to_string()) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.chars().count() > 80 || value.chars().any(|item| item.is_control()) {
+        return Err(ApiError::bad_request(
+            "database restore target time must be 80 characters or less",
+        ));
+    }
+    Ok(Some(value))
+}
+
 fn database_physical_backups_enabled(data: &Value) -> bool {
     data["spec"]["database"]["template"]["spec"]["deployment"]["spec"]["enablePhysicalBackups"]
         .as_bool()
@@ -1318,6 +1404,23 @@ mod tests {
         assert!(validate_originator("ops@example").is_ok());
         assert!(validate_originator("../secret").is_err());
         assert!(validate_originator(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn validates_database_restore_inputs() {
+        assert_eq!(
+            validate_database_backup_identifier("  backup-2026.05.12  ".to_string()).unwrap(),
+            "backup-2026.05.12"
+        );
+        assert!(validate_database_backup_identifier("".to_string()).is_err());
+        assert!(validate_database_backup_identifier("bad\nbackup".to_string()).is_err());
+        assert_eq!(
+            validate_optional_restore_target_time(Some("  2026-05-12T12:00:00Z  ".to_string()))
+                .unwrap()
+                .as_deref(),
+            Some("2026-05-12T12:00:00Z")
+        );
+        assert!(validate_optional_restore_target_time(Some("bad\ntime".to_string())).is_err());
     }
 
     #[test]

@@ -118,6 +118,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(create_database_backup_route),
         )
         .route(
+            "/api/database-maintenance/restores",
+            post(create_database_restore_route),
+        )
+        .route(
             "/api/database-maintenance/physical-backups/enable",
             post(enable_database_backups_route),
         )
@@ -770,6 +774,16 @@ async fn create_database_backup_route(
     Ok(Json(
         create_database_backup(&state, request.battle_group, request.originator).await?,
     ))
+}
+
+async fn create_database_restore_route(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateDatabaseRestoreRequest>,
+) -> ApiResponse<DatabaseMaintenanceItem> {
+    authorize(&state, &headers, None)?;
+    audit_action("database.restore.create", request.battle_group.as_deref());
+    Ok(Json(create_database_restore(&state, request).await?))
 }
 
 async fn enable_database_backups_route(

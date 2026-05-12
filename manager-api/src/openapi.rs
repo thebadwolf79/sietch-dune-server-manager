@@ -290,6 +290,29 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Created DatabaseBackup resource" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/database-maintenance/restores": {
+                "post": {
+                    "summary": "Create a controlled database restore request from a backup identifier",
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["backup"],
+                                    "properties": {
+                                        "backup": { "type": "string", "maxLength": 200 },
+                                        "battleGroup": { "type": ["string", "null"] },
+                                        "originator": { "type": ["string", "null"], "maxLength": 64 },
+                                        "targetTime": { "type": ["string", "null"], "maxLength": 80 }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": { "200": { "description": "Created DatabaseRestore resource" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
             "/api/database-maintenance/physical-backups/enable": {
                 "post": {
                     "summary": "Enable physical database backups on the battlegroup",

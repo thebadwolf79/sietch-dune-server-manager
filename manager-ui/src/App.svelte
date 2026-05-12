@@ -847,6 +847,30 @@
     }
   }
 
+  async function createDatabaseRestore(item: DatabaseMaintenanceItem) {
+    const backup = item.identifier || item.name;
+    const label = battlegroup?.title || battlegroup?.name || "this server";
+    const ok = window.confirm(
+      `Request a database restore for ${label} from backup ${backup}? This can replace live database state and should only be used after taking the server offline.`,
+    );
+    if (!ok) return;
+    databaseActionBusy = true;
+    databaseNotice = "";
+    error = "";
+    try {
+      const created = await api<DatabaseMaintenanceItem>("/api/database-maintenance/restores", {
+        method: "POST",
+        body: JSON.stringify({ battleGroup: battlegroup?.name, backup }),
+      });
+      databaseNotice = `Restore requested: ${created.name}`;
+      await loadDatabaseMaintenance();
+    } catch (err) {
+      error = message(err);
+    } finally {
+      databaseActionBusy = false;
+    }
+  }
+
   async function enablePhysicalBackups() {
     const ok = window.confirm(
       "Enable physical database backups for this battlegroup? Kubernetes will reconcile the database deployment before manual backups can run.",
@@ -2070,6 +2094,15 @@
                     <span>{item.kind.replace("Database", "")}</span>
                     <strong>{item.name}</strong>
                     <small>{item.battleGroup || "No battlegroup"}{item.originator ? ` · ${item.originator}` : ""}</small>
+                    {#if item.kind === "DatabaseBackup" && (item.identifier || item.name)}
+                      <button
+                        class="inline danger"
+                        disabled={databaseActionBusy || item.phase !== "Completed"}
+                        on:click={() => createDatabaseRestore(item)}
+                      >
+                        Restore
+                      </button>
+                    {/if}
                   </div>
                   <div class="database-fields">
                     <span>Phase</span><b class:good={item.phase === "Completed" || item.phase === "Ready"}>{item.phase || (item.suspended ? "Suspended" : "Observed")}</b>

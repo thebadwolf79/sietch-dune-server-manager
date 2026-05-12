@@ -137,6 +137,15 @@ pub struct CreateDatabaseBackupRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreateDatabaseRestoreRequest {
+    pub backup: String,
+    pub battle_group: Option<String>,
+    pub originator: Option<String>,
+    pub target_time: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnableDatabaseBackupsRequest {
     pub battle_group: Option<String>,
 }
