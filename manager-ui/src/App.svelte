@@ -706,6 +706,24 @@
       .join(", ");
   }
 
+  function resourceLine(pod: (typeof pods)[number]) {
+    const resources = pod.containerResources || [];
+    const memory = resources.map((item) => item.memoryLimit || item.memoryRequest).filter(Boolean);
+    const cpu = resources.map((item) => item.cpuLimit || item.cpuRequest).filter(Boolean);
+    const parts = [];
+    if (memory.length) parts.push(`mem ${memory.join(" + ")}`);
+    if (cpu.length) parts.push(`cpu ${cpu.join(" + ")}`);
+    return parts.join(" · ");
+  }
+
+  function imageLine(pod: (typeof pods)[number]) {
+    return (pod.containerResources || [])
+      .map((item) => item.image)
+      .filter(Boolean)
+      .map((image) => image?.split("/").pop() || image)
+      .join(", ");
+  }
+
   async function loadDirectorConfig() {
     directorBusy = true;
     directorNotice = "";
@@ -1018,6 +1036,8 @@
                     <div>
                       <strong>{pod.name}</strong>
                       <span>{pod.phase} · {pod.containers.join(", ")}</span>
+                      {#if resourceLine(pod)}<em>{resourceLine(pod)}</em>{/if}
+                      {#if imageLine(pod)}<small>{imageLine(pod)}</small>{/if}
                     </div>
                     <div class="workload-meta">
                       <b class:good={pod.ready}>{pod.ready ? "Ready" : "Not ready"}</b>

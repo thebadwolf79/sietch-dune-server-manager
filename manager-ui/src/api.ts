@@ -21,8 +21,18 @@ export type PodSummary = {
   ready: boolean;
   restarts: number;
   containers: string[];
+  containerResources: ContainerResource[];
   nodeName?: string;
   createdAt?: string;
+};
+
+export type ContainerResource = {
+  name: string;
+  image?: string;
+  cpuRequest?: string;
+  cpuLimit?: string;
+  memoryRequest?: string;
+  memoryLimit?: string;
 };
 
 export type ServicePortSummary = {

@@ -8,8 +8,20 @@ pub struct PodSummary {
     pub ready: bool,
     pub restarts: i32,
     pub containers: Vec<String>,
+    pub container_resources: Vec<ContainerResourceSummary>,
     pub node_name: Option<String>,
     pub created_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContainerResourceSummary {
+    pub name: String,
+    pub image: Option<String>,
+    pub cpu_request: Option<String>,
+    pub cpu_limit: Option<String>,
+    pub memory_request: Option<String>,
+    pub memory_limit: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

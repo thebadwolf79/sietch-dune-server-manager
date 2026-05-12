@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use k8s_openapi::{
-    api::core::v1::{Event, Pod, Service},
+    api::core::v1::{Container, Event, Pod, Service},
     apimachinery::pkg::util::intstr::IntOrString,
 };
 use kube::{
@@ -14,9 +14,9 @@ use crate::{
     config_files_domain::{read_deep_desert_pvp_partition_ids, write_deep_desert_pvp_settings},
     errors::ApiError,
     models::{
-        BattleGroupDetail, BattleGroupSummary, EventSummary, PodSummary, ServerSetSummary,
-        ServicePortSummary, ServiceSummary, WorldLayout, WorldLayoutUpdateRequest,
-        WorldLayoutUpdateResponse,
+        BattleGroupDetail, BattleGroupSummary, ContainerResourceSummary, EventSummary, PodSummary,
+        ServerSetSummary, ServicePortSummary, ServiceSummary, WorldLayout,
+        WorldLayoutUpdateRequest, WorldLayoutUpdateResponse,
     },
     state::AppState,
     validation::{validate_kube_name, validate_namespace},
@@ -29,40 +29,7 @@ pub async fn list_pods(state: &AppState) -> Result<Vec<PodSummary>> {
         .await
         .context("failed to list pods")?;
 
-    Ok(list
-        .items
-        .into_iter()
-        .map(|pod| {
-            let status = pod.status.unwrap_or_default();
-            let containers = pod
-                .spec
-                .as_ref()
-                .map(|spec| {
-                    spec.containers
-                        .iter()
-                        .map(|container| container.name.clone())
-                        .collect()
-                })
-                .unwrap_or_default();
-            let container_statuses = status.container_statuses.unwrap_or_default();
-            PodSummary {
-                name: pod.metadata.name.unwrap_or_default(),
-                phase: status.phase.unwrap_or_default(),
-                ready: !container_statuses.is_empty()
-                    && container_statuses.iter().all(|container| container.ready),
-                restarts: container_statuses
-                    .iter()
-                    .map(|container| container.restart_count)
-                    .sum(),
-                containers,
-                node_name: pod.spec.and_then(|spec| spec.node_name),
-                created_at: pod
-                    .metadata
-                    .creation_timestamp
-                    .map(|time| time.0.to_rfc3339()),
-            }
-        })
-        .collect())
+    Ok(list.items.into_iter().map(pod_summary).collect())
 }
 
 pub async fn list_services(state: &AppState) -> Result<Vec<ServiceSummary>> {
@@ -118,6 +85,69 @@ pub async fn list_events(state: &AppState, limit: usize) -> Result<Vec<EventSumm
     });
     events.truncate(limit);
     Ok(events)
+}
+
+fn pod_summary(pod: Pod) -> PodSummary {
+    let status = pod.status.unwrap_or_default();
+    let spec = pod.spec;
+    let containers = spec
+        .as_ref()
+        .map(|spec| {
+            spec.containers
+                .iter()
+                .map(|container| container.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let container_resources = spec
+        .as_ref()
+        .map(|spec| spec.containers.iter().map(container_resources).collect())
+        .unwrap_or_default();
+    let container_statuses = status.container_statuses.unwrap_or_default();
+    PodSummary {
+        name: pod.metadata.name.unwrap_or_default(),
+        phase: status.phase.unwrap_or_default(),
+        ready: !container_statuses.is_empty()
+            && container_statuses.iter().all(|container| container.ready),
+        restarts: container_statuses
+            .iter()
+            .map(|container| container.restart_count)
+            .sum(),
+        containers,
+        container_resources,
+        node_name: spec.and_then(|spec| spec.node_name),
+        created_at: pod
+            .metadata
+            .creation_timestamp
+            .map(|time| time.0.to_rfc3339()),
+    }
+}
+
+fn container_resources(container: &Container) -> ContainerResourceSummary {
+    let requests = container
+        .resources
+        .as_ref()
+        .and_then(|resources| resources.requests.as_ref());
+    let limits = container
+        .resources
+        .as_ref()
+        .and_then(|resources| resources.limits.as_ref());
+    ContainerResourceSummary {
+        name: container.name.clone(),
+        image: container.image.clone(),
+        cpu_request: requests
+            .and_then(|items| items.get("cpu"))
+            .map(|value| value.0.clone()),
+        cpu_limit: limits
+            .and_then(|items| items.get("cpu"))
+            .map(|value| value.0.clone()),
+        memory_request: requests
+            .and_then(|items| items.get("memory"))
+            .map(|value| value.0.clone()),
+        memory_limit: limits
+            .and_then(|items| items.get("memory"))
+            .map(|value| value.0.clone()),
+    }
 }
 
 pub async fn list_battlegroups(state: &AppState) -> Result<Vec<BattleGroupSummary>> {
@@ -710,6 +740,11 @@ fn string_at_paths(data: &Value, paths: &[&[&str]]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k8s_openapi::{
+        api::core::v1::{ContainerStatus, PodSpec, PodStatus, ResourceRequirements},
+        apimachinery::pkg::{api::resource::Quantity, apis::meta::v1::ObjectMeta},
+    };
+    use std::collections::BTreeMap;
 
     fn sample_battlegroup_data() -> Value {
         json!({
@@ -741,6 +776,66 @@ mod tests {
                 }
             }
         })
+    }
+
+    #[test]
+    fn summarizes_pod_container_resources() {
+        let mut requests = BTreeMap::new();
+        requests.insert("memory".to_string(), Quantity("256Mi".to_string()));
+        requests.insert("cpu".to_string(), Quantity("250m".to_string()));
+        let mut limits = BTreeMap::new();
+        limits.insert("memory".to_string(), Quantity("512Mi".to_string()));
+        limits.insert("cpu".to_string(), Quantity("500m".to_string()));
+        let pod = Pod {
+            metadata: ObjectMeta {
+                name: Some("runtime-pod".to_string()),
+                ..ObjectMeta::default()
+            },
+            spec: Some(PodSpec {
+                node_name: Some("node-a".to_string()),
+                containers: vec![Container {
+                    name: "server".to_string(),
+                    image: Some("registry.example/server:v1".to_string()),
+                    resources: Some(ResourceRequirements {
+                        requests: Some(requests),
+                        limits: Some(limits),
+                        ..ResourceRequirements::default()
+                    }),
+                    ..Container::default()
+                }],
+                ..PodSpec::default()
+            }),
+            status: Some(PodStatus {
+                phase: Some("Running".to_string()),
+                container_statuses: Some(vec![ContainerStatus {
+                    name: "server".to_string(),
+                    ready: true,
+                    restart_count: 2,
+                    image: "registry.example/server:v1".to_string(),
+                    image_id: "image-id".to_string(),
+                    ..ContainerStatus::default()
+                }]),
+                ..PodStatus::default()
+            }),
+        };
+
+        let summary = pod_summary(pod);
+
+        assert_eq!(summary.name, "runtime-pod");
+        assert!(summary.ready);
+        assert_eq!(summary.restarts, 2);
+        assert_eq!(
+            summary.container_resources[0].memory_request.as_deref(),
+            Some("256Mi")
+        );
+        assert_eq!(
+            summary.container_resources[0].memory_limit.as_deref(),
+            Some("512Mi")
+        );
+        assert_eq!(
+            summary.container_resources[0].cpu_limit.as_deref(),
+            Some("500m")
+        );
     }
 
     #[test]

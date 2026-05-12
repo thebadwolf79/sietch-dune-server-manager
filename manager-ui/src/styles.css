@@ -649,7 +649,9 @@ header,
 }
 
 .workload-card strong,
-.workload-card span {
+.workload-card span,
+.workload-card em,
+.workload-card small {
   display: block;
 }
 
@@ -663,6 +665,22 @@ header,
 .workload-meta span {
   color: #b9aa91;
   font-size: 0.8rem;
+}
+
+.workload-card em {
+  margin-top: 0.18rem;
+  color: #e3c387;
+  font-size: 0.78rem;
+  font-style: normal;
+}
+
+.workload-card small {
+  margin-top: 0.18rem;
+  overflow: hidden;
+  color: #918673;
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workload-meta {
