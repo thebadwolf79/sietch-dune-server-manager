@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use std::{env, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, Result};

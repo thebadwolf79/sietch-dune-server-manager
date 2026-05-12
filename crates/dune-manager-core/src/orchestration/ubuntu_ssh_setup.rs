@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::{
     errors::failure,
@@ -226,6 +227,82 @@ where
         );
         let output = self.runner.run_script(&install_payload_script(request))?;
         parse_single_json_document(&output, "ubuntu server payload")
+    }
+
+    /// Writes the player-facing address consumed by the vendor world creation scripts.
+    pub fn write_player_settings(
+        &self,
+        player_ip: &str,
+        sink: &mut impl OperationSink,
+    ) -> CommandResult<()> {
+        if player_ip.trim().is_empty() || player_ip.contains('\n') || player_ip.contains('\r') {
+            return Err(failure("Player-facing IP is required"));
+        }
+        emit(
+            sink,
+            "ubuntu.settings.player-ip",
+            "Writing player-facing server address.",
+            StepDomain::Guest,
+            StepAction::Configure,
+        );
+        let script = format!(
+            "set -eu\nmkdir -p /home/dune/.dune\nprintf '\\n\\n\\n%s\\n' {} > /home/dune/.dune/settings.conf\nchown -R dune:dune /home/dune/.dune\n",
+            sh_single_quoted(player_ip)
+        );
+        self.runner.run_script(&script)?;
+        Ok(())
+    }
+
+    /// Removes vendor scheduler references so fresh Ubuntu hosts can use the default scheduler.
+    pub fn use_default_scheduler(
+        &self,
+        namespace: &str,
+        battlegroup_name: &str,
+        sink: &mut impl OperationSink,
+    ) -> CommandResult<()> {
+        emit(
+            sink,
+            "ubuntu.scheduler.default",
+            "Using the default Kubernetes scheduler for Ubuntu.",
+            StepDomain::Kubernetes,
+            StepAction::Patch,
+        );
+        let command = format!(
+            "sudo kubectl get battlegroup {} -n {} -o json",
+            sh_single_quoted(battlegroup_name),
+            sh_single_quoted(namespace),
+        );
+        let value = self
+            .runner
+            .run_json(&command, "ubuntu battlegroup scheduler patch source")?;
+        let sets = value["spec"]["serverGroup"]["template"]["spec"]["sets"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let operations = sets
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.get("schedulerName").is_some())
+            .map(|(index, _)| {
+                json!({
+                    "op": "remove",
+                    "path": format!("/spec/serverGroup/template/spec/sets/{index}/schedulerName"),
+                })
+            })
+            .collect::<Vec<_>>();
+        if operations.is_empty() {
+            return Ok(());
+        }
+        let patch = serde_json::to_string(&operations)
+            .map_err(|err| failure(format!("Failed to serialize scheduler patch: {err}")))?;
+        let patch_command = format!(
+            "sudo kubectl patch battlegroup {} -n {} --type=json -p {} -o name",
+            sh_single_quoted(battlegroup_name),
+            sh_single_quoted(namespace),
+            sh_single_quoted(&patch),
+        );
+        self.runner.run(&patch_command)?;
+        Ok(())
     }
 }
 

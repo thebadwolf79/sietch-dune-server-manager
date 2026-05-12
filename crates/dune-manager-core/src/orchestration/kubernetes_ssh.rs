@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use crate::{
     errors::{failure, parse_json},
     models::CommandResult,
-    orchestration::KubernetesProvider,
+    orchestration::{BattlegroupState, KubernetesProvider},
     validation::validate_kube_arg,
 };
 
@@ -76,6 +76,38 @@ where
         Ok(())
     }
 
+    fn battlegroup_state(&self, namespace: &str, name: &str) -> CommandResult<BattlegroupState> {
+        validate_kube_arg(namespace, "namespace")?;
+        validate_kube_arg(name, "battlegroup name")?;
+        let command = format!(
+            "sudo kubectl get battlegroup {} -n {} -o json",
+            sh_single_quoted(name),
+            sh_single_quoted(namespace),
+        );
+        let value = self.runner.run_json(&command, "battlegroup state")?;
+        Ok(BattlegroupState {
+            stop: value["spec"]["stop"].as_bool().unwrap_or(false),
+            phase: value["status"]["phase"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            server_group_phase: string_at_paths(
+                &value,
+                &[
+                    &["status", "serverGroup", "phase"],
+                    &["status", "serverGroupPhase"],
+                ],
+            ),
+            director_phase: string_at_paths(
+                &value,
+                &[
+                    &["status", "director", "phase"],
+                    &["status", "utilities", "director", "phase"],
+                ],
+            ),
+        })
+    }
+
     fn director_node_port(&self, namespace: &str) -> CommandResult<Option<u16>> {
         validate_kube_arg(namespace, "namespace")?;
         let command = format!(
@@ -102,6 +134,19 @@ where
 
 fn sh_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn string_at_paths(value: &Value, paths: &[&[&str]]) -> String {
+    for path in paths {
+        let mut current = value;
+        for key in *path {
+            current = &current[*key];
+        }
+        if let Some(text) = current.as_str().filter(|text| !text.is_empty()) {
+            return text.to_string();
+        }
+    }
+    String::new()
 }
 
 #[cfg(test)]

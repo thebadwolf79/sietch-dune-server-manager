@@ -51,10 +51,35 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Manager API is alive" } }
                 }
             },
+            "/api/auth/login": {
+                "post": {
+                    "summary": "Sign in with the Self-Host Service Token",
+                    "security": [],
+                    "responses": { "200": { "description": "Session cookie set" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/auth/logout": {
+                "post": {
+                    "summary": "Clear browser session cookie",
+                    "responses": { "200": { "description": "Session cleared" } }
+                }
+            },
+            "/api/auth/session": {
+                "get": {
+                    "summary": "Current browser/API session",
+                    "responses": { "200": { "description": "Session metadata" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
             "/api/status": {
                 "get": {
                     "summary": "Cluster and manager status",
                     "responses": { "200": { "description": "Status summary" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/overview": {
+                "get": {
+                    "summary": "Aggregated dashboard data for the Manager UI",
+                    "responses": { "200": { "description": "Overview data" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
             "/api/manager/self": {
@@ -100,6 +125,25 @@ pub fn document() -> Value {
             "/api/battlegroups/{namespace}/{name}/restart": {
                 "post": {
                     "summary": "Restart a battlegroup",
+                    "parameters": [namespace_parameter(), name_parameter()],
+                    "responses": { "200": { "description": "Updated BattleGroup detail" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/battlegroups/{namespace}/{name}/layout": {
+                "get": {
+                    "summary": "Get user-facing world layout",
+                    "parameters": [namespace_parameter(), name_parameter()],
+                    "responses": { "200": { "description": "World layout" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                },
+                "put": {
+                    "summary": "Update user-facing world layout",
+                    "parameters": [namespace_parameter(), name_parameter()],
+                    "responses": { "200": { "description": "Updated world layout" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
+            "/api/battlegroups/{namespace}/{name}/settings": {
+                "patch": {
+                    "summary": "Update safe battlegroup settings",
                     "parameters": [namespace_parameter(), name_parameter()],
                     "responses": { "200": { "description": "Updated BattleGroup detail" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }

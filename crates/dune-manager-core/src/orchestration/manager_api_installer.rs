@@ -135,6 +135,24 @@ pub struct ManagerApiStatus {
     pub port: u16,
 }
 
+/// Current state of the Manager API operating-system service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagerApiServiceStatus {
+    /// Whether a supported service unit exists on the guest.
+    pub installed: bool,
+    /// Whether the service manager reports the unit as running.
+    pub running: bool,
+    /// Whether `/health` responds on the configured Manager API port.
+    pub health_reachable: bool,
+    /// Detected service manager name, such as `systemd` or `openrc`.
+    pub service_manager: String,
+    /// Raw state text reported by the service manager.
+    pub raw_state: String,
+    /// TCP port checked inside the guest.
+    pub port: u16,
+}
+
 /// Installs and verifies the VM-side Manager API using an SSH command runner.
 #[derive(Debug, Clone)]
 pub struct ManagerApiInstaller<R> {
@@ -237,6 +255,82 @@ printf '%s' "$out"
             health_body: (!trimmed.is_empty()).then_some(trimmed),
             port,
         })
+    }
+
+    /// Returns service-manager state and health reachability for the Manager API.
+    pub fn service_status(
+        &self,
+        service_name: &str,
+        port: u16,
+    ) -> CommandResult<ManagerApiServiceStatus> {
+        validate_plain_value(service_name, "Manager API service name")?;
+        let service_name = shell_quote(service_name);
+        let script = format!(
+            r#"set -eu
+manager=unknown
+installed=false
+running=false
+state=missing
+if command -v systemctl >/dev/null 2>&1; then
+  manager=systemd
+  if systemctl list-unit-files {service_name}.service >/dev/null 2>&1 || [ -f /etc/systemd/system/{service_name}.service ]; then
+    installed=true
+    state=$(systemctl is-active {service_name}.service 2>/dev/null || true)
+    if [ "$state" = active ]; then running=true; fi
+  fi
+elif command -v rc-service >/dev/null 2>&1; then
+  manager=openrc
+  if [ -f /etc/init.d/{service_name} ]; then
+    installed=true
+    state=$(rc-service {service_name} status 2>/dev/null || true)
+    case "$state" in *started*|*running*) running=true ;; esac
+  fi
+fi
+printf 'manager=%s\ninstalled=%s\nrunning=%s\nstate=%s\n' "$manager" "$installed" "$running" "$state"
+"#
+        );
+        let output = self.runner.run_script(&script)?;
+        let service = parse_service_status(&output, port);
+        let health = self.status(port)?;
+        Ok(ManagerApiServiceStatus {
+            health_reachable: health.reachable,
+            ..service
+        })
+    }
+
+    /// Starts the Manager API service after checking it is installed and stopped.
+    pub fn start_service(
+        &self,
+        service_name: &str,
+        port: u16,
+    ) -> CommandResult<ManagerApiServiceStatus> {
+        let current = self.service_status(service_name, port)?;
+        if !current.installed {
+            return Err(failure("Manager API service is not installed"));
+        }
+        if current.running {
+            return Err(failure("Manager API service is already running"));
+        }
+        self.service_command(service_name, "start")?;
+        self.wait_for_health(port, 30)?;
+        self.service_status(service_name, port)
+    }
+
+    /// Stops the Manager API service after checking it is installed and running.
+    pub fn stop_service(
+        &self,
+        service_name: &str,
+        port: u16,
+    ) -> CommandResult<ManagerApiServiceStatus> {
+        let current = self.service_status(service_name, port)?;
+        if !current.installed {
+            return Err(failure("Manager API service is not installed"));
+        }
+        if !current.running {
+            return Err(failure("Manager API service is not running"));
+        }
+        self.service_command(service_name, "stop")?;
+        self.wait_for_service_stopped(service_name, port, 30)
     }
 
     fn upload_binary(&self, bytes: &[u8], remote_path: &str) -> CommandResult<()> {
@@ -390,6 +484,46 @@ fi
         Ok(())
     }
 
+    fn service_command(&self, service_name: &str, action: &str) -> CommandResult<()> {
+        validate_plain_value(service_name, "Manager API service name")?;
+        validate_plain_value(action, "Manager API service action")?;
+        let service_name = shell_quote(service_name);
+        let action = shell_quote(action);
+        let script = format!(
+            r#"set -eu
+if command -v systemctl >/dev/null 2>&1; then
+  sudo systemctl {action} {service_name}.service
+elif command -v rc-service >/dev/null 2>&1; then
+  sudo rc-service {service_name} {action}
+else
+  echo "No supported service manager found for Manager API." >&2
+  exit 1
+fi
+"#
+        );
+        self.runner.run_script(&script)?;
+        Ok(())
+    }
+
+    fn wait_for_service_stopped(
+        &self,
+        service_name: &str,
+        port: u16,
+        timeout_seconds: u64,
+    ) -> CommandResult<ManagerApiServiceStatus> {
+        let started = std::time::Instant::now();
+        while started.elapsed().as_secs() < timeout_seconds {
+            let status = self.service_status(service_name, port)?;
+            if !status.running && !status.health_reachable {
+                return Ok(status);
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+        Err(failure(format!(
+            "Manager API service did not stop within {timeout_seconds}s"
+        )))
+    }
+
     fn wait_for_health(&self, port: u16, timeout_seconds: u64) -> CommandResult<()> {
         let started = std::time::Instant::now();
         while started.elapsed().as_secs() < timeout_seconds {
@@ -447,6 +581,32 @@ fn env_assignment(name: &str, value: &str) -> String {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn parse_service_status(output: &str, port: u16) -> ManagerApiServiceStatus {
+    let mut service_manager = "unknown".to_string();
+    let mut installed = false;
+    let mut running = false;
+    let mut raw_state = "unknown".to_string();
+    for line in output.lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            match key {
+                "manager" => service_manager = value.to_string(),
+                "installed" => installed = value.eq_ignore_ascii_case("true"),
+                "running" => running = value.eq_ignore_ascii_case("true"),
+                "state" => raw_state = value.to_string(),
+                _ => {}
+            }
+        }
+    }
+    ManagerApiServiceStatus {
+        installed,
+        running,
+        health_reachable: false,
+        service_manager,
+        raw_state,
+        port,
+    }
 }
 
 fn base64_encode(bytes: &[u8]) -> String {

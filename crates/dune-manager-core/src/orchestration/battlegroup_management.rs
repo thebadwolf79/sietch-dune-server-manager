@@ -5,8 +5,8 @@ use crate::{
     errors::failure,
     models::CommandResult,
     orchestration::{
-        GuestBootstrapProvider, KubernetesProvider, OperationSink, OrchestrationEvent,
-        ProviderKind, StepAction, StepDomain,
+        BattlegroupState, GuestBootstrapProvider, KubernetesProvider, OperationSink,
+        OrchestrationEvent, ProviderKind, StepAction, StepDomain,
     },
     validation::validate_kube_arg,
 };
@@ -72,6 +72,7 @@ where
         sink: &mut impl OperationSink,
     ) -> CommandResult<Option<u16>> {
         self.start(battlegroup, sink)?;
+        self.wait_for_battlegroup_started(battlegroup, timeout_seconds, sink)?;
         self.wait_for_director_node_port(battlegroup, timeout_seconds, sink)
     }
 
@@ -120,7 +121,48 @@ where
         sink: &mut impl OperationSink,
     ) -> CommandResult<Option<u16>> {
         self.restart(battlegroup, sink)?;
+        self.wait_for_battlegroup_started(battlegroup, timeout_seconds, sink)?;
         self.wait_for_director_node_port(battlegroup, timeout_seconds, sink)
+    }
+
+    /// Polls Kubernetes until the BattleGroup moves out of a stopped state.
+    pub fn wait_for_battlegroup_started(
+        &self,
+        battlegroup: &BattlegroupRef,
+        timeout_seconds: u64,
+        sink: &mut impl OperationSink,
+    ) -> CommandResult<BattlegroupState> {
+        battlegroup.validate()?;
+        emit(
+            sink,
+            "bg.wait-started",
+            "Waiting for battlegroup to leave stopped state.",
+            StepAction::Wait,
+        );
+        let mut elapsed = 0;
+        let mut last = None;
+        while elapsed <= timeout_seconds {
+            let state = self
+                .kubernetes
+                .battlegroup_state(&battlegroup.namespace, &battlegroup.name)?;
+            if is_started_state(&state) {
+                return Ok(state);
+            }
+            last = Some(state);
+            thread::sleep(Duration::from_secs(2));
+            elapsed += 2;
+        }
+        let detail = last
+            .map(|state| {
+                format!(
+                    "last phase={}, stop={}, serverGroup={}, director={}",
+                    state.phase, state.stop, state.server_group_phase, state.director_phase
+                )
+            })
+            .unwrap_or_else(|| "no BattleGroup state was read".to_string());
+        Err(failure(format!(
+            "BattleGroup did not leave stopped state within {timeout_seconds}s ({detail})"
+        )))
     }
 
     /// Builds the file-browser URL for a VM IP.
@@ -181,6 +223,31 @@ where
         }
         Ok(None)
     }
+}
+
+/// Returns whether the live BattleGroup state is operational enough to treat as started.
+pub fn is_started_state(state: &BattlegroupState) -> bool {
+    !state.stop
+        && is_started_phase(&state.phase)
+        && is_started_phase(&state.server_group_phase)
+        && is_director_ready_phase(&state.director_phase)
+}
+
+fn is_started_phase(phase: &str) -> bool {
+    let normalized = phase.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "running" | "ready" | "healthy" | "available" | "reconciling"
+    )
+}
+
+fn is_director_ready_phase(phase: &str) -> bool {
+    let normalized = phase.trim().to_ascii_lowercase();
+    normalized.is_empty()
+        || matches!(
+            normalized.as_str(),
+            "running" | "ready" | "healthy" | "available" | "reconciling"
+        )
 }
 
 /// Updates a BattleGroup from already-downloaded guest payload files.
@@ -259,6 +326,7 @@ mod tests {
         calls: Rc<RefCell<Vec<String>>>,
         namespaces: Vec<String>,
         director_ports: Rc<RefCell<Vec<Option<u16>>>>,
+        battlegroup_states: Rc<RefCell<Vec<BattlegroupState>>>,
     }
 
     impl KubernetesProvider for MockKubernetes {
@@ -278,8 +346,29 @@ mod tests {
             Ok(())
         }
 
+        fn battlegroup_state(
+            &self,
+            _namespace: &str,
+            _name: &str,
+        ) -> CommandResult<BattlegroupState> {
+            Ok(self
+                .battlegroup_states
+                .borrow_mut()
+                .pop()
+                .unwrap_or_else(running_state))
+        }
+
         fn director_node_port(&self, _namespace: &str) -> CommandResult<Option<u16>> {
             Ok(self.director_ports.borrow_mut().pop().unwrap_or(None))
+        }
+    }
+
+    fn running_state() -> BattlegroupState {
+        BattlegroupState {
+            stop: false,
+            phase: "Running".to_string(),
+            server_group_phase: "Running".to_string(),
+            director_phase: "Healthy".to_string(),
         }
     }
 
@@ -362,6 +451,7 @@ mod tests {
             calls: calls.clone(),
             namespaces: vec![],
             director_ports: Rc::new(RefCell::new(vec![])),
+            battlegroup_states: Rc::new(RefCell::new(vec![])),
         });
         let mut sink = VecOperationSink::default();
         orchestrator
@@ -388,6 +478,7 @@ mod tests {
             calls: Rc::new(RefCell::new(Vec::new())),
             namespaces: vec![],
             director_ports: Rc::new(RefCell::new(vec![Some(32527)])),
+            battlegroup_states: Rc::new(RefCell::new(vec![])),
         });
         let bg = BattlegroupRef {
             namespace: "funcom-seabass-sh-host-abcdef".to_string(),
@@ -414,6 +505,7 @@ mod tests {
             calls: calls.clone(),
             namespaces: vec![],
             director_ports: Rc::new(RefCell::new(vec![Some(32527)])),
+            battlegroup_states: Rc::new(RefCell::new(vec![running_state()])),
         });
         let mut sink = VecOperationSink::default();
         let port = orchestrator
@@ -436,6 +528,36 @@ mod tests {
             .events
             .iter()
             .any(|event| event.step_id == "bg.director.wait-port"));
+        assert!(sink
+            .events
+            .iter()
+            .any(|event| event.step_id == "bg.wait-started"));
+    }
+
+    #[test]
+    fn start_wait_rejects_stopped_phase_even_when_stop_flag_is_false() {
+        let orchestrator = BattlegroupManagementOrchestrator::new(MockKubernetes {
+            calls: Rc::new(RefCell::new(Vec::new())),
+            namespaces: vec![],
+            director_ports: Rc::new(RefCell::new(vec![])),
+            battlegroup_states: Rc::new(RefCell::new(vec![BattlegroupState {
+                stop: false,
+                phase: "Stopped".to_string(),
+                server_group_phase: "Stopped".to_string(),
+                director_phase: "Suspended".to_string(),
+            }])),
+        });
+        let mut sink = VecOperationSink::default();
+        let result = orchestrator.wait_for_battlegroup_started(
+            &BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            0,
+            &mut sink,
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]

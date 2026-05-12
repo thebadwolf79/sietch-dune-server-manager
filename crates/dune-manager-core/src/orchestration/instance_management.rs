@@ -90,6 +90,11 @@ impl SetMapInstancesRequest {
         if self.count == 0 || self.count > 64 {
             return Err(failure("--count must be between 1 and 64"));
         }
+        if self.map == InstanceMap::DeepDesert && self.count > 1 {
+            return Err(failure(
+                "Only one Deep Desert instance is supported in this build",
+            ));
+        }
         if self.pvp_partition_ids.is_some() && self.pvp_instance_count.is_some() {
             return Err(failure(
                 "Use either explicit PvP partition IDs or a PvP instance count, not both",
@@ -384,7 +389,7 @@ fn next_free_partition_id(existing: &[i64], desired: &[Value]) -> CommandResult<
 fn write_pvp_config_script(namespace: &str, pvp_ids: &str) -> String {
     format!(
         r#"
-set -euo pipefail
+set -eu
 ns={namespace}
 pvp_ids={pvp_ids}
 pvc=$(sudo kubectl get pvc -n "$ns" --no-headers | awk '$1 !~ /-db-pvc$/ && $1 ~ /-pvc$/ {{ print $1; exit }}')
@@ -475,40 +480,34 @@ mod tests {
     }
 
     #[test]
-    fn adds_deep_desert_partitions_on_dimension_zero() {
+    fn preserves_single_deep_desert_partition_on_dimension_zero() {
         let update =
-            build_world_partition_update(&sample_battlegroup(), InstanceMap::DeepDesert, 3)
+            build_world_partition_update(&sample_battlegroup(), InstanceMap::DeepDesert, 1)
                 .unwrap();
 
-        assert_eq!(update.partition_ids, vec![8, 9, 10]);
-        assert!(update.patch_required);
-        assert_eq!(
-            update.patch_operations[0]["path"],
-            "/spec/database/template/spec/deployment/spec/worldPartitions/2/partitions"
+        assert_eq!(update.partition_ids, vec![8]);
+        assert!(!update.patch_required);
+        assert!(update.patch_operations.is_empty());
+    }
+
+    #[test]
+    fn rejects_multiple_deep_desert_world_partitions() {
+        let request = SetMapInstancesRequest::new(
+            BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            InstanceMap::DeepDesert,
+            2,
         );
-        assert_eq!(
-            update.patch_operations[0]["value"],
-            json!([
-                {"id":8,"dimension":0,"disable":false,"minX":0,"minY":0,"maxX":1,"maxY":1},
-                {"id":9,"dimension":0,"disable":false,"minX":0,"minY":0,"maxX":1,"maxY":1},
-                {"id":10,"dimension":0,"disable":false,"minX":0,"minY":0,"maxX":1,"maxY":1}
-            ])
-        );
+
+        assert!(request.validate().is_err());
     }
 
     #[test]
     fn derives_deep_desert_pvp_ids_from_instance_count() {
-        let update =
-            build_world_partition_update(&sample_battlegroup(), InstanceMap::DeepDesert, 4)
-                .unwrap();
-
-        assert_eq!(update.partition_ids, vec![8, 9, 10, 11]);
-        assert_eq!(
-            deep_desert_pvp_ids(&update.partition_ids, 0),
-            Vec::<i64>::new()
-        );
-        assert_eq!(deep_desert_pvp_ids(&update.partition_ids, 1), vec![11]);
-        assert_eq!(deep_desert_pvp_ids(&update.partition_ids, 2), vec![10, 11]);
+        assert_eq!(deep_desert_pvp_ids(&[8], 0), Vec::<i64>::new());
+        assert_eq!(deep_desert_pvp_ids(&[8], 1), vec![8]);
     }
 
     #[test]
@@ -534,9 +533,9 @@ mod tests {
                 name: "sh-host-abcdef".to_string(),
             },
             InstanceMap::DeepDesert,
-            2,
+            1,
         );
-        request.pvp_instance_count = Some(3);
+        request.pvp_instance_count = Some(2);
 
         assert!(request.validate().is_err());
     }

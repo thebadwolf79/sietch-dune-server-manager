@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +20,32 @@ pub struct StatusResponse {
     pub battlegroups: usize,
     pub pods: usize,
     pub services: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionResponse {
+    pub authenticated: bool,
+    pub api_version: &'static str,
+    pub namespace: String,
+    pub auth_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverviewResponse {
+    pub status: StatusResponse,
+    pub battlegroups: Vec<crate::models::BattleGroupSummary>,
+    pub workloads: crate::models::WorkloadsResponse,
+    pub director_available: bool,
+    pub players: Option<crate::models::DirectorPlayerSummary>,
+    pub maps: Vec<crate::models::DirectorMapSummary>,
 }
 
 #[derive(Debug, Serialize)]

@@ -79,6 +79,59 @@ button:disabled,
   background: var(--color-background);
 }
 
+.boot-screen {
+  padding: var(--space-5);
+  background:
+    radial-gradient(circle at 50% 35%, var(--bronze-a4), transparent 34%),
+    linear-gradient(135deg, var(--gray-a2), var(--bronze-a2) 48%, var(--gray-a2));
+}
+
+.boot-card {
+  width: min(560px, calc(100vw - 40px));
+  border-color: var(--bronze-a6);
+  background:
+    linear-gradient(145deg, var(--bronze-a3), transparent 42%),
+    var(--gray-2);
+}
+
+.boot-spinner {
+  width: 42px;
+  height: 42px;
+  border: 2px solid var(--bronze-a5);
+  border-top-color: var(--bronze-10);
+  border-radius: 50%;
+  animation: boot-spin 900ms linear infinite;
+}
+
+.boot-status-card {
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-4);
+  background: var(--gray-a2);
+}
+
+.boot-status-row {
+  min-height: 34px;
+  border-bottom: 1px solid var(--gray-a4);
+}
+
+.boot-status-row:last-child {
+  border-bottom: 0;
+}
+
+.boot-log-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes boot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .app-main {
   display: grid;
   flex: 1;
@@ -125,6 +178,10 @@ button:disabled,
   background:
     linear-gradient(145deg, var(--bronze-a3), transparent 38%),
     var(--gray-a2);
+}
+
+.setup-order-target {
+  order: 0;
 }
 
 .setup-order-world {
@@ -184,6 +241,13 @@ button:disabled,
   border: 1px solid var(--amber-a6);
   border-radius: var(--radius-3);
   background: var(--amber-a2);
+}
+
+.destructive-warning {
+  padding: var(--space-3);
+  border: 1px solid var(--red-a6);
+  border-radius: var(--radius-3);
+  background: var(--red-a2);
 }
 
 .memory-calculation {

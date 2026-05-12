@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use kube::Client;
 
@@ -12,6 +14,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub started_unix_ms: u128,
     pub port: u16,
+    pub ui_dir: PathBuf,
 }
 
 impl AppState {
@@ -26,6 +29,7 @@ impl AppState {
             http: reqwest::Client::new(),
             started_unix_ms: now_unix_ms(),
             port: config.port,
+            ui_dir: config.ui_dir,
         })
     }
 }

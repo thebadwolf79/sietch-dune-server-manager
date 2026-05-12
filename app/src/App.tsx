@@ -1,4 +1,14 @@
-import { type ComponentType, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Component,
+  type ComponentType,
+  type ErrorInfo,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -11,6 +21,7 @@ import {
   Button,
   Card,
   Checkbox,
+  Dialog,
   Flex,
   Grid,
   Heading,
@@ -35,13 +46,15 @@ import {
 
 const pages = [
   { id: "home", label: "Home" },
+  { id: "servers", label: "Servers" },
   { id: "install", label: "Create New Server" },
 ] as const;
 
-type PageId = (typeof pages)[number]["id"] | "server-detail";
+type PageId = (typeof pages)[number]["id"];
 
 type NetworkMode = "static" | "dhcp";
 type PlayerIpMode = "local" | "external";
+type SetupTarget = "hyperv" | "ubuntu";
 
 type NetworkAdapterCandidate = {
   name: string;
@@ -110,13 +123,24 @@ type DuneVmCandidate = {
 
 type DetectionState = "detecting" | "ready" | "failed";
 type LogLevel = "debug" | "info" | "warn" | "error";
+type LogLevelFilter = LogLevel;
 type UpdateStatus = "idle" | "checking" | "available" | "current" | "installing" | "relaunching" | "failed";
 
 type LogRow = {
+  id: number;
   timestamp: string;
   level: LogLevel;
   scope: string;
   message: string;
+};
+
+type AppErrorBoundaryProps = {
+  onError: (message: string) => void;
+  children: ReactNode;
+};
+
+type AppErrorBoundaryState = {
+  error: string | null;
 };
 
 type EnvironmentGate = {
@@ -153,6 +177,104 @@ type SetupRunRequest = {
   deepDesertWarmServers: number;
 };
 
+type RemoteSetupRunRequest = {
+  host: string;
+  user: string;
+  keyPath: string;
+  playerIp: string;
+  worldName: string;
+  region: string;
+  selfHostToken: string;
+  survivalInstances: number;
+  deepDesertPveInstances: number;
+  deepDesertPvpInstances: number;
+  deepDesertWarmServers: number;
+  enableSwap: boolean;
+};
+
+type RemoteSetupRunResult = {
+  namespace: string;
+  battlegroupName: string;
+  worldUniqueName: string;
+  managerApiUrl: string;
+  preflight: UbuntuSshPreflight;
+};
+
+type RemoteServerRecord = {
+  id: string;
+  name: string;
+  host: string;
+  user: string;
+  keyPath: string;
+  namespace: string;
+  battlegroupName: string;
+  worldUniqueName: string;
+  managerApiUrl: string;
+  phase: string;
+  createdAt: string;
+};
+
+type RemoteBattlegroupStatus = {
+  stop: boolean;
+  phase: string;
+  serverGroupPhase: string;
+  directorPhase: string;
+};
+
+type RemoteManagerApiServiceStatus = {
+  installed: boolean;
+  running: boolean;
+  healthReachable: boolean;
+  serviceManager: string;
+  rawState: string;
+  port: number;
+};
+
+type RemoteServerStatus = {
+  battlegroup: RemoteBattlegroupStatus;
+  managerApi: RemoteManagerApiServiceStatus;
+};
+
+type ManagerApiProbe = {
+  url: string;
+  reachable: boolean;
+  ok: boolean;
+  apiVersion: string;
+  namespace: string;
+  authEnabled: boolean;
+  directorConfigured: boolean;
+  error: string;
+};
+
+type RemoteAttachForm = {
+  host: string;
+  keyPath: string;
+};
+
+type UbuntuSshPreflight = {
+  hostname: string;
+  osPrettyName: string;
+  osId: string;
+  versionId: string;
+  architecture: string;
+  kernelRelease: string;
+  user: string;
+  uid: number;
+  passwordlessSudo: boolean;
+  systemdAvailable: boolean;
+  logicalProcessorCount: number;
+  totalMemoryBytes: number;
+  availableMemoryBytes: number;
+  swapTotalBytes: number;
+  rootDiskTotalBytes: number;
+  rootDiskAvailableBytes: number;
+  publicIp: string | null;
+  ipv4Addresses: string[];
+  steamcmdInstalled: boolean;
+  k3sInstalled: boolean;
+  kubectlAvailable: boolean;
+};
+
 type RollbackRequest = {
   vmName: string;
   vmDestination: string;
@@ -166,7 +288,10 @@ const log = {
   error: (scope: string, message: string): LogRow => logEntry("error", scope, message),
 };
 
+let nextLogRowId = 1;
+
 type SetupForm = {
+  setupTarget: SetupTarget;
   vmDestination: string;
   vmName: string;
   diskGb: string;
@@ -188,9 +313,14 @@ type SetupForm = {
   deepDesertPveInstances: string;
   deepDesertPvpInstances: string;
   deepDesertWarmServers: string;
+  remoteHost: string;
+  remoteUser: string;
+  remoteKeyPath: string;
+  saveRemoteServer: boolean;
 };
 
 const defaultForm: SetupForm = {
+  setupTarget: "hyperv",
   vmDestination: "",
   vmName: "dune-server",
   diskGb: "100",
@@ -212,10 +342,23 @@ const defaultForm: SetupForm = {
   deepDesertPveInstances: "1",
   deepDesertPvpInstances: "0",
   deepDesertWarmServers: "0",
+  remoteHost: "",
+  remoteUser: "root",
+  remoteKeyPath: "",
+  saveRemoteServer: true,
+};
+
+const remoteProfileStorageKey = "dune-manager.remote-ubuntu-profile";
+const remoteServersStorageKey = "dune-manager.remote-servers";
+
+const defaultRemoteAttachForm: RemoteAttachForm = {
+  host: "",
+  keyPath: "",
 };
 
 const zeroToFour = ["0", "1", "2", "3", "4"];
 const oneToFour = ["1", "2", "3", "4"];
+const zeroToOne = ["0", "1"];
 const playerPortForwards = [
   { ports: "7777-7810", protocol: "UDP", purpose: "Game servers" },
   { ports: "31982", protocol: "TCP", purpose: "RMQ" },
@@ -223,15 +366,19 @@ const playerPortForwards = [
 
 export function App() {
   const [activePage, setActivePage] = useState<PageId>("home");
-  const [selectedServerName, setSelectedServerName] = useState<string | null>(null);
   const [form, setForm] = useState<SetupForm>(defaultForm);
   const [started, setStarted] = useState(false);
   const [setupRunning, setSetupRunning] = useState(false);
   const [setupRows, setSetupRows] = useState<LogRow[]>([]);
   const [initRows, setInitRows] = useState<LogRow[]>([]);
+  const [logLevelFilter, setLogLevelFilter] = useState<LogLevelFilter>("info");
   const [rollbackOpen, setRollbackOpen] = useState(false);
   const [rollbackRunning, setRollbackRunning] = useState(false);
   const [failedRollbackRequest, setFailedRollbackRequest] = useState<RollbackRequest | null>(null);
+  const [remoteAttachOpen, setRemoteAttachOpen] = useState(false);
+  const [remoteAttachRunning, setRemoteAttachRunning] = useState(false);
+  const [remoteAttachForm, setRemoteAttachForm] = useState<RemoteAttachForm>(defaultRemoteAttachForm);
+  const [remoteServerToRemove, setRemoteServerToRemove] = useState<RemoteServerRecord | null>(null);
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
@@ -244,28 +391,19 @@ export function App() {
   const [duneVms, setDuneVms] = useState<DuneVmCandidate[]>([]);
   const [vmDetection, setVmDetection] = useState<DetectionState>("detecting");
   const [vmDestinationHasVm, setVmDestinationHasVm] = useState(false);
+  const [remoteServers, setRemoteServers] = useState<RemoteServerRecord[]>([]);
+  const [remoteServerStatuses, setRemoteServerStatuses] = useState<Record<string, RemoteServerStatus>>({});
+  const [remoteServerStatusErrors, setRemoteServerStatusErrors] = useState<Record<string, string>>({});
+  const [remoteServerBusy, setRemoteServerBusy] = useState<Record<string, string>>({});
+  const [managerApiProbes, setManagerApiProbes] = useState<Record<string, ManagerApiProbe>>({});
+  const [remotePreflight, setRemotePreflight] = useState<UbuntuSshPreflight | null>(null);
+  const [remotePreflightStatus, setRemotePreflightStatus] = useState<DetectionState>("detecting");
   const calculatedMemory = useMemo(() => calculateRequiredMemory(form), [form]);
   const environmentGate = useMemo(
     () => setupEnvironmentGate(networkDetection, hostReadiness, networkAdapters),
     [hostReadiness, networkAdapters, networkDetection],
   );
-  const environmentRows = useMemo(
-    () =>
-      environmentLogRows(
-        networkDetection,
-        hostReadiness,
-        networkAdapters,
-        driveCandidates,
-        externalIp,
-        environmentGate,
-      ),
-    [driveCandidates, environmentGate, externalIp, hostReadiness, networkAdapters, networkDetection],
-  );
   const layoutPreview = useMemo(() => setupLayoutPreview(form), [form]);
-  const selectedServer = useMemo(
-    () => duneVms.find((candidate) => candidate.vm.name === selectedServerName) ?? null,
-    [duneVms, selectedServerName],
-  );
   const updateCheckInFlight = useRef(false);
   const update = <K extends keyof SetupForm>(key: K, value: SetupForm[K]) => {
     setForm((current) => normalizeSetupForm({ ...current, [key]: value }));
@@ -339,6 +477,162 @@ export function App() {
     }
   };
 
+  const runRemotePreflight = async () => {
+    setRemotePreflightStatus("detecting");
+    setRemotePreflight(null);
+    setSetupRows((rows) => [...rows, log.info("ubuntu.preflight", "Checking remote Ubuntu host resources.")]);
+    try {
+      const preflight = await invoke<UbuntuSshPreflight>("preflight_remote_ubuntu", {
+        request: remoteSetupRunRequest(form),
+      });
+      setRemotePreflight(preflight);
+      setRemotePreflightStatus("ready");
+      setSetupRows((rows) => [
+        ...rows,
+        log.info(
+          "ubuntu.preflight",
+          `Remote resources: ${formatGiB(preflight.availableMemoryBytes)} available memory, ${preflight.logicalProcessorCount} logical CPUs, ${formatGiB(preflight.rootDiskAvailableBytes)} disk free.`,
+        ),
+      ]);
+      if (preflight.publicIp && form.playerIpMode === "external" && form.playerIp !== preflight.publicIp) {
+        update("playerIp", preflight.publicIp);
+      }
+    } catch (err) {
+      setRemotePreflightStatus("failed");
+      setSetupRows((rows) => [...rows, log.error("ubuntu.preflight", errorMessage(err))]);
+    }
+  };
+
+  const attachRemoteServer = async () => {
+    setRemoteAttachRunning(true);
+    setSetupRows((rows) => [...rows, log.info("remote.attach", "Detecting remote Ubuntu battlegroups.")]);
+    try {
+      const detected = await invoke<RemoteServerRecord[]>("detect_remote_ubuntu_servers", {
+        request: {
+          host: remoteAttachForm.host.trim(),
+          keyPath: remoteAttachForm.keyPath.trim(),
+        },
+      });
+      if (detected.length === 0) {
+        setSetupRows((rows) => [...rows, log.warn("remote.attach", "No remote Dune battlegroups were detected.")]);
+        return;
+      }
+      const createdAt = new Date().toISOString();
+      const records = detected.map((server) => ({
+        ...server,
+        createdAt: server.createdAt || createdAt,
+      }));
+      setRemoteServers((servers) => persistRemoteServers(mergeRemoteServers(servers, records)));
+      setActivePage("servers");
+      setRemoteAttachOpen(false);
+      setSetupRows((rows) => [
+        ...rows,
+        log.info("remote.attach", `Added ${records.length} remote Ubuntu server${records.length === 1 ? "" : "s"}.`),
+      ]);
+    } catch (err) {
+      setSetupRows((rows) => [...rows, log.error("remote.attach", errorMessage(err))]);
+    } finally {
+      setRemoteAttachRunning(false);
+    }
+  };
+
+  const removeRemoteServer = (server: RemoteServerRecord) => {
+    setRemoteServers((servers) => {
+      const next = persistRemoteServers(servers.filter((candidate) => candidate.id !== server.id));
+      return next;
+    });
+    setRemoteServerStatuses((statuses) => omitKey(statuses, server.id));
+    setRemoteServerStatusErrors((errors) => omitKey(errors, server.id));
+    setSetupRows((rows) => [...rows, log.info("remote.attach", `Forgot remote Ubuntu server ${server.host}.`)]);
+    setRemoteServerToRemove(null);
+  };
+
+  const refreshRemoteServerStatus = async (server: RemoteServerRecord) => {
+    if (!server.namespace || !server.battlegroupName || !server.host || !server.keyPath) return;
+    setSetupRows((rows) => [...rows, log.info("remote.status", `Checking ${server.host} ${server.battlegroupName}.`)]);
+    try {
+      const status = await invoke<RemoteServerStatus>("remote_server_status", {
+        request: remoteServerActionRequest(server),
+      });
+      setRemoteServerStatuses((statuses) => ({ ...statuses, [server.id]: status }));
+      setRemoteServerStatusErrors((errors) => omitKey(errors, server.id));
+      setRemoteServers((servers) =>
+        persistRemoteServers(
+          servers.map((candidate) =>
+            candidate.id === server.id ? { ...candidate, phase: status.battlegroup.phase || server.phase } : candidate,
+          ),
+        ),
+      );
+      setSetupRows((rows) => [
+        ...rows,
+        log.info(
+          "remote.status",
+          `${server.battlegroupName}: ${status.battlegroup.phase || "unknown"}, server group ${status.battlegroup.serverGroupPhase || "unknown"}, Director ${status.battlegroup.directorPhase || "unknown"}.`,
+        ),
+      ]);
+    } catch (err) {
+      const message = errorMessage(err);
+      setRemoteServerStatusErrors((errors) => ({ ...errors, [server.id]: message }));
+      setSetupRows((rows) => [...rows, log.warn("remote.status", message)]);
+    }
+  };
+
+  const runRemoteBattlegroupAction = async (server: RemoteServerRecord, action: "start" | "stop") => {
+    setRemoteServerBusy((busy) => ({ ...busy, [server.id]: action === "start" ? "Starting battlegroup" : "Stopping battlegroup" }));
+    setSetupRows((rows) => [...rows, log.info("bg", `${action === "start" ? "Starting" : "Stopping"} ${server.battlegroupName}.`)]);
+    try {
+      const status = await invoke<RemoteServerStatus>(
+        action === "start" ? "start_remote_battlegroup" : "stop_remote_battlegroup",
+        { request: remoteServerActionRequest(server) },
+      );
+      setRemoteServerStatuses((statuses) => ({ ...statuses, [server.id]: status }));
+      setRemoteServerStatusErrors((errors) => omitKey(errors, server.id));
+      setRemoteServers((servers) =>
+        persistRemoteServers(
+          servers.map((candidate) =>
+            candidate.id === server.id ? { ...candidate, phase: status.battlegroup.phase || candidate.phase } : candidate,
+          ),
+        ),
+      );
+    } catch (err) {
+      const message = errorMessage(err);
+      setRemoteServerStatusErrors((errors) => ({ ...errors, [server.id]: message }));
+      setSetupRows((rows) => [...rows, log.error("bg", message)]);
+    } finally {
+      setRemoteServerBusy((busy) => omitKey(busy, server.id));
+    }
+  };
+
+  const runRemoteManagerApiAction = async (server: RemoteServerRecord, action: "start" | "stop") => {
+    setRemoteServerBusy((busy) => ({ ...busy, [server.id]: action === "start" ? "Starting Manager API" : "Stopping Manager API" }));
+    setSetupRows((rows) => [...rows, log.info("manager-api", `${action === "start" ? "Starting" : "Stopping"} Manager API on ${server.host}.`)]);
+    try {
+      const managerApi = await invoke<RemoteManagerApiServiceStatus>(
+        action === "start" ? "start_remote_manager_api" : "stop_remote_manager_api",
+        { request: remoteManagerApiActionRequest(server) },
+      );
+      setRemoteServerStatuses((statuses) => ({
+        ...statuses,
+        [server.id]: {
+          battlegroup: statuses[server.id]?.battlegroup ?? {
+            stop: false,
+            phase: server.phase,
+            serverGroupPhase: "",
+            directorPhase: "",
+          },
+          managerApi,
+        },
+      }));
+      setRemoteServerStatusErrors((errors) => omitKey(errors, server.id));
+    } catch (err) {
+      const message = errorMessage(err);
+      setRemoteServerStatusErrors((errors) => ({ ...errors, [server.id]: message }));
+      setSetupRows((rows) => [...rows, log.error("manager-api", message)]);
+    } finally {
+      setRemoteServerBusy((busy) => omitKey(busy, server.id));
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     const appendInit = (row: LogRow) => {
@@ -363,6 +657,17 @@ export function App() {
         setExternalIp(environment.externalIp);
         setNetworkDetection("ready");
         appendInit(log.info("capabilities", "Host capability detection completed."));
+        const gate = setupEnvironmentGate("ready", environment.readiness, environment.networkAdapters);
+        for (const row of environmentLogRows(
+          "ready",
+          environment.readiness,
+          environment.networkAdapters,
+          environment.drives,
+          environment.externalIp,
+          gate,
+        )) {
+          appendInit(row);
+        }
         const first = environment.networkAdapters[0];
         if (first) {
           setForm((current) => {
@@ -415,14 +720,135 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!selectedServerName) return;
-    if (duneVms.some((candidate) => candidate.vm.name === selectedServerName)) return;
-    setSelectedServerName(null);
-    if (activePage === "server-detail") setActivePage("home");
-  }, [activePage, duneVms, selectedServerName]);
+    const text = window.localStorage.getItem(remoteProfileStorageKey);
+    if (!text) return;
+    try {
+      const profile = JSON.parse(text) as Partial<Pick<SetupForm, "remoteHost" | "remoteUser" | "remoteKeyPath">>;
+      setForm((current) =>
+        normalizeSetupForm({
+          ...current,
+          remoteHost: profile.remoteHost || current.remoteHost,
+          remoteUser: profile.remoteUser || current.remoteUser,
+          remoteKeyPath: profile.remoteKeyPath || current.remoteKeyPath,
+        }),
+      );
+    } catch {
+      window.localStorage.removeItem(remoteProfileStorageKey);
+    }
+  }, []);
+
+  useEffect(() => {
+    setRemoteServers(readRemoteServers());
+  }, []);
+
+  useEffect(() => {
+    const targets = [
+      ...duneVms
+        .map((candidate) => [managerApiKeyForVm(candidate), managerApiUrlForVm(candidate)] as const)
+        .filter((target): target is readonly [string, string] => !!target[1]),
+      ...remoteServers
+        .map((server) => [managerApiKeyForRemote(server), server.managerApiUrl] as const)
+        .filter((target): target is readonly [string, string] => !!target[1]),
+    ];
+    if (targets.length === 0) {
+      setManagerApiProbes({});
+      return;
+    }
+    let cancelled = false;
+    for (const [key, url] of targets) {
+      void invoke<ManagerApiProbe>("check_manager_api", { request: { url } })
+        .then((probe) => {
+          if (!cancelled) {
+            setManagerApiProbes((current) => ({ ...current, [key]: probe }));
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setManagerApiProbes((current) => ({
+              ...current,
+              [key]: managerApiProbeError(url, errorMessage(err)),
+            }));
+          }
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [duneVms, remoteServers]);
+
+  useEffect(() => {
+    let cancelled = false;
+    for (const server of remoteServers) {
+      if (!server.namespace || !server.battlegroupName || !server.host || !server.keyPath) continue;
+      setSetupRows((rows) => [
+        ...rows,
+        log.info("remote.status", `Checking saved remote server ${server.host} ${server.battlegroupName}.`),
+      ]);
+      void invoke<RemoteServerStatus>("remote_server_status", {
+        request: remoteServerActionRequest(server),
+      })
+        .then((status) => {
+          if (cancelled) return;
+          setRemoteServerStatuses((statuses) => ({ ...statuses, [server.id]: status }));
+          setRemoteServerStatusErrors((errors) => omitKey(errors, server.id));
+          setRemoteServers((servers) =>
+            persistRemoteServers(
+              servers.map((candidate) =>
+                candidate.id === server.id
+                  ? { ...candidate, phase: status.battlegroup.phase || candidate.phase }
+                  : candidate,
+              ),
+            ),
+          );
+          setSetupRows((rows) => [
+            ...rows,
+            log.info(
+              "remote.status",
+              `${server.battlegroupName}: ${status.battlegroup.phase || "unknown"}, server group ${status.battlegroup.serverGroupPhase || "unknown"}, Director ${status.battlegroup.directorPhase || "unknown"}.`,
+            ),
+          ]);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            const message = errorMessage(err);
+            setRemoteServerStatusErrors((errors) => ({ ...errors, [server.id]: message }));
+            setSetupRows((rows) => [...rows, log.warn("remote.status", message)]);
+          }
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [remoteServers.map((server) => server.id).join("|")]);
+
+  useEffect(() => {
+    const profile = {
+      remoteHost: form.remoteHost,
+      remoteUser: form.remoteUser,
+      remoteKeyPath: form.remoteKeyPath,
+    };
+    window.localStorage.setItem(remoteProfileStorageKey, JSON.stringify(profile));
+    setRemotePreflight(null);
+    setRemotePreflightStatus(form.remoteHost || form.remoteKeyPath ? "failed" : "detecting");
+  }, [form.remoteHost, form.remoteKeyPath, form.remoteUser]);
 
   useEffect(() => {
     appendInitRow(log.debug("updates", "Automatic update checks are disabled; use the manual check on Home."));
+  }, []);
+
+  useEffect(() => {
+    const onError = (event: ErrorEvent) => {
+      setSetupRows((rows) => [...rows, log.error("ui", event.message || "Unhandled browser error.")]);
+    };
+    const onRejection = (event: PromiseRejectionEvent) => {
+      setSetupRows((rows) => [...rows, log.error("ui", errorMessage(event.reason))]);
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
   }, []);
 
   useEffect(() => {
@@ -467,28 +893,51 @@ export function App() {
     };
   }, [form.vmDestination]);
 
-  const logRows = useMemo(
-    () =>
-      started
-        ? [...initRows, ...environmentRows, ...setupRows]
-        : [...initRows, ...environmentRows],
-    [environmentRows, initRows, setupRows, started],
-  );
+  const logRows = useMemo(() => [...initRows, ...setupRows], [initRows, setupRows]);
+  const visibleLogRows = useMemo(() => filterLogRows(logRows, logLevelFilter), [logLevelFilter, logRows]);
+  const initialDetectionRunning = networkDetection === "detecting" || vmDetection === "detecting";
+  const initialDetectionMessage =
+    networkDetection === "detecting"
+      ? "Detecting host environment and capabilities"
+      : "Detecting existing Dune servers";
 
   const startSetup = async () => {
     const request = setupRunRequest(form, calculatedMemory.gb);
     setStarted(true);
     setSetupRunning(true);
-    setSetupRows([]);
     setFailedRollbackRequest(null);
     try {
-      await invoke("start_full_setup", {
-        request,
-      });
+      if (form.setupTarget === "ubuntu") {
+        const pendingRecord = form.saveRemoteServer ? remoteServerDraftFromForm(form) : null;
+        if (pendingRecord) {
+          setRemoteServers((servers) => persistRemoteServers(upsertRemoteServer(servers, pendingRecord)));
+          setActivePage("servers");
+        }
+        const result = await invoke<RemoteSetupRunResult>("start_remote_ubuntu_setup", {
+          request: remoteSetupRunRequest(form),
+        });
+        if (form.saveRemoteServer) {
+          const record = remoteServerRecordFromSetup(form, result, pendingRecord?.id);
+          setRemoteServers((servers) => persistRemoteServers(upsertRemoteServer(servers, record)));
+          setActivePage("servers");
+        }
+      } else {
+        await invoke("start_full_setup", {
+          request,
+        });
+      }
     } catch (err) {
       console.error(err);
-      setFailedRollbackRequest(rollbackRequestFromSetup(request));
-      setRollbackOpen(true);
+      if (form.setupTarget === "ubuntu" && form.saveRemoteServer) {
+        const pending = remoteServerDraftFromForm(form);
+        setRemoteServers((servers) =>
+          persistRemoteServers(upsertRemoteServer(servers, { ...pending, phase: "Setup failed" })),
+        );
+      }
+      if (form.setupTarget === "hyperv") {
+        setFailedRollbackRequest(rollbackRequestFromSetup(request));
+        setRollbackOpen(true);
+      }
     } finally {
       setSetupRunning(false);
     }
@@ -515,60 +964,86 @@ export function App() {
       radius="medium"
       scaling="95%"
     >
+      {initialDetectionRunning ? (
+        <InitialDetectionScreen
+          message={initialDetectionMessage}
+          networkDetection={networkDetection}
+          vmDetection={vmDetection}
+          rows={initRows}
+        />
+      ) : (
       <Flex direction="column" className="app-root">
         <Header
           activePage={activePage}
-          selectedServerName={selectedServerName}
-          servers={duneVms}
           onNavigate={setActivePage}
-          onOpenServer={(name) => {
-            setSelectedServerName(name);
-            setActivePage("server-detail");
-          }}
         />
         <Separator size="4" />
         <Box className="app-main has-log">
-          {activePage === "home" ? (
-            <HomePage
-              environmentGate={environmentGate}
-              networkDetection={networkDetection}
-              vmDetection={vmDetection}
-              hostReadiness={hostReadiness}
-              networkAdapters={networkAdapters}
-              externalIp={externalIp}
-              duneVms={duneVms}
-              updateStatus={updateStatus}
-              availableUpdate={availableUpdate}
-              updateProgress={updateProgress}
-              onCheckUpdate={() => void checkForAppUpdate("manual")}
-              onInstallUpdate={() => setUpdateDialogOpen(true)}
-              onOpenServer={(name) => {
-                setSelectedServerName(name);
-                setActivePage("server-detail");
-              }}
-            />
-          ) : null}
-          {activePage === "install" ? (
-            <InstallControls
-              form={form}
-              calculatedMemory={calculatedMemory}
-              layoutPreview={layoutPreview}
-              hostReadiness={hostReadiness}
-              driveCandidates={driveCandidates}
-              networkAdapters={networkAdapters}
-              networkDetection={networkDetection}
-              externalIp={externalIp}
-              environmentGate={environmentGate}
-              setupRunning={setupRunning}
-              vmDestinationHasVm={vmDestinationHasVm}
-              update={update}
-              onStart={startSetup}
-            />
-          ) : null}
-          {activePage === "server-detail" && selectedServer ? (
-            <ServerDetailsPage candidate={selectedServer} />
-          ) : null}
-          <LogWindow rows={logRows} />
+          <AppErrorBoundary
+            onError={(message) => setSetupRows((rows) => [...rows, log.error("ui", message)])}
+          >
+            {activePage === "home" ? (
+              <HomePage
+                environmentGate={environmentGate}
+                networkDetection={networkDetection}
+                vmDetection={vmDetection}
+                hostReadiness={hostReadiness}
+                networkAdapters={networkAdapters}
+                externalIp={externalIp}
+                duneVms={duneVms}
+                remoteServers={remoteServers}
+                updateStatus={updateStatus}
+                availableUpdate={availableUpdate}
+                updateProgress={updateProgress}
+                onCheckUpdate={() => void checkForAppUpdate("manual")}
+                onInstallUpdate={() => setUpdateDialogOpen(true)}
+              />
+            ) : null}
+            {activePage === "servers" ? (
+              <ServersPage
+                duneVms={duneVms}
+                remoteServers={remoteServers}
+                probes={managerApiProbes}
+                remoteStatuses={remoteServerStatuses}
+                remoteStatusErrors={remoteServerStatusErrors}
+                remoteBusy={remoteServerBusy}
+                onAddRemoteServer={() => {
+                  setRemoteAttachForm({
+                    host: form.remoteHost,
+                    keyPath: form.remoteKeyPath,
+                  });
+                  setRemoteAttachOpen(true);
+                }}
+                onRemoveRemoteServer={setRemoteServerToRemove}
+                onRefreshRemoteStatus={(server) => void refreshRemoteServerStatus(server)}
+                onStartRemoteBattlegroup={(server) => void runRemoteBattlegroupAction(server, "start")}
+                onStopRemoteBattlegroup={(server) => void runRemoteBattlegroupAction(server, "stop")}
+                onStartRemoteManagerApi={(server) => void runRemoteManagerApiAction(server, "start")}
+                onStopRemoteManagerApi={(server) => void runRemoteManagerApiAction(server, "stop")}
+              />
+            ) : null}
+            {activePage === "install" ? (
+              <InstallControls
+                form={form}
+                calculatedMemory={calculatedMemory}
+                layoutPreview={layoutPreview}
+                hostReadiness={hostReadiness}
+                driveCandidates={driveCandidates}
+                networkAdapters={networkAdapters}
+                networkDetection={networkDetection}
+                externalIp={externalIp}
+                environmentGate={environmentGate}
+                setupRunning={setupRunning}
+                vmDestinationHasVm={vmDestinationHasVm}
+                remotePreflight={remotePreflight}
+                remotePreflightStatus={remotePreflightStatus}
+                update={update}
+                onRemotePreflight={() => void runRemotePreflight()}
+                onStart={startSetup}
+              />
+            ) : null}
+          </AppErrorBoundary>
+          <LogWindow rows={visibleLogRows} level={logLevelFilter} onLevelChange={setLogLevelFilter} />
         </Box>
         <RollbackDialog
           open={rollbackOpen}
@@ -584,23 +1059,124 @@ export function App() {
           onOpenChange={setUpdateDialogOpen}
           onInstall={() => void installAppUpdate()}
         />
+        <RemoteAttachDialog
+          open={remoteAttachOpen}
+          form={remoteAttachForm}
+          running={remoteAttachRunning}
+          onOpenChange={setRemoteAttachOpen}
+          onChange={setRemoteAttachForm}
+          onAttach={() => void attachRemoteServer()}
+        />
+        <RemoveRemoteServerDialog
+          server={remoteServerToRemove}
+          onOpenChange={(open) => {
+            if (!open) setRemoteServerToRemove(null);
+          }}
+          onRemove={removeRemoteServer}
+        />
       </Flex>
+      )}
     </Theme>
   );
 }
 
+function InitialDetectionScreen({
+  message,
+  networkDetection,
+  vmDetection,
+  rows,
+}: {
+  message: string;
+  networkDetection: DetectionState;
+  vmDetection: DetectionState;
+  rows: LogRow[];
+}) {
+  const recentRows = rows.slice(-4);
+  return (
+    <Flex align="center" justify="center" className="app-root boot-screen">
+      <Card size="4" variant="surface" className="boot-card">
+        <Flex direction="column" align="center" gap="4">
+          <Box className="boot-spinner" aria-hidden />
+          <Box>
+            <Heading align="center" size="5">
+              {message}
+            </Heading>
+            <Text as="p" align="center" size="2" color="gray" mb="0">
+              Checking permissions, Hyper-V readiness, networking, memory, storage, and existing servers.
+            </Text>
+          </Box>
+          <Box className="boot-status-card">
+            <BootStatusRow label="Capabilities" status={networkDetection} />
+            <BootStatusRow label="Existing VMs" status={vmDetection} />
+          </Box>
+          {recentRows.length > 0 ? (
+            <Flex direction="column" gap="1" width="100%">
+              {recentRows.map((row, index) => (
+                <Text key={`${row.timestamp}-${index}`} size="1" color="gray" className="mono boot-log-line">
+                  {row.message}
+                </Text>
+              ))}
+            </Flex>
+          ) : null}
+        </Flex>
+      </Card>
+    </Flex>
+  );
+}
+
+function BootStatusRow({ label, status }: { label: string; status: DetectionState }) {
+  const color = status === "ready" ? "green" : status === "failed" ? "red" : "amber";
+  const text = status === "ready" ? "Ready" : status === "failed" ? "Failed" : "Detecting";
+  return (
+    <Flex align="center" justify="between" gap="4" className="boot-status-row">
+      <Text size="2" color="gray">
+        {label}
+      </Text>
+      <Badge color={color} variant="soft">
+        {text}
+      </Badge>
+    </Flex>
+  );
+}
+
+class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorBoundaryState> {
+  state: AppErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): AppErrorBoundaryState {
+    return { error: error.message };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    this.props.onError(`${error.message}${info.componentStack ? `; ${info.componentStack.split("\n")[1]?.trim() ?? ""}` : ""}`);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <Card size="3" variant="surface" className="pane page-pane">
+          <Flex direction="column" gap="3">
+            <Heading size="4">UI Error</Heading>
+            <Text size="2" color="gray">
+              The view failed to render. Details were written to the log window.
+            </Text>
+            <Text size="2" className="mono">
+              {this.state.error}
+            </Text>
+          </Flex>
+        </Card>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 function Header({
   activePage,
-  selectedServerName,
-  servers,
   onNavigate,
-  onOpenServer,
 }: {
   activePage: PageId;
-  selectedServerName: string | null;
-  servers: DuneVmCandidate[];
   onNavigate: (page: PageId) => void;
-  onOpenServer: (name: string) => void;
 }) {
   return (
     <Flex asChild align="center" justify="between" p="4">
@@ -612,10 +1188,7 @@ function Header({
           </Flex>
           <TopNav
             activePage={activePage}
-            selectedServerName={selectedServerName}
-            servers={servers}
             onNavigate={onNavigate}
-            onOpenServer={onOpenServer}
           />
         </Flex>
       </header>
@@ -626,15 +1199,9 @@ function Header({
 function TopNav({
   activePage,
   onNavigate,
-  selectedServerName,
-  servers,
-  onOpenServer,
 }: {
   activePage: PageId;
   onNavigate: (page: PageId) => void;
-  selectedServerName: string | null;
-  servers: DuneVmCandidate[];
-  onOpenServer: (name: string) => void;
 }) {
   return (
     <Box asChild>
@@ -653,19 +1220,6 @@ function TopNav({
               {page.label}
             </TabNav.Link>
           ))}
-          {servers.map((candidate) => (
-            <TabNav.Link
-              key={candidate.vm.name}
-              href="#"
-              active={activePage === "server-detail" && selectedServerName === candidate.vm.name}
-              onClick={(event) => {
-                event.preventDefault();
-                onOpenServer(candidate.vm.name);
-              }}
-            >
-              {candidate.vm.name}
-            </TabNav.Link>
-          ))}
         </TabNav.Root>
       </nav>
     </Box>
@@ -680,12 +1234,12 @@ function HomePage({
   networkAdapters,
   externalIp,
   duneVms,
+  remoteServers,
   updateStatus,
   availableUpdate,
   updateProgress,
   onCheckUpdate,
   onInstallUpdate,
-  onOpenServer,
 }: {
   environmentGate: EnvironmentGate;
   networkDetection: DetectionState;
@@ -694,12 +1248,12 @@ function HomePage({
   networkAdapters: NetworkAdapterCandidate[];
   externalIp: string | null;
   duneVms: DuneVmCandidate[];
+  remoteServers: RemoteServerRecord[];
   updateStatus: UpdateStatus;
   availableUpdate: Update | null;
   updateProgress: string | null;
   onCheckUpdate: () => void;
   onInstallUpdate: () => void;
-  onOpenServer: (name: string) => void;
 }) {
   const vmDetectionReady = vmDetection === "ready";
   const primaryAdapter = networkAdapters[0];
@@ -762,10 +1316,11 @@ function HomePage({
           />
           <InfoRow label="External IP" value={externalIp ?? "Not detected"} tone={externalIp ? "green" : "amber"} />
           <InfoRow
-            label="Dune VMs"
+            label="Local VMs"
             value={vmDetectionReady ? `${duneVms.length} found` : vmDetection === "failed" ? "Failed" : "Checking"}
             tone={vmDetectionReady ? "green" : vmDetection === "failed" ? "red" : "amber"}
           />
+          <InfoRow label="Remote Servers" value={`${remoteServers.length} saved`} tone="green" />
           <InfoActionRow
             label="App Update"
             value={updateLabel(updateStatus, availableUpdate, updateProgress)}
@@ -790,21 +1345,88 @@ function HomePage({
           </Box>
         ) : null}
 
+      </Flex>
+    </Card>
+  );
+}
+
+function ServersPage({
+  duneVms,
+  remoteServers,
+  probes,
+  remoteStatuses,
+  remoteStatusErrors,
+  remoteBusy,
+  onAddRemoteServer,
+  onRemoveRemoteServer,
+  onRefreshRemoteStatus,
+  onStartRemoteBattlegroup,
+  onStopRemoteBattlegroup,
+  onStartRemoteManagerApi,
+  onStopRemoteManagerApi,
+}: {
+  duneVms: DuneVmCandidate[];
+  remoteServers: RemoteServerRecord[];
+  probes: Record<string, ManagerApiProbe>;
+  remoteStatuses: Record<string, RemoteServerStatus>;
+  remoteStatusErrors: Record<string, string>;
+  remoteBusy: Record<string, string>;
+  onAddRemoteServer: () => void;
+  onRemoveRemoteServer: (server: RemoteServerRecord) => void;
+  onRefreshRemoteStatus: (server: RemoteServerRecord) => void;
+  onStartRemoteBattlegroup: (server: RemoteServerRecord) => void;
+  onStopRemoteBattlegroup: (server: RemoteServerRecord) => void;
+  onStartRemoteManagerApi: (server: RemoteServerRecord) => void;
+  onStopRemoteManagerApi: (server: RemoteServerRecord) => void;
+}) {
+  return (
+    <Card size="3" variant="surface" className="pane page-pane">
+      <Flex direction="column" gap="4" height="100%" minHeight="0">
+        <Flex align="center" justify="between" gap="3">
+          <Box>
+            <Heading size="5">Servers</Heading>
+            <Text as="p" size="2" color="gray" mb="0">
+              Setup happens in the desktop app. Management uses the Manager API once it is reachable.
+            </Text>
+          </Box>
+          <Button type="button" variant="surface" onClick={onAddRemoteServer}>
+            Add remote Ubuntu server
+          </Button>
+        </Flex>
         <Box className="setup-scroll">
           <Flex direction="column" gap="3">
-            {duneVms.length > 0 ? (
-              duneVms.map((candidate) => (
-                <ServerCard
-                  key={candidate.vm.name}
-                  candidate={candidate}
-                  compact
-                  onOpen={() => onOpenServer(candidate.vm.name)}
-                />
-              ))
+            {duneVms.length + remoteServers.length > 0 ? (
+              <>
+                {duneVms.map((candidate) => (
+                  <ServerCard
+                    key={candidate.vm.name}
+                    candidate={candidate}
+                    compact
+                    managerApiProbe={probes[managerApiKeyForVm(candidate)]}
+                  />
+                ))}
+                {remoteServers.map((server) => (
+                  <RemoteServerCard
+                    key={server.id}
+                    server={server}
+                    compact
+                    managerApiProbe={probes[managerApiKeyForRemote(server)]}
+                    status={remoteStatuses[server.id]}
+                    statusError={remoteStatusErrors[server.id]}
+                    busyLabel={remoteBusy[server.id]}
+                    onRemove={() => onRemoveRemoteServer(server)}
+                    onRefresh={() => onRefreshRemoteStatus(server)}
+                    onStartBattlegroup={() => onStartRemoteBattlegroup(server)}
+                    onStopBattlegroup={() => onStopRemoteBattlegroup(server)}
+                    onStartManagerApi={() => onStartRemoteManagerApi(server)}
+                    onStopManagerApi={() => onStopRemoteManagerApi(server)}
+                  />
+                ))}
+              </>
             ) : (
               <EmptyState
-                title={vmDetection === "failed" ? "VM detection failed" : "No Dune servers detected"}
-                body="Create a new server from the Create New Server tab, or keep this page open while detection completes."
+                title="No Dune servers detected"
+                body="Create a new server or add a remote Ubuntu server profile."
               />
             )}
           </Flex>
@@ -817,31 +1439,20 @@ function HomePage({
 function ServerCard({
   candidate,
   compact = false,
-  onOpen,
+  managerApiProbe,
 }: {
   candidate: DuneVmCandidate;
   compact?: boolean;
-  onOpen?: () => void;
+  managerApiProbe?: ManagerApiProbe;
 }) {
   const vm = candidate.vm;
   const primaryIp = vm.ipv4Addresses[0] ?? "No IPv4 reported";
   const diskLabel = vm.diskSizeBytes > 0 ? `${formatGiB(vm.diskSizeBytes)} disk` : "Disk size unknown";
   const usedDiskLabel = vm.diskFileSizeBytes > 0 ? `${formatGiB(vm.diskFileSizeBytes)} used` : "usage unknown";
+  const managerApiUrl = managerApiUrlForVm(candidate);
 
   return (
-    <Box
-      className={onOpen ? "server-card is-clickable" : "server-card"}
-      role={onOpen ? "button" : undefined}
-      tabIndex={onOpen ? 0 : undefined}
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (!onOpen) return;
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onOpen();
-        }
-      }}
-    >
+    <Box className="server-card">
       <Flex align="start" justify="between" gap="3">
         <Box>
           <Flex align="center" gap="2">
@@ -866,116 +1477,184 @@ function ServerCard({
         <Metric label="Switch" value={vm.switchNames.join(", ") || "none"} />
         <Metric label="Uptime" value={formatDuration(vm.uptimeSeconds)} />
       </Grid>
+      <ManagerApiStatus probe={managerApiProbe} url={managerApiUrl} />
 
     </Box>
   );
 }
 
-function ServerDetailsPage({ candidate }: { candidate: DuneVmCandidate }) {
-  const vm = candidate.vm;
-  const primaryIp = vm.ipv4Addresses[0] ?? "";
-  const diskLabel =
-    vm.diskSizeBytes > 0
-      ? `${formatGiB(vm.diskSizeBytes)} disk; ${formatGiB(vm.diskFileSizeBytes)} used`
-      : "Unknown";
-
+function RemoteServerCard({
+  server,
+  compact = false,
+  onRemove,
+  managerApiProbe,
+  status,
+  statusError,
+  busyLabel,
+  onRefresh,
+  onStartBattlegroup,
+  onStopBattlegroup,
+  onStartManagerApi,
+  onStopManagerApi,
+}: {
+  server: RemoteServerRecord;
+  compact?: boolean;
+  onRemove?: () => void;
+  managerApiProbe?: ManagerApiProbe;
+  status?: RemoteServerStatus;
+  statusError?: string;
+  busyLabel?: string;
+  onRefresh?: () => void;
+  onStartBattlegroup?: () => void;
+  onStopBattlegroup?: () => void;
+  onStartManagerApi?: () => void;
+  onStopManagerApi?: () => void;
+}) {
+  const battlegroupStarted = status ? isBattlegroupStarted(status.battlegroup) : false;
+  const battlegroupStartRequested = status ? !status.battlegroup.stop : false;
+  const battlegroupStopped = status ? status.battlegroup.stop : false;
+  const managerInstalled = status?.managerApi.installed ?? false;
+  const managerRunning = status?.managerApi.running ?? false;
+  const busy = !!busyLabel;
   return (
-    <Card size="3" variant="surface" className="pane setup-pane">
-      <Flex direction="column" gap="4" height="100%" minHeight="0">
+    <Box className="server-card">
+      <Flex align="start" justify="between" gap="3">
         <Box>
-          <Heading size="5">{vm.name}</Heading>
-          <Text as="p" size="2" color="gray">
-            Server details and future update controls.
+          <Flex align="center" gap="2">
+            <Heading size={compact ? "3" : "4"}>{server.name}</Heading>
+            <Badge color="bronze" variant="soft">
+              Ubuntu
+            </Badge>
+          </Flex>
+          <Text as="div" size="2" color="gray">
+            {server.host} · {server.battlegroupName || "setup pending"}
           </Text>
         </Box>
-
-        <Box className="setup-scroll">
-          <Flex direction="column" gap="5">
-            <SetupSection icon={DesktopIcon} title="Host and VM">
-              <Flex direction="column" gap="2">
-                <FormRow label="VM Name">
-                  <TextField.Root value={vm.name} readOnly />
-                </FormRow>
-                <FormRow label="VM Location">
-                  <TextField.Root value={vm.path || vm.configurationLocation} readOnly />
-                </FormRow>
-                <FormRow label="VM State">
-                  <TextField.Root value={vm.rawState} readOnly />
-                </FormRow>
-                <FormRow label="Memory">
-                  <TextField.Root value={formatGiB(vm.memoryAssignedBytes)} readOnly />
-                </FormRow>
-                <FormRow label="CPU Cores">
-                  <TextField.Root value={vm.processorCount ? String(vm.processorCount) : "Unknown"} readOnly />
-                </FormRow>
-                <FormRow label="Disk">
-                  <TextField.Root value={diskLabel} readOnly />
-                </FormRow>
-                <FormRow label="VHD">
-                  <TextField.Root value={vm.hardDiskPaths[0] ?? "No disk reported"} readOnly />
-                </FormRow>
-              </Flex>
-            </SetupSection>
-
-            <SetupSection icon={RocketIcon} title="World Layout">
-              <Grid columns="2" gap="3">
-                <Field label="Hagga Basin">
-                  <Select.Root value="unknown" disabled>
-                    <Select.Trigger />
-                    <Select.Content>
-                      <Select.Item value="unknown">Detect from manager API</Select.Item>
-                    </Select.Content>
-                  </Select.Root>
-                </Field>
-                <Field label="Social Hubs">
-                  <TextField.Root value="Detect from manager API" readOnly />
-                </Field>
-                <Field label="Deep Desert PvE">
-                  <Select.Root value="unknown" disabled>
-                    <Select.Trigger />
-                    <Select.Content>
-                      <Select.Item value="unknown">Detect from manager API</Select.Item>
-                    </Select.Content>
-                  </Select.Root>
-                </Field>
-                <Field label="Deep Desert PvP">
-                  <Select.Root value="unknown" disabled>
-                    <Select.Trigger />
-                    <Select.Content>
-                      <Select.Item value="unknown">Detect from manager API</Select.Item>
-                    </Select.Content>
-                  </Select.Root>
-                </Field>
-              </Grid>
-            </SetupSection>
-
-            <SetupSection icon={MixIcon} title="Network">
-              <Flex direction="column" gap="2">
-                <FormRow label="VM IP">
-                  <TextField.Root value={primaryIp || "No IPv4 reported"} readOnly />
-                </FormRow>
-                <FormRow label="Switch">
-                  <TextField.Root value={vm.switchNames.join(", ") || "No switch reported"} readOnly />
-                </FormRow>
-                <FormRow label="Reported IPs">
-                  <TextArea value={vm.ipv4Addresses.join("\n") || "No IPv4 reported"} readOnly />
-                </FormRow>
-              </Flex>
-              <Text as="p" size="2" color="gray">
-                IP changes are read-only here for now. Changing VM IP can interrupt SSH and Manager API access,
-                invalidate port-forwarding rules, and require player-facing IP settings to be rewritten.
-              </Text>
-            </SetupSection>
-
-            <SetupSection icon={GlobeIcon} title="Self-Host">
-              <FormRow label="Service Token">
-                <TextField.Root value="Stored only during setup; not displayed here" readOnly />
-              </FormRow>
-            </SetupSection>
-          </Flex>
-        </Box>
+        <Flex align="center" gap="2">
+          <Badge
+            color={
+              statusError
+                ? "red"
+                : battlegroupStarted
+                  ? "green"
+                  : battlegroupStartRequested
+                    ? "amber"
+                  : battlegroupStopped
+                    ? "gray"
+                    : server.phase === "Setup running"
+                      ? "amber"
+                      : "green"
+            }
+            variant="surface"
+          >
+            {statusError
+              ? "Check failed"
+              : status
+                ? battlegroupStarted
+                  ? "Started"
+                  : battlegroupStartRequested
+                    ? "Starting"
+                    : "Stopped"
+                : server.phase}
+          </Badge>
+          {onRemove ? (
+            <Button
+              type="button"
+              size="1"
+              color="red"
+              variant="soft"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemove();
+              }}
+            >
+              Forget
+            </Button>
+          ) : null}
+        </Flex>
       </Flex>
-    </Card>
+
+      <Grid columns={compact ? "2" : "5"} gap="3" mt="3">
+        <Metric label="Manager API" value={server.managerApiUrl || "pending"} />
+        <Metric label="Namespace" value={server.namespace || "pending"} />
+        <Metric label="BattleGroup" value={server.battlegroupName || "pending"} />
+        <Metric label="SSH User" value={server.user} />
+        <Metric label="Created" value={new Date(server.createdAt).toLocaleString()} />
+      </Grid>
+      <Box className="server-state" mt="3">
+        <Grid columns="2" gap="3">
+          <Metric
+            label="BattleGroup State"
+            value={
+              status
+                ? `${status.battlegroup.phase || "unknown"}; stop=${status.battlegroup.stop ? "true" : "false"}`
+                : statusError || "Checking"
+            }
+          />
+          <Metric
+            label="Director"
+            value={status ? status.battlegroup.directorPhase || "unknown" : statusError || "Checking"}
+          />
+          <Metric
+            label="Server Group"
+            value={status ? status.battlegroup.serverGroupPhase || "unknown" : statusError || "Checking"}
+          />
+          <Metric
+            label="Manager API Service"
+            value={
+              status
+                ? `${managerInstalled ? status.managerApi.serviceManager : "not installed"}; ${managerRunning ? "running" : "stopped"}`
+                : statusError || "Checking"
+            }
+          />
+        </Grid>
+        <Flex align="center" justify="between" gap="2" mt="3" wrap="wrap">
+          <Flex gap="2" wrap="wrap">
+            <Button size="1" variant="surface" disabled={busy} onClick={onRefresh}>
+              Refresh
+            </Button>
+            <Button
+              size="1"
+              variant="surface"
+              disabled={busy || !status || !battlegroupStopped}
+              onClick={onStartBattlegroup}
+            >
+              Start BattleGroup
+            </Button>
+            <Button
+              size="1"
+              variant="surface"
+              disabled={busy || !status || !battlegroupStartRequested}
+              onClick={onStopBattlegroup}
+            >
+              Stop BattleGroup
+            </Button>
+            <Button
+              size="1"
+              variant="surface"
+              disabled={busy || !status || !managerInstalled || managerRunning}
+              onClick={onStartManagerApi}
+            >
+              Start Manager API
+            </Button>
+            <Button
+              size="1"
+              variant="surface"
+              disabled={busy || !status || !managerInstalled || !managerRunning}
+              onClick={onStopManagerApi}
+            >
+              Stop Manager API
+            </Button>
+          </Flex>
+          {busyLabel ? (
+            <Text size="1" color="gray" className="mono">
+              {busyLabel}
+            </Text>
+          ) : null}
+        </Flex>
+      </Box>
+      <ManagerApiStatus probe={managerApiProbe} url={server.managerApiUrl} />
+    </Box>
   );
 }
 
@@ -1049,6 +1728,41 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
+function ManagerApiStatus({ probe, url }: { probe?: ManagerApiProbe; url: string }) {
+  const tone = !url ? "amber" : probe?.ok ? "green" : probe?.reachable === false ? "red" : "amber";
+  const label = !url
+    ? "No Manager API URL"
+    : !probe
+      ? "Checking Manager API"
+      : probe.ok
+        ? `Reachable${probe.apiVersion ? ` (${probe.apiVersion})` : ""}`
+        : probe.error || "Manager API is not healthy";
+  return (
+    <Box className="manager-api-status" mt="3">
+      <Flex align="center" justify="between" gap="3">
+        <Box>
+          <Text as="div" size="1" color="gray">
+            Manager API
+          </Text>
+          <Text as="div" size="2" className="mono metric-value">
+            {url || "pending"}
+          </Text>
+        </Box>
+        <Badge color={tone} variant="soft">
+          {label}
+        </Badge>
+      </Flex>
+      {probe?.ok ? (
+        <Grid columns="3" gap="3" mt="2">
+          <Metric label="Namespace" value={probe.namespace || "unknown"} />
+          <Metric label="Auth" value={probe.authEnabled ? "enabled" : "disabled"} />
+          <Metric label="Director" value={probe.directorConfigured ? "configured" : "auto-detect"} />
+        </Grid>
+      ) : null}
+    </Box>
+  );
+}
+
 function EmptyState({ title, body }: { title: string; body: string }) {
   return (
     <Box className="empty-state">
@@ -1072,7 +1786,10 @@ function InstallControls({
   environmentGate,
   setupRunning,
   vmDestinationHasVm,
+  remotePreflight,
+  remotePreflightStatus,
   update,
+  onRemotePreflight,
   onStart,
 }: {
   form: SetupForm;
@@ -1086,26 +1803,30 @@ function InstallControls({
   environmentGate: EnvironmentGate;
   setupRunning: boolean;
   vmDestinationHasVm: boolean;
+  remotePreflight: UbuntuSshPreflight | null;
+  remotePreflightStatus: DetectionState;
   update: <K extends keyof SetupForm>(key: K, value: SetupForm[K]) => void;
+  onRemotePreflight: () => void;
   onStart: () => void;
 }) {
   const deepDesertEnabled = layoutPreview.deepDesertTotal > 0;
   const warmOptions = zeroTo(layoutPreview.deepDesertTotal);
-  const requirements = setupRequirementStatus(
-    calculatedMemory,
-    form.diskGb,
-    form.processorCount,
-    form.vmDestination,
-    hostReadiness,
-    driveCandidates,
-  );
+  const requirements =
+    form.setupTarget === "ubuntu"
+      ? remoteSetupRequirementStatus(calculatedMemory, form.diskGb, form.processorCount, remotePreflight)
+      : setupRequirementStatus(
+          calculatedMemory,
+          form.diskGb,
+          form.processorCount,
+          form.vmDestination,
+          hostReadiness,
+          driveCandidates,
+        );
   const hasServiceToken = form.tokenSource.trim().length > 0;
-  const setupIssues = setupBlockingIssues(
-    environmentGate,
-    requirements,
-    hasServiceToken,
-    vmDestinationHasVm,
-  );
+  const setupIssues =
+    form.setupTarget === "ubuntu"
+      ? remoteSetupBlockingIssues(requirements, hasServiceToken, form, remotePreflight)
+      : setupBlockingIssues(environmentGate, requirements, hasServiceToken, vmDestinationHasVm, form);
   const canStart = setupIssues.length === 0;
 
   return (
@@ -1122,6 +1843,35 @@ function InstallControls({
 
         <Box className="setup-scroll">
           <Flex direction="column" gap="5" className={setupRunning ? "setup-controls is-disabled" : "setup-controls"}>
+            <SetupSection icon={DesktopIcon} title="Setup Target" className="setup-order-target">
+              <Grid columns="180px 1fr" gap="3" align="center">
+                <Text size="2" weight="medium">
+                  Target
+                </Text>
+                <Select.Root
+                  value={form.setupTarget}
+                  onValueChange={(value) => update("setupTarget", value as SetupTarget)}
+                >
+                  <Select.Trigger />
+                  <Select.Content>
+                    <Select.Item value="hyperv">Local Windows Hyper-V</Select.Item>
+                    <Select.Item value="ubuntu">Remote Ubuntu over SSH</Select.Item>
+                  </Select.Content>
+                </Select.Root>
+              </Grid>
+              {form.setupTarget === "ubuntu" ? (
+                <Box className="destructive-warning" mt="3">
+                  <Text as="div" size="2" weight="medium">
+                    Dedicated host strongly recommended
+                  </Text>
+                  <Text as="p" size="2" color="gray">
+                    Remote setup installs packages, creates users, configures k3s, downloads the server payload, and
+                    writes service files. Do not point it at a server used for other workloads.
+                  </Text>
+                </Box>
+              ) : null}
+            </SetupSection>
+
             <SetupSection icon={GlobeIcon} title="World" className="setup-order-world">
               <Grid columns="2" gap="3">
                 <Field label="World name">
@@ -1189,7 +1939,7 @@ function InstallControls({
                   >
                     <Select.Trigger />
                     <Select.Content>
-                      {zeroToFour.map((value) => (
+                      {zeroToOne.map((value) => (
                         <Select.Item key={value} value={value}>
                           {value} {value === "1" ? "instance" : "instances"}
                         </Select.Item>
@@ -1204,7 +1954,7 @@ function InstallControls({
                   >
                     <Select.Trigger />
                     <Select.Content>
-                      {zeroToFour.map((value) => (
+                      {zeroToOne.map((value) => (
                         <Select.Item key={value} value={value}>
                           {value} {value === "1" ? "instance" : "instances"}
                         </Select.Item>
@@ -1230,6 +1980,7 @@ function InstallControls({
               </Flex>
             </SetupSection>
 
+            {form.setupTarget === "hyperv" ? (
             <SetupSection icon={DesktopIcon} title="Host and VM" className="setup-order-vm">
               <Flex direction="column" gap="2">
                 <FormRow label="VM Name">
@@ -1326,7 +2077,114 @@ function InstallControls({
                 <Switch checked={form.enableSwap} onCheckedChange={(value) => update("enableSwap", value)} />
               </Flex>
             </SetupSection>
+            ) : (
+            <SetupSection icon={DesktopIcon} title="Remote Ubuntu Host" className="setup-order-vm">
+              <Flex direction="column" gap="2">
+                <FormRow label="Server IP">
+                  <TextField.Root
+                    placeholder="Remote public IP or hostname"
+                    value={form.remoteHost}
+                    onChange={(event) => update("remoteHost", event.target.value)}
+                  />
+                </FormRow>
+                <FormRow label="SSH User">
+                  <TextField.Root value={form.remoteUser} onChange={(event) => update("remoteUser", event.target.value)} />
+                </FormRow>
+                <FormRow label="Private Key">
+                  <Grid columns="1fr auto" gap="2">
+                    <TextField.Root
+                      placeholder="Choose SSH private key"
+                      value={form.remoteKeyPath}
+                      onChange={(event) => update("remoteKeyPath", event.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      variant="surface"
+                      onClick={async () => {
+                        const selected = await open({
+                          directory: false,
+                          multiple: false,
+                          title: "Choose SSH private key",
+                        });
+                        if (typeof selected === "string") {
+                          update("remoteKeyPath", selected);
+                        }
+                      }}
+                    >
+                      Choose
+                    </Button>
+                  </Grid>
+                </FormRow>
+                <FormRow label="Save Server">
+                  <Flex align="center" gap="3">
+                    <Checkbox
+                      checked={form.saveRemoteServer}
+                      onCheckedChange={(value) => update("saveRemoteServer", value === true)}
+                    />
+                    <Text size="2" color="gray">
+                      Add this remote Ubuntu server to Home when setup starts
+                    </Text>
+                  </Flex>
+                </FormRow>
+                <FormRow label="Disk Budget">
+                  <TextField.Root value={form.diskGb} onChange={(event) => update("diskGb", event.target.value)}>
+                    <TextField.Slot side="right">GB</TextField.Slot>
+                  </TextField.Root>
+                  <InlineRequirement ok={requirements.diskOk} text={`${requirements.diskRequired}; ${requirements.diskAvailable}`} />
+                </FormRow>
+                <FormRow label="CPU Check">
+                  <TextField.Root
+                    value={form.processorCount}
+                    onChange={(event) => update("processorCount", event.target.value)}
+                  />
+                  <InlineRequirement
+                    ok={requirements.processorOk}
+                    text={`${requirements.processorRequired}; ${requirements.processorAvailable}`}
+                  />
+                </FormRow>
+              </Flex>
 
+              <Box className="memory-calculation">
+                <Flex align="start" justify="between" gap="4">
+                  <Box>
+                    <Text as="div" size="2" weight="medium">
+                      Required memory
+                    </Text>
+                    <Text as="div" size="2" color="gray">
+                      Queried from the remote host during preflight.
+                    </Text>
+                  </Box>
+                  <Text size="7" weight="bold" color="bronze">
+                    {calculatedMemory.gb} GB
+                  </Text>
+                </Flex>
+                <InlineRequirement
+                  ok={requirements.memoryOk}
+                  text={`${requirements.memoryRequired}; ${requirements.memoryAvailable}`}
+                />
+                <Separator size="4" my="3" />
+                <Flex direction="column" gap="1">
+                  {calculatedMemory.lines.map((line) => (
+                    <Text key={line} size="2" color="gray">
+                      {line}
+                    </Text>
+                  ))}
+                </Flex>
+              </Box>
+
+              {remotePreflight ? <RemotePreflightSummary preflight={remotePreflight} /> : null}
+              <Button
+                type="button"
+                variant="surface"
+                onClick={onRemotePreflight}
+                disabled={!form.remoteHost.trim() || !form.remoteUser.trim() || !form.remoteKeyPath.trim()}
+              >
+                {remotePreflightStatus === "detecting" && remotePreflight ? "Refresh remote resources" : "Detect remote resources"}
+              </Button>
+            </SetupSection>
+            )}
+
+            {form.setupTarget === "hyperv" ? (
             <SetupSection icon={MixIcon} title="Network" className="setup-order-network">
               <Field label="Network mode">
                 <Select.Root
@@ -1417,6 +2275,39 @@ function InstallControls({
               </Field>
               {form.playerIpMode === "external" ? <PortForwardingNotice /> : null}
             </SetupSection>
+            ) : (
+            <SetupSection icon={MixIcon} title="Network" className="setup-order-network">
+              <Field label="Player-facing IP">
+                <Grid columns="160px 1fr" gap="3">
+                  <Select.Root
+                    value={form.playerIpMode}
+                    onValueChange={(value) => {
+                      const mode = value as PlayerIpMode;
+                      update("playerIpMode", mode);
+                      update(
+                        "playerIp",
+                        mode === "external"
+                          ? remotePreflight?.publicIp || form.remoteHost
+                          : remotePreflight?.ipv4Addresses[0] || form.remoteHost,
+                      );
+                    }}
+                  >
+                    <Select.Trigger />
+                    <Select.Content>
+                      <Select.Item value="local">Local IP</Select.Item>
+                      <Select.Item value="external">External IP</Select.Item>
+                    </Select.Content>
+                  </Select.Root>
+                  <TextField.Root
+                    placeholder="Address players use to connect"
+                    value={form.playerIp}
+                    onChange={(event) => update("playerIp", event.target.value)}
+                  />
+                </Grid>
+              </Field>
+              {form.playerIpMode === "external" ? <PortForwardingNotice /> : null}
+            </SetupSection>
+            )}
 
           </Flex>
         </Box>
@@ -1509,12 +2400,247 @@ function setupRunRequest(form: SetupForm, memoryGb: number): SetupRunRequest {
   };
 }
 
+function remoteSetupRunRequest(form: SetupForm): RemoteSetupRunRequest {
+  return {
+    host: form.remoteHost.trim(),
+    user: form.remoteUser.trim() || "root",
+    keyPath: form.remoteKeyPath.trim(),
+    playerIp: form.playerIp.trim(),
+    worldName: form.worldName,
+    region: form.region,
+    selfHostToken: form.tokenSource,
+    survivalInstances: Math.max(1, parsePositiveInt(form.survivalInstances)),
+    deepDesertPveInstances: parsePositiveInt(form.deepDesertPveInstances),
+    deepDesertPvpInstances: parsePositiveInt(form.deepDesertPvpInstances),
+    deepDesertWarmServers: parsePositiveInt(form.deepDesertWarmServers),
+    enableSwap: form.enableSwap,
+  };
+}
+
+function remoteServerDraftFromForm(form: SetupForm): RemoteServerRecord {
+  const host = form.remoteHost.trim();
+  const id = `ubuntu:${host || "pending"}:${Date.now()}`;
+  return {
+    id,
+    name: form.worldName.trim() || host || "Remote Ubuntu Server",
+    host,
+    user: form.remoteUser.trim() || "root",
+    keyPath: form.remoteKeyPath.trim(),
+    namespace: "",
+    battlegroupName: "",
+    worldUniqueName: "",
+    managerApiUrl: host ? `http://${host}:8787` : "",
+    phase: "Setup running",
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function remoteServerRecordFromSetup(
+  form: SetupForm,
+  result: RemoteSetupRunResult,
+  existingId?: string,
+): RemoteServerRecord {
+  const host = form.remoteHost.trim();
+  return {
+    id: existingId || `ubuntu:${host}:${result.namespace}:${result.battlegroupName}`,
+    name: form.worldName.trim() || result.battlegroupName,
+    host,
+    user: form.remoteUser.trim() || "root",
+    keyPath: form.remoteKeyPath.trim(),
+    namespace: result.namespace,
+    battlegroupName: result.battlegroupName,
+    worldUniqueName: result.worldUniqueName,
+    managerApiUrl: result.managerApiUrl || `http://${host}:8787`,
+    phase: "Ready",
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function remoteServerActionRequest(server: RemoteServerRecord) {
+  return {
+    host: server.host,
+    user: server.user || "root",
+    keyPath: server.keyPath,
+    namespace: server.namespace,
+    battlegroupName: server.battlegroupName,
+  };
+}
+
+function remoteManagerApiActionRequest(server: RemoteServerRecord) {
+  return {
+    host: server.host,
+    user: server.user || "root",
+    keyPath: server.keyPath,
+  };
+}
+
+function upsertRemoteServer(servers: RemoteServerRecord[], record: RemoteServerRecord): RemoteServerRecord[] {
+  const index = servers.findIndex((server) => server.id === record.id);
+  if (index === -1) {
+    return [...servers, record];
+  }
+  const next = [...servers];
+  next[index] = { ...next[index], ...record };
+  return next;
+}
+
+function mergeRemoteServers(
+  servers: RemoteServerRecord[],
+  records: RemoteServerRecord[],
+): RemoteServerRecord[] {
+  return records.reduce((next, record) => upsertRemoteServer(next, record), servers);
+}
+
+function readRemoteServers(): RemoteServerRecord[] {
+  const text = window.localStorage.getItem(remoteServersStorageKey);
+  if (!text) return [];
+  try {
+    const value = JSON.parse(text);
+    if (!Array.isArray(value)) return [];
+    return value.filter(isRemoteServerRecord);
+  } catch {
+    window.localStorage.removeItem(remoteServersStorageKey);
+    return [];
+  }
+}
+
+function persistRemoteServers(servers: RemoteServerRecord[]): RemoteServerRecord[] {
+  window.localStorage.setItem(remoteServersStorageKey, JSON.stringify(servers));
+  return servers;
+}
+
+function isRemoteServerRecord(value: unknown): value is RemoteServerRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<RemoteServerRecord>;
+  return typeof record.id === "string" && typeof record.host === "string" && typeof record.name === "string";
+}
+
+function managerApiKeyForVm(candidate: DuneVmCandidate): string {
+  return `vm:${candidate.vm.name}`;
+}
+
+function managerApiUrlForVm(candidate: DuneVmCandidate): string {
+  const ip = candidate.vm.ipv4Addresses[0];
+  return ip ? `http://${ip}:8787` : "";
+}
+
+function managerApiKeyForRemote(server: RemoteServerRecord): string {
+  return `remote:${server.id}`;
+}
+
+function managerApiProbeError(url: string, error: string): ManagerApiProbe {
+  return {
+    url,
+    reachable: false,
+    ok: false,
+    apiVersion: "",
+    namespace: "",
+    authEnabled: false,
+    directorConfigured: false,
+    error,
+  };
+}
+
+function isBattlegroupStarted(status: RemoteBattlegroupStatus): boolean {
+  return (
+    !status.stop &&
+    isStartedPhase(status.phase) &&
+    isStartedPhase(status.serverGroupPhase) &&
+    isDirectorReadyPhase(status.directorPhase)
+  );
+}
+
+function isStartedPhase(phase: string): boolean {
+  return ["running", "ready", "healthy", "available", "reconciling"].includes(
+    phase.trim().toLowerCase(),
+  );
+}
+
+function isDirectorReadyPhase(phase: string): boolean {
+  const normalized = phase.trim().toLowerCase();
+  return normalized.length === 0 || isStartedPhase(normalized);
+}
+
+function omitKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const { [key]: _removed, ...rest } = record;
+  return rest;
+}
+
 function rollbackRequestFromSetup(request: SetupRunRequest): RollbackRequest {
   return {
     vmName: request.vmName,
     vmDestination: request.vmDestination,
     switchName: request.switchName,
   };
+}
+
+function remoteSetupRequirementStatus(
+  calculatedMemory: CalculatedMemory,
+  diskGb: string,
+  processorCount: string,
+  preflight: UbuntuSshPreflight | null,
+): SetupRequirements {
+  const requiredMemoryBytes = calculatedMemory.gb * 1024 * 1024 * 1024;
+  const requiredProcessors = Math.max(0, parsePositiveInt(processorCount));
+  const requiredDiskGb = Math.max(0, parsePositiveInt(diskGb));
+  const requiredDiskBytes = requiredDiskGb * 1024 * 1024 * 1024;
+  const memoryAvailable = preflight?.availableMemoryBytes ?? 0;
+  const processorsAvailable = preflight?.logicalProcessorCount ?? 0;
+  const diskAvailable = preflight?.rootDiskAvailableBytes ?? 0;
+
+  return {
+    canContinue:
+      !!preflight &&
+      memoryAvailable >= requiredMemoryBytes &&
+      requiredProcessors > 0 &&
+      requiredProcessors <= processorsAvailable &&
+      diskAvailable >= requiredDiskBytes,
+    memoryOk: !!preflight && memoryAvailable >= requiredMemoryBytes,
+    processorOk: !!preflight && requiredProcessors > 0 && requiredProcessors <= processorsAvailable,
+    diskOk: !!preflight && diskAvailable >= requiredDiskBytes,
+    memoryRequired: `${calculatedMemory.gb} GB required`,
+    memoryAvailable: preflight ? `${formatGiB(memoryAvailable)} available` : "Run remote detection",
+    processorRequired: `${requiredProcessors || "A positive number of"} cores requested`,
+    processorAvailable: preflight ? `${processorsAvailable} logical available` : "Run remote detection",
+    diskRequired: `${requiredDiskGb} GB required`,
+    diskAvailable: preflight ? `${formatGiB(diskAvailable)} free on /` : "Run remote detection",
+  };
+}
+
+function remoteSetupBlockingIssues(
+  requirements: SetupRequirements,
+  hasServiceToken: boolean,
+  form: SetupForm,
+  preflight: UbuntuSshPreflight | null,
+): string[] {
+  const issues: string[] = [];
+  if (!form.remoteHost.trim()) issues.push("Remote server IP is required.");
+  if (!form.remoteUser.trim()) issues.push("SSH user is required.");
+  if (!form.remoteKeyPath.trim()) issues.push("SSH private key file is required.");
+  if (!preflight) issues.push("Run remote resource detection before setup.");
+  if (preflight && preflight.osId !== "ubuntu") issues.push("Remote host must be Ubuntu.");
+  if (preflight && preflight.uid !== 0 && !preflight.passwordlessSudo) {
+    issues.push("Remote setup requires root login or passwordless sudo.");
+  }
+  if (preflight && !preflight.systemdAvailable) issues.push("Remote host must support systemd.");
+  if (!requirements.memoryOk) {
+    issues.push(`Memory: ${requirements.memoryRequired}; ${requirements.memoryAvailable}.`);
+  }
+  if (!requirements.processorOk) {
+    issues.push(`CPU Cores: ${requirements.processorRequired}; ${requirements.processorAvailable}.`);
+  }
+  if (!requirements.diskOk) {
+    issues.push(`Disk: ${requirements.diskRequired}; ${requirements.diskAvailable}.`);
+  }
+  if (!form.playerIp.trim()) issues.push("Player-facing IP is required.");
+  if (parsePositiveInt(form.deepDesertWarmServers) > 0) {
+    issues.push("Warm Deep Desert Instances are not wired yet; set them to 0 for this build.");
+  }
+  if (deepDesertInstanceCount(form) > 1) {
+    issues.push("Only one Deep Desert instance is supported in this build.");
+  }
+  if (!hasServiceToken) issues.push("Self-Host Service Token is required.");
+  return issues;
 }
 
 function calculateRequiredMemory(form: SetupForm): CalculatedMemory {
@@ -1544,18 +2670,25 @@ function calculateRequiredMemory(form: SetupForm): CalculatedMemory {
 }
 
 function normalizeSetupForm(form: SetupForm): SetupForm {
-  const deepDesertInstances =
-    parsePositiveInt(form.deepDesertPveInstances) + parsePositiveInt(form.deepDesertPvpInstances);
+  const deepDesertPve = parsePositiveInt(form.deepDesertPveInstances);
+  const deepDesertPvp = parsePositiveInt(form.deepDesertPvpInstances);
+  const deepDesertInstances = deepDesertPve + deepDesertPvp;
   const warmServers = Math.min(parsePositiveInt(form.deepDesertWarmServers), deepDesertInstances);
   const normalized = {
     ...form,
     includeSocial: deepDesertInstances > 0 ? true : form.includeSocial,
+    deepDesertPveInstances: deepDesertPve > 0 ? "1" : "0",
+    deepDesertPvpInstances: deepDesertPve > 0 ? "0" : deepDesertPvp > 0 ? "1" : "0",
     deepDesertWarmServers: String(warmServers),
   };
   if (normalized.playerIpMode === "local" && normalized.staticIp && normalized.playerIp !== normalized.staticIp) {
     return { ...normalized, playerIp: normalized.staticIp };
   }
   return normalized;
+}
+
+function deepDesertInstanceCount(form: SetupForm): number {
+  return parsePositiveInt(form.deepDesertPveInstances) + parsePositiveInt(form.deepDesertPvpInstances);
 }
 
 function parsePositiveInt(value: string): number {
@@ -1747,6 +2880,7 @@ function setupBlockingIssues(
   requirements: SetupRequirements,
   hasServiceToken: boolean,
   vmDestinationHasVm: boolean,
+  form: SetupForm,
 ): string[] {
   const issues = [...gate.reasons];
   if (!requirements.memoryOk) {
@@ -1760,6 +2894,12 @@ function setupBlockingIssues(
   }
   if (vmDestinationHasVm) {
     issues.push("VM Location already contains VM files. Choose another folder.");
+  }
+  if (parsePositiveInt(form.deepDesertWarmServers) > 0) {
+    issues.push("Warm Deep Desert Instances are not wired yet; set them to 0 for this build.");
+  }
+  if (deepDesertInstanceCount(form) > 1) {
+    issues.push("Only one Deep Desert instance is supported in this build.");
   }
   if (!hasServiceToken) {
     issues.push("Self-Host Service Token is required.");
@@ -1802,6 +2942,26 @@ function InlineRequirement({ ok, text }: { ok: boolean; text: string }) {
   );
 }
 
+function RemotePreflightSummary({ preflight }: { preflight: UbuntuSshPreflight }) {
+  const rows = [
+    ["Host", `${preflight.hostname} (${preflight.osPrettyName})`],
+    ["Public IP", preflight.publicIp || "Not detected"],
+    ["Private IPs", preflight.ipv4Addresses.length ? preflight.ipv4Addresses.join(", ") : "None detected"],
+    ["Memory", `${formatGiB(preflight.availableMemoryBytes)} available of ${formatGiB(preflight.totalMemoryBytes)}`],
+    ["Disk", `${formatGiB(preflight.rootDiskAvailableBytes)} free of ${formatGiB(preflight.rootDiskTotalBytes)} on /`],
+    ["CPU", `${preflight.logicalProcessorCount} logical processors`],
+    ["Access", preflight.uid === 0 ? "root" : preflight.passwordlessSudo ? "passwordless sudo" : "limited"],
+    ["Existing tools", `SteamCMD ${preflight.steamcmdInstalled ? "present" : "missing"}, k3s ${preflight.k3sInstalled ? "present" : "missing"}`],
+  ];
+  return (
+    <Box className="info-card">
+      {rows.map(([label, value]) => (
+        <InfoRow key={label} label={label} value={value} tone="green" />
+      ))}
+    </Box>
+  );
+}
+
 function PortForwardingNotice() {
   return (
     <Box className="port-forwarding">
@@ -1832,6 +2992,7 @@ function PortForwardingNotice() {
 
 function logEntry(level: LogLevel, scope: string, message: string): LogRow {
   return {
+    id: nextLogRowId++,
     timestamp: new Date().toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
@@ -1841,6 +3002,16 @@ function logEntry(level: LogLevel, scope: string, message: string): LogRow {
     scope,
     message,
   };
+}
+
+function filterLogRows(rows: LogRow[], minimum: LogLevelFilter): LogRow[] {
+  const rank: Record<LogLevel, number> = {
+    debug: 0,
+    info: 1,
+    warn: 2,
+    error: 3,
+  };
+  return rows.filter((row) => rank[row.level] >= rank[minimum]);
 }
 
 function updateLabel(status: UpdateStatus, availableUpdate: Update | null, progress: string | null): string {
@@ -1863,6 +3034,15 @@ function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
   return "Operation failed.";
+}
+
+async function openFileDialog(title: string): Promise<string | null> {
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    title,
+  });
+  return typeof selected === "string" ? selected : null;
 }
 
 function formatBytes(bytes: number): string {
@@ -1927,14 +3107,22 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function LogWindow({ rows }: { rows: LogRow[] }) {
+function LogWindow({
+  rows,
+  level,
+  onLevelChange,
+}: {
+  rows: LogRow[];
+  level: LogLevelFilter;
+  onLevelChange: (level: LogLevelFilter) => void;
+}) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const body = bodyRef.current;
     if (!body) return;
-    const distanceFromBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
-    if (distanceFromBottom < 80) {
+    if (stickToBottomRef.current) {
       body.scrollTop = body.scrollHeight;
     }
   }, [rows]);
@@ -1942,11 +3130,33 @@ function LogWindow({ rows }: { rows: LogRow[] }) {
   return (
     <Card size="3" variant="surface" className="pane">
       <Flex direction="column" height="100%" minHeight="0">
-        <Box className="log-body" ref={bodyRef}>
+        <Flex align="center" justify="between" gap="3" mb="3">
+          <Text size="2" color="gray">
+            Showing {rows.length} entries
+          </Text>
+          <Select.Root value={level} onValueChange={(value) => onLevelChange(value as LogLevelFilter)}>
+            <Select.Trigger aria-label="Minimum log level" />
+            <Select.Content>
+              <Select.Item value="debug">Debug</Select.Item>
+              <Select.Item value="info">Info</Select.Item>
+              <Select.Item value="warn">Warn</Select.Item>
+              <Select.Item value="error">Error</Select.Item>
+            </Select.Content>
+          </Select.Root>
+        </Flex>
+        <Box
+          className="log-body"
+          ref={bodyRef}
+          onScroll={(event) => {
+            const body = event.currentTarget;
+            const distanceFromBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
+            stickToBottomRef.current = distanceFromBottom < 80;
+          }}
+        >
           <Flex direction="column" gap="0">
-            {rows.map((row, index) => (
+            {rows.map((row) => (
               <Grid
-                key={`${row.timestamp}-${row.scope}-${row.level}-${index}`}
+                key={row.id}
                 columns="96px 58px 62px 1fr"
                 gap="3"
                 align="center"
@@ -1997,6 +3207,113 @@ function RollbackDialog({
           <AlertDialog.Cancel disabled={rollbackRunning}>Keep artifacts</AlertDialog.Cancel>
           <AlertDialog.Action disabled={rollbackRunning} onClick={onRollback}>
             {rollbackRunning ? "Rolling back..." : "Rollback"}
+          </AlertDialog.Action>
+        </Flex>
+      </AlertDialog.Content>
+    </AlertDialog.Root>
+  );
+}
+
+function RemoteAttachDialog({
+  open,
+  form,
+  running,
+  onOpenChange,
+  onChange,
+  onAttach,
+}: {
+  open: boolean;
+  form: RemoteAttachForm;
+  running: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChange: (form: RemoteAttachForm) => void;
+  onAttach: () => void;
+}) {
+  const canAttach = form.host.trim().length > 0 && form.keyPath.trim().length > 0 && !running;
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Content maxWidth="520px">
+        <Dialog.Title>Add Remote Ubuntu Server</Dialog.Title>
+        <Dialog.Description size="2" color="gray">
+          Connect over SSH and detect existing Dune battlegroups. This does not provision or modify the server.
+        </Dialog.Description>
+        <Flex direction="column" gap="3" mt="4">
+          <Field label="Host or IP">
+            <TextField.Root
+              placeholder="159.69.146.71"
+              value={form.host}
+              onChange={(event) => onChange({ ...form, host: event.target.value })}
+            />
+          </Field>
+          <Field label="Private Key">
+            <Grid columns="1fr auto" gap="2">
+              <TextField.Root
+                placeholder="Choose SSH private key"
+                value={form.keyPath}
+                onChange={(event) => onChange({ ...form, keyPath: event.target.value })}
+              />
+              <Button
+                type="button"
+                variant="surface"
+                disabled={running}
+                onClick={async () => {
+                  const selected = await openFileDialog("Choose SSH private key");
+                  if (selected) onChange({ ...form, keyPath: selected });
+                }}
+              >
+                Choose
+              </Button>
+            </Grid>
+          </Field>
+        </Flex>
+        <Flex gap="3" justify="end" mt="5">
+          <Dialog.Close>
+            <Button variant="soft" color="gray" disabled={running}>
+              Cancel
+            </Button>
+          </Dialog.Close>
+          <Button disabled={!canAttach} onClick={onAttach}>
+            {running ? "Detecting..." : "Detect and Add"}
+          </Button>
+        </Flex>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+function RemoveRemoteServerDialog({
+  server,
+  onOpenChange,
+  onRemove,
+}: {
+  server: RemoteServerRecord | null;
+  onOpenChange: (open: boolean) => void;
+  onRemove: (server: RemoteServerRecord) => void;
+}) {
+  return (
+    <AlertDialog.Root open={!!server} onOpenChange={onOpenChange}>
+      <AlertDialog.Content maxWidth="520px">
+        <AlertDialog.Title>Forget Remote Server</AlertDialog.Title>
+        <AlertDialog.Description size="2" color="gray">
+          This only removes the saved server entry from this app. The remote Ubuntu host, Manager API, and Dune
+          battlegroup will not be changed.
+        </AlertDialog.Description>
+        {server ? (
+          <Box className="info-card" mt="4">
+            <InfoRow label="Host" value={server.host} tone="amber" />
+            <InfoRow label="Battlegroup" value={server.battlegroupName || "Setup pending"} tone="amber" />
+          </Box>
+        ) : null}
+        <Flex gap="3" justify="end" mt="5">
+          <AlertDialog.Cancel>
+            <Button variant="soft" color="gray">
+              Cancel
+            </Button>
+          </AlertDialog.Cancel>
+          <AlertDialog.Action>
+            <Button color="red" onClick={() => server && onRemove(server)}>
+              Forget Server
+            </Button>
           </AlertDialog.Action>
         </Flex>
       </AlertDialog.Content>

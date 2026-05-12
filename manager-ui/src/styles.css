@@ -1,0 +1,242 @@
+:root {
+  color: #f3eadc;
+  background: #12100d;
+  font-family: Aptos, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid rgba(214, 175, 105, 0.36);
+  border-radius: 8px;
+  padding: 0.65rem 0.9rem;
+  color: #f5e8d0;
+  background: linear-gradient(180deg, rgba(160, 125, 72, 0.42), rgba(63, 52, 38, 0.78));
+}
+
+button:hover:not(:disabled) {
+  border-color: rgba(239, 198, 126, 0.7);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+input,
+select {
+  width: 100%;
+  border: 1px solid rgba(214, 175, 105, 0.24);
+  border-radius: 8px;
+  padding: 0.7rem 0.8rem;
+  color: #f3eadc;
+  background: rgba(18, 16, 13, 0.72);
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+.boot,
+.login {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 2rem;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(181, 137, 71, 0.25), transparent 34%),
+    #12100d;
+}
+
+.login-panel,
+.panel,
+.metric-card {
+  border: 1px solid rgba(214, 175, 105, 0.24);
+  border-radius: 10px;
+  background:
+    linear-gradient(145deg, rgba(171, 124, 58, 0.14), transparent 44%),
+    rgba(30, 27, 22, 0.92);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+}
+
+.login-panel {
+  width: min(460px, 100%);
+  padding: 2rem;
+}
+
+.login-panel form,
+.form {
+  display: grid;
+  gap: 1rem;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+aside {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  border-right: 1px solid rgba(214, 175, 105, 0.2);
+  background: #181510;
+}
+
+aside button {
+  text-align: left;
+  text-transform: capitalize;
+  background: transparent;
+}
+
+aside button.active {
+  background: rgba(183, 133, 59, 0.26);
+}
+
+.brand {
+  display: grid;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.brand span,
+.eyebrow,
+.metric-card span,
+.row span {
+  color: #b9ac96;
+  font-size: 0.82rem;
+}
+
+.content {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  padding: 1.25rem;
+  overflow: auto;
+}
+
+header,
+.actions,
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.metric-card,
+.panel {
+  padding: 1rem;
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 1.55rem;
+}
+
+.rows {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.row {
+  min-height: 2.4rem;
+  border-bottom: 1px solid rgba(214, 175, 105, 0.12);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.good {
+  color: #91d18b;
+}
+
+.danger {
+  border-color: rgba(220, 95, 79, 0.45);
+  background: rgba(104, 30, 25, 0.8);
+}
+
+.ghost {
+  margin-top: auto;
+}
+
+.error,
+.warn {
+  border: 1px solid rgba(220, 95, 79, 0.35);
+  border-radius: 8px;
+  padding: 0.75rem;
+  color: #ffd1ca;
+  background: rgba(97, 32, 26, 0.5);
+}
+
+.warn {
+  border-color: rgba(229, 179, 84, 0.35);
+  color: #ffe3a9;
+  background: rgba(105, 78, 29, 0.45);
+}
+
+.logs {
+  min-height: 260px;
+  max-height: 52vh;
+  overflow: auto;
+  border-radius: 8px;
+  padding: 0.8rem;
+  color: #d9d1c4;
+  background: #0c0b09;
+  font-family: "Cascadia Mono", ui-monospace, monospace;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  aside {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    flex-direction: row;
+    overflow: auto;
+    border-right: 0;
+    border-bottom: 1px solid rgba(214, 175, 105, 0.2);
+  }
+
+  .brand {
+    min-width: 180px;
+  }
+
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

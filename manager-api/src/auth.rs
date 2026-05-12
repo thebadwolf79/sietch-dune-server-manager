@@ -19,9 +19,13 @@ pub fn authorize(
         .or_else(|| cookie_token(headers));
 
     match bearer {
-        Some(actual) if constant_time_eq(actual.as_bytes(), expected.as_bytes()) => Ok(()),
+        Some(actual) if token_matches(expected, actual) => Ok(()),
         _ => Err(ApiError::unauthorized()),
     }
+}
+
+pub fn token_matches(expected: &str, actual: &str) -> bool {
+    constant_time_eq(actual.as_bytes(), expected.as_bytes())
 }
 
 fn cookie_token(headers: &HeaderMap) -> Option<&str> {

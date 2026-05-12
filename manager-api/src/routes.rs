@@ -5,8 +5,8 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         OriginalUri, Path, Query, State,
     },
-    http::{HeaderMap, Method},
-    response::Response,
+    http::{header, HeaderMap, Method, StatusCode},
+    response::{IntoResponse, Response},
     routing::{any, get, post},
     Json, Router,
 };
@@ -15,7 +15,8 @@ use k8s_openapi::api::core::v1::Pod;
 use kube::{api::LogParams, Api};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{env, sync::Arc, time::Duration};
+use std::{env, path::PathBuf, sync::Arc, time::Duration};
+use tokio::fs;
 use tokio::time;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{error, info};
@@ -40,7 +41,11 @@ const MANAGER_API_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/api/auth/login", post(auth_login))
+        .route("/api/auth/logout", post(auth_logout))
+        .route("/api/auth/session", get(auth_session))
         .route("/api/status", get(status))
+        .route("/api/overview", get(overview))
         .route("/api/manager/self", get(manager_self))
         .route("/api/battlegroups", get(battlegroups))
         .route(
@@ -62,6 +67,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/api/battlegroups/:namespace/:name/restart",
             post(restart_battlegroup),
+        )
+        .route(
+            "/api/battlegroups/:namespace/:name/layout",
+            get(battlegroup_layout).put(update_battlegroup_layout),
+        )
+        .route(
+            "/api/battlegroups/:namespace/:name/settings",
+            axum::routing::patch(update_battlegroup_settings),
         )
         .route("/api/pods", get(pods))
         .route("/api/services", get(services))
@@ -99,11 +112,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/Stylesheet/*path", any(director_stylesheet_proxy))
         .route("/Icons/*path", any(director_icons_proxy))
         .route("/api/telemetry", get(telemetry))
-        .with_state(state)
         .merge(
             SwaggerUi::new("/swagger-ui")
                 .external_url_unchecked("/openapi.json", openapi::document()),
         )
+        .route("/", get(spa_index))
+        .route("/assets/*path", get(spa_asset))
+        .fallback(spa_fallback)
+        .with_state(state)
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
 }
@@ -123,6 +139,56 @@ async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
         auth_enabled: state.token.is_some(),
         director_configured: state.director_base_url.is_some(),
     })
+}
+
+async fn auth_login(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<LoginRequest>,
+) -> Result<Response, ApiError> {
+    let token = request.token.trim();
+    if token.is_empty() {
+        return Err(ApiError::unauthorized());
+    }
+    if let Some(expected) = state.token.as_deref() {
+        if !crate::auth::token_matches(expected, token) {
+            return Err(ApiError::unauthorized());
+        }
+    }
+    Ok((
+        [(header::SET_COOKIE, auth_cookie(token, 86_400))],
+        Json(SessionResponse {
+            authenticated: true,
+            api_version: MANAGER_API_VERSION,
+            namespace: state.namespace.clone(),
+            auth_enabled: state.token.is_some(),
+        }),
+    )
+        .into_response())
+}
+
+async fn auth_logout() -> Response {
+    (
+        [(header::SET_COOKIE, auth_cookie("", 0))],
+        Json(json!({ "ok": true })),
+    )
+        .into_response()
+}
+
+async fn auth_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<SessionResponse>, ApiError> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(SessionResponse {
+        authenticated: true,
+        api_version: MANAGER_API_VERSION,
+        namespace: state.namespace.clone(),
+        auth_enabled: state.token.is_some(),
+    }))
+}
+
+fn auth_cookie(token: &str, max_age_seconds: u64) -> String {
+    format!("dune_manager_token={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age_seconds}")
 }
 
 async fn status(
@@ -149,6 +215,50 @@ async fn status(
         battlegroups,
         pods,
         services,
+    }))
+}
+
+async fn overview(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<OverviewResponse> {
+    authorize(&state, &headers, None)?;
+    let (battlegroups, pods, services, director_base) = tokio::join!(
+        list_battlegroups(&state),
+        list_pods(&state),
+        list_services(&state),
+        resolve_director_base_url(&state),
+    );
+    let battlegroups = battlegroups?;
+    let pods = pods?;
+    let services = services?;
+    let director_available = director_base.is_ok();
+    let (players, maps) = if director_available {
+        match director_get_json(&state, "/v0/battlegroup").await {
+            Ok(value) => (
+                Some(director_player_summary(&value)),
+                director_map_summaries(&value),
+            ),
+            Err(_) => (None, Vec::new()),
+        }
+    } else {
+        (None, Vec::new())
+    };
+    Ok(Json(OverviewResponse {
+        status: StatusResponse {
+            api_version: MANAGER_API_VERSION,
+            namespace: state.namespace.clone(),
+            auth_enabled: state.token.is_some(),
+            director_configured: director_available,
+            battlegroups: battlegroups.len(),
+            pods: pods.len(),
+            services: services.len(),
+        },
+        battlegroups,
+        workloads: WorkloadsResponse { pods, services },
+        director_available,
+        players,
+        maps,
     }))
 }
 
@@ -245,6 +355,52 @@ async fn restart_battlegroup(
     patch_battlegroup_stop(&state, &namespace, &name, false).await?;
     let item = get_battlegroup_object(&state, &name).await?;
     Ok(Json(battlegroup_detail_from_object(&state.namespace, item)))
+}
+
+async fn battlegroup_layout(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((namespace, name)): Path<(String, String)>,
+) -> ApiResponse<WorldLayout> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(
+        get_battlegroup_layout(&state, &namespace, &name).await?,
+    ))
+}
+
+async fn update_battlegroup_layout(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((namespace, name)): Path<(String, String)>,
+    Json(request): Json<WorldLayoutUpdateRequest>,
+) -> ApiResponse<WorldLayoutUpdateResponse> {
+    authorize(&state, &headers, None)?;
+    audit_action(
+        "battlegroup.layout.update",
+        Some(&format!("{namespace}/{name}")),
+    );
+    Ok(Json(
+        patch_battlegroup_layout(&state, &namespace, &name, request).await?,
+    ))
+}
+
+async fn update_battlegroup_settings(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((namespace, name)): Path<(String, String)>,
+    Json(request): Json<BattleGroupSettingsRequest>,
+) -> ApiResponse<BattleGroupDetail> {
+    authorize(&state, &headers, None)?;
+    if let Some(title) = request.title {
+        audit_action(
+            "battlegroup.settings.title",
+            Some(&format!("{namespace}/{name}")),
+        );
+        return Ok(Json(
+            patch_battlegroup_title(&state, &namespace, &name, &title).await?,
+        ));
+    }
+    Err(ApiError::bad_request("no supported settings were provided"))
 }
 
 async fn pods(
@@ -701,6 +857,81 @@ async fn telemetry_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
         }
+    }
+}
+
+async fn spa_index(State(state): State<Arc<AppState>>) -> Response {
+    serve_ui_file(state.ui_dir.join("index.html"), "text/html; charset=utf-8").await
+}
+
+async fn spa_asset(State(state): State<Arc<AppState>>, Path(path): Path<String>) -> Response {
+    match safe_ui_path(&state.ui_dir.join("assets"), &path) {
+        Some(path) => serve_ui_file(path.clone(), content_type_for(&path)).await,
+        None => (StatusCode::BAD_REQUEST, "invalid asset path").into_response(),
+    }
+}
+
+async fn spa_fallback(
+    State(state): State<Arc<AppState>>,
+    OriginalUri(uri): OriginalUri,
+) -> Response {
+    let path = uri.path();
+    if path.starts_with("/api/")
+        || path == "/health"
+        || path == "/openapi.json"
+        || path.starts_with("/swagger-ui")
+        || path.starts_with("/director")
+        || path.starts_with("/v0/")
+        || path.starts_with("/Script/")
+        || path.starts_with("/Stylesheet/")
+        || path.starts_with("/Icons/")
+    {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    }
+    serve_ui_file(state.ui_dir.join("index.html"), "text/html; charset=utf-8").await
+}
+
+async fn serve_ui_file(path: PathBuf, content_type: &'static str) -> Response {
+    match fs::read(&path).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, content_type)], bytes).into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            format!(
+                "Manager UI has not been built or installed at {}",
+                path.display()
+            ),
+        )
+            .into_response(),
+    }
+}
+
+fn safe_ui_path(root: &std::path::Path, path: &str) -> Option<PathBuf> {
+    if path.is_empty()
+        || path.contains("..")
+        || path.contains('\\')
+        || !path
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '-' | '_'))
+    {
+        return None;
+    }
+    Some(root.join(path))
+}
+
+fn content_type_for(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+    {
+        "css" => "text/css; charset=utf-8",
+        "js" => "text/javascript; charset=utf-8",
+        "json" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "ico" => "image/x-icon",
+        "html" => "text/html; charset=utf-8",
+        _ => "application/octet-stream",
     }
 }
 
