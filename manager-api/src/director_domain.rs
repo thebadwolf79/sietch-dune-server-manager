@@ -1,11 +1,11 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{
     clock::now_unix_ms,
     errors::ApiError,
     models::{
-        DirectorMapSummary, DirectorPathCapability, DirectorPlayerLists, DirectorPlayerSummary,
-        DirectorServerSummary,
+        DirectorMapConfigDetail, DirectorMapSummary, DirectorPathCapability, DirectorPlayerLists,
+        DirectorPlayerSummary, DirectorServerSummary,
     },
 };
 
@@ -161,6 +161,57 @@ pub fn director_map_summaries(value: &Value) -> Vec<DirectorMapSummary> {
     maps
 }
 
+pub fn director_map_config_detail(
+    value: &Value,
+    map_name: &str,
+) -> Result<DirectorMapConfigDetail, ApiError> {
+    for (collection, kind, config_key) in [
+        ("singleServerMaps", "Single", "SingleServerConfig"),
+        ("dimensionMaps", "Dimension", "DimensionServerGroupConfig"),
+        (
+            "instancedMaps",
+            "Instanced",
+            "ClassicalInstancingGroupConfig",
+        ),
+    ] {
+        let Some(map) = value
+            .get(collection)
+            .and_then(Value::as_object)
+            .and_then(|items| items.get(map_name))
+        else {
+            continue;
+        };
+
+        let effective_config = map.get("cfg").cloned().unwrap_or(Value::Null);
+        let web_override_config = map.get("webOverrideCfg").cloned().unwrap_or(Value::Null);
+        let servers = director_server_values(map)
+            .into_iter()
+            .map(director_server_summary)
+            .collect::<Vec<_>>();
+        let update_config = if web_override_config.is_null() {
+            update_config_template(kind, &effective_config, &servers)
+        } else {
+            pascalize_override(kind, &web_override_config)
+        };
+
+        return Ok(DirectorMapConfigDetail {
+            name: map_name.to_string(),
+            kind: kind.to_string(),
+            config_key: config_key.to_string(),
+            has_override: !web_override_config.is_null(),
+            effective_config,
+            web_override_config,
+            update_payload_template: json!({
+                "MapName": map_name,
+                config_key: update_config,
+            }),
+            servers,
+        });
+    }
+
+    Err(ApiError::not_found("Director map was not found"))
+}
+
 fn player_id_from_value(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => Some(text.clone()),
@@ -283,6 +334,100 @@ fn value_i64(value: &Value, key: &str) -> i64 {
     value.get(key).and_then(Value::as_i64).unwrap_or_default()
 }
 
+fn update_config_template(kind: &str, config: &Value, servers: &[DirectorServerSummary]) -> Value {
+    match kind {
+        "Single" => json!({
+            "PlayerHardCap": config_value(config, "playerHardCap"),
+            "ShouldUpdatePlayerCountOnFls": config_value(config, "shouldUpdatePlayerCountOnFls"),
+        }),
+        "Dimension" => {
+            let dimension_overrides = servers
+                .iter()
+                .filter_map(|server| server.dimension_index)
+                .map(|dimension| {
+                    (
+                        dimension.to_string(),
+                        json!({
+                            "PlayerHardCap": null,
+                            "ForceLock": null,
+                            "DauCap": null,
+                            "WauCap": null,
+                            "HbsCap": null,
+                        }),
+                    )
+                })
+                .collect::<serde_json::Map<_, _>>();
+            json!({
+                "EnforceSameHomeDimensionForAll": config_value(config, "enforceSameHomeDimensionForAll"),
+                "PlayerHardCap": config_value(config, "playerHardCap"),
+                "ShouldUpdatePlayerCountOnFls": config_value(config, "shouldUpdatePlayerCountOnFls"),
+                "DimensionOverrides": Value::Object(dimension_overrides),
+            })
+        }
+        "Instanced" => json!({
+            "PlayerHardCap": config_value(config, "playerHardCap"),
+            "ShouldUpdatePlayerCountOnFls": config_value(config, "shouldUpdatePlayerCountOnFls"),
+            "EnableAutomaticInstanceScaling": config_value(config, "enableAutomaticInstanceScaling"),
+            "InstanceScalingThrottlingSeconds": config_value(config, "instanceScalingThrottlingSeconds"),
+            "MinServers": config_value(config, "minServers"),
+            "NumExtraServers": config_value(config, "numExtraServers"),
+        }),
+        _ => Value::Null,
+    }
+}
+
+fn pascalize_override(kind: &str, value: &Value) -> Value {
+    match kind {
+        "Single" => json!({
+            "PlayerHardCap": config_value(value, "playerHardCap"),
+            "ShouldUpdatePlayerCountOnFls": config_value(value, "shouldUpdatePlayerCountOnFls"),
+        }),
+        "Dimension" => json!({
+            "EnforceSameHomeDimensionForAll": config_value(value, "enforceSameHomeDimensionForAll"),
+            "PlayerHardCap": config_value(value, "playerHardCap"),
+            "ShouldUpdatePlayerCountOnFls": config_value(value, "shouldUpdatePlayerCountOnFls"),
+            "DimensionOverrides": pascalize_dimension_overrides(value.get("dimensionOverrides")),
+        }),
+        "Instanced" => json!({
+            "PlayerHardCap": config_value(value, "playerHardCap"),
+            "ShouldUpdatePlayerCountOnFls": config_value(value, "shouldUpdatePlayerCountOnFls"),
+            "EnableAutomaticInstanceScaling": config_value(value, "enableAutomaticInstanceScaling"),
+            "InstanceScalingThrottlingSeconds": config_value(value, "instanceScalingThrottlingSeconds"),
+            "MinServers": config_value(value, "minServers"),
+            "NumExtraServers": config_value(value, "numExtraServers"),
+        }),
+        _ => value.clone(),
+    }
+}
+
+fn pascalize_dimension_overrides(value: Option<&Value>) -> Value {
+    let Some(items) = value.and_then(Value::as_object) else {
+        return Value::Null;
+    };
+
+    Value::Object(
+        items
+            .iter()
+            .map(|(dimension, override_value)| {
+                (
+                    dimension.clone(),
+                    json!({
+                        "PlayerHardCap": config_value(override_value, "playerHardCap"),
+                        "ForceLock": config_value(override_value, "forceLock"),
+                        "DauCap": config_value(override_value, "dauCap"),
+                        "WauCap": config_value(override_value, "wauCap"),
+                        "HbsCap": config_value(override_value, "hbsCap"),
+                    }),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn config_value(config: &Value, key: &str) -> Value {
+    config.get(key).cloned().unwrap_or(Value::Null)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,6 +502,46 @@ mod tests {
                 "nested".to_string(),
                 "plain".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn builds_map_config_detail_with_update_template() {
+        let value = json!({
+            "dimensionMaps": {
+                "Survival_1": {
+                    "cfg": {
+                        "enforceSameHomeDimensionForAll": true,
+                        "playerHardCap": 40,
+                        "shouldUpdatePlayerCountOnFls": false
+                    },
+                    "webOverrideCfg": null,
+                    "serversByDimension": {
+                        "0": {
+                            "partition": {
+                                "label": "Abbir",
+                                "partitionId": 1,
+                                "dimensionIndex": 0
+                            },
+                            "status": 3
+                        }
+                    }
+                }
+            }
+        });
+
+        let detail = director_map_config_detail(&value, "Survival_1").unwrap();
+
+        assert_eq!(detail.kind, "Dimension");
+        assert_eq!(detail.config_key, "DimensionServerGroupConfig");
+        assert_eq!(
+            detail.update_payload_template["DimensionServerGroupConfig"]["PlayerHardCap"],
+            json!(40)
+        );
+        assert_eq!(
+            detail.update_payload_template["DimensionServerGroupConfig"]["DimensionOverrides"]["0"]
+                ["ForceLock"],
+            Value::Null
         );
     }
 }

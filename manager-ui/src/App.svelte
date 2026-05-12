@@ -4,6 +4,7 @@
   import {
     ApiError,
     api,
+    type DirectorMapConfigDetail,
     type LogsResponse,
     type Overview,
     type Session,
@@ -35,6 +36,9 @@
   let settingsNotice = "";
   let directorFlsDraft = "";
   let directorTransferDraft = "";
+  let selectedDirectorMap = "";
+  let directorMapDetail: DirectorMapConfigDetail | null = null;
+  let directorMapDraft = "";
   let directorNotice = "";
   let directorBusy = false;
 
@@ -91,6 +95,7 @@
     try {
       overview = await api<Overview>("/api/overview");
       if (!selectedPod && overview.workloads.pods[0]) selectedPod = overview.workloads.pods[0].name;
+      if (!selectedDirectorMap && overview.maps[0]) selectedDirectorMap = overview.maps[0].name;
       if (battlegroup) {
         titleDraft = titleDraft || battlegroup.title;
         layout = await api<WorldLayout>(`/api/battlegroups/${battlegroup.namespace}/${battlegroup.name}/layout`);
@@ -208,6 +213,8 @@
       ]);
       directorFlsDraft = formatJson(fls);
       directorTransferDraft = formatJson(transfer);
+      const mapName = selectedDirectorMap || overview?.maps[0]?.name;
+      if (mapName) await loadDirectorMapOverride(mapName, false);
     } catch (err) {
       error = message(err);
     } finally {
@@ -246,6 +253,65 @@
       await api(path, { method: "DELETE" });
       directorNotice = "Director override cleared.";
       await loadDirectorConfig();
+    } catch (err) {
+      error = message(err);
+    } finally {
+      directorBusy = false;
+    }
+  }
+
+  async function loadDirectorMapOverride(mapName = selectedDirectorMap, manageBusy = true) {
+    if (!mapName) return;
+    if (manageBusy) {
+      directorBusy = true;
+      directorNotice = "";
+      error = "";
+    }
+    selectedDirectorMap = mapName;
+    try {
+      directorMapDetail = await api<DirectorMapConfigDetail>(
+        `/api/director/config/maps/${encodeURIComponent(mapName)}/override`,
+      );
+      directorMapDraft = formatJson(directorMapDetail.updatePayloadTemplate);
+    } catch (err) {
+      error = message(err);
+    } finally {
+      if (manageBusy) directorBusy = false;
+    }
+  }
+
+  async function saveDirectorMapOverride() {
+    if (!directorMapDetail) return;
+    directorBusy = true;
+    directorNotice = "";
+    error = "";
+    try {
+      await api(`/api/director/config/maps/${encodeURIComponent(directorMapDetail.name)}/override`, {
+        method: "POST",
+        body: JSON.stringify(parseJsonDraft(directorMapDraft)),
+      });
+      directorNotice = "Map override saved.";
+      await loadDirectorMapOverride(directorMapDetail.name, false);
+      await refresh(false);
+    } catch (err) {
+      error = message(err);
+    } finally {
+      directorBusy = false;
+    }
+  }
+
+  async function clearDirectorMapOverride() {
+    if (!directorMapDetail) return;
+    directorBusy = true;
+    directorNotice = "";
+    error = "";
+    try {
+      await api(`/api/director/config/maps/${encodeURIComponent(directorMapDetail.name)}/override`, {
+        method: "DELETE",
+      });
+      directorNotice = "Map override cleared.";
+      await loadDirectorMapOverride(directorMapDetail.name, false);
+      await refresh(false);
     } catch (err) {
       error = message(err);
     } finally {
@@ -430,6 +496,54 @@
               <textarea bind:value={directorTransferDraft} spellcheck="false" placeholder="Load config to edit JSON"></textarea>
             </section>
           </div>
+          <section class="map-editor">
+            <div class="editor-title">
+              <div>
+                <h3>Map override</h3>
+                <p class="muted">Tune per-map caps, scaling, and dimension overrides through Director.</p>
+              </div>
+              <div class="actions">
+                <button disabled={directorBusy || !directorMapDetail} on:click={saveDirectorMapOverride}>Save</button>
+                <button disabled={directorBusy || !directorMapDetail} class="danger" on:click={clearDirectorMapOverride}>Clear</button>
+              </div>
+            </div>
+            <div class="map-select-row">
+              <select bind:value={selectedDirectorMap} on:change={() => loadDirectorMapOverride(selectedDirectorMap)}>
+                {#each overview?.maps ?? [] as map}
+                  <option value={map.name}>{map.name} - {map.kind}{map.hasOverride ? " - override" : ""}</option>
+                {/each}
+              </select>
+              <button disabled={directorBusy || !selectedDirectorMap} on:click={() => loadDirectorMapOverride()}>
+                {directorBusy ? "Working..." : "Load map"}
+              </button>
+            </div>
+            {#if directorMapDetail}
+              <div class="rows compact">
+                <div class="row"><span>Map</span><b>{directorMapDetail.name}</b></div>
+                <div class="row"><span>Kind</span><b>{directorMapDetail.kind}</b></div>
+                <div class="row"><span>Override</span><b>{directorMapDetail.hasOverride ? "Active" : "None"}</b></div>
+                <div class="row"><span>Payload key</span><b>{directorMapDetail.configKey}</b></div>
+              </div>
+              <textarea bind:value={directorMapDraft} spellcheck="false" placeholder="Load a map to edit override JSON"></textarea>
+              <details>
+                <summary>Effective config</summary>
+                <pre class="json-preview">{formatJson(directorMapDetail.effectiveConfig)}</pre>
+              </details>
+              <details>
+                <summary>Runtime servers <span>{directorMapDetail.servers.length}</span></summary>
+                <div class="rows compact">
+                  {#each directorMapDetail.servers as server}
+                    <div class="row">
+                      <span>{server.label || "Unnamed"} dim {server.dimensionIndex ?? "?"}</span>
+                      <b>{server.status} - {server.players} players</b>
+                    </div>
+                  {/each}
+                </div>
+              </details>
+            {:else}
+              <p class="muted">Load a map to edit its Director override payload.</p>
+            {/if}
+          </section>
         </section>
       {:else if page === "players"}
         <div class="grid">

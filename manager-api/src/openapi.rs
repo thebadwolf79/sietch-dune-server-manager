@@ -221,6 +221,11 @@ pub fn document() -> Value {
             "/api/director/config/fls": director_config_path("FLS report settings"),
             "/api/director/config/character-transfer": director_config_path("Character transfer settings"),
             "/api/director/config/maps/{mapName}/override": {
+                "get": {
+                    "summary": "Get a Director map override editor payload",
+                    "parameters": [map_parameter()],
+                    "responses": { "200": { "description": "Map config detail" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                },
                 "post": {
                     "summary": "Update a Director map override",
                     "parameters": [map_parameter()],

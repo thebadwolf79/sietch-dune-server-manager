@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::Value;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +48,19 @@ pub struct DirectorMapSummary {
     pub players: i64,
     pub online: i64,
     pub queued: i64,
+    pub servers: Vec<DirectorServerSummary>,
+    pub has_override: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectorMapConfigDetail {
+    pub name: String,
+    pub kind: String,
+    pub config_key: String,
+    pub effective_config: Value,
+    pub web_override_config: Value,
+    pub update_payload_template: Value,
     pub servers: Vec<DirectorServerSummary>,
     pub has_override: bool,
 }

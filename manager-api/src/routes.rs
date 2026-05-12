@@ -111,7 +111,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/director/config/maps/:map_name/override",
-            post(director_update_map_override).delete(director_clear_map_override),
+            get(director_map_override)
+                .post(director_update_map_override)
+                .delete(director_clear_map_override),
         )
         .route("/api/director/v0/*path", any(director_api_proxy))
         .route("/v0/*path", any(director_root_api_proxy))
@@ -570,6 +572,17 @@ async fn director_maps(
     authorize(&state, &headers, None)?;
     let value = director_get_json(&state, "/v0/battlegroup").await?;
     Ok(Json(director_map_summaries(&value)))
+}
+
+async fn director_map_override(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(map_name): Path<String>,
+) -> ApiResponse<DirectorMapConfigDetail> {
+    authorize(&state, &headers, None)?;
+    validate_director_map_name(&map_name)?;
+    let value = director_get_json(&state, "/v0/battlegroup").await?;
+    Ok(Json(director_map_config_detail(&value, &map_name)?))
 }
 
 async fn director_fls_config(

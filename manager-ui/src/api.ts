@@ -47,7 +47,31 @@ export type DirectorMap = {
   players: number;
   online: number;
   queued: number;
-  servers: Array<{ label: string; players: number; status: string }>;
+  servers: DirectorServer[];
+  hasOverride: boolean;
+};
+
+export type DirectorServer = {
+  label: string;
+  serverId: string;
+  partitionId?: number;
+  dimensionIndex?: number;
+  players: number;
+  online: number;
+  queued?: number;
+  status: string;
+  heartbeatSecondsAgo?: number;
+  hasOverride: boolean;
+};
+
+export type DirectorMapConfigDetail = {
+  name: string;
+  kind: string;
+  configKey: string;
+  effectiveConfig: unknown;
+  webOverrideConfig: unknown;
+  updatePayloadTemplate: unknown;
+  servers: DirectorServer[];
   hasOverride: boolean;
 };
 

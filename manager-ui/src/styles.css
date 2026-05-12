@@ -239,6 +239,31 @@ header,
   margin-bottom: 0;
 }
 
+.map-editor {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(214, 187, 133, 0.16);
+}
+
+.map-select-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.json-preview {
+  max-height: 18rem;
+  overflow: auto;
+  padding: 0.75rem;
+  border: 1px solid rgba(214, 187, 133, 0.14);
+  border-radius: 0.75rem;
+  background: rgba(10, 8, 6, 0.62);
+  color: #d8c9ad;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .metric-card,
 .panel {
   padding: 1rem;
