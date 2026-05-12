@@ -221,6 +221,48 @@ header,
   color: #b9aa91;
 }
 
+.structured-editor {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(214, 187, 133, 0.14);
+  border-radius: 0.75rem;
+  background: rgba(8, 7, 6, 0.3);
+}
+
+.structured-editor .editor-title {
+  margin-bottom: 0;
+}
+
+.setting-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+  padding: 0 0.85rem 0.85rem;
+}
+
+.setting-grid label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.setting-grid label span {
+  color: #b9aa91;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setting-note {
+  margin: 0;
+  padding: 0 0.85rem 0.85rem;
+}
+
+.compact-preview {
+  opacity: 0.82;
+}
+
 .editor-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -395,7 +437,8 @@ header,
   }
 
   .player-columns,
-  .editor-grid {
+  .editor-grid,
+  .setting-grid {
     grid-template-columns: 1fr;
   }
 }

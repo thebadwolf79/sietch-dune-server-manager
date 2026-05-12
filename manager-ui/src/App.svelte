@@ -7,6 +7,7 @@
     api,
     type DirectorMapConfigDetail,
     type DirectorPlayerLists,
+    type IniSection,
     type LogsResponse,
     type Overview,
     type Session,
@@ -43,6 +44,7 @@
   let settingsDraft = "";
   let settingsSaving = false;
   let settingsNotice = "";
+  let settingsFilter = "";
   let directorFlsDraft = "";
   let directorTransferDraft = "";
   let selectedDirectorMap = "";
@@ -63,6 +65,8 @@
   $: pods = overview?.workloads.pods ?? [];
   $: selectedPodSummary = pods.find((pod) => pod.name === selectedPod);
   $: battlegroupStopped = battlegroup?.stop ?? true;
+  $: settingsDraftSections = settingsDraft ? parseIniSections(settingsDraft) : [];
+  $: visibleSettingsSections = filterIniSections(settingsDraftSections, settingsFilter).slice(0, 16);
   $: if (selectedContainer && selectedPodSummary && !selectedPodSummary.containers.includes(selectedContainer)) {
     selectedContainer = "";
   }
@@ -361,6 +365,55 @@
     }
   }
 
+  function updateSettingsEntry(line: number, value: string) {
+    const lines = settingsDraft.split(/\r?\n/);
+    const index = line - 1;
+    const current = lines[index] ?? "";
+    const match = current.match(/^(\s*[^=]+?)(\s*=\s*)(.*)$/);
+    if (!match) return;
+    lines[index] = `${match[1]}${match[2]}${value}`;
+    settingsDraft = lines.join("\n");
+  }
+
+  function parseIniSections(content: string): IniSection[] {
+    const sections: IniSection[] = [];
+    let current: IniSection = { name: "Global", entries: [] };
+    content.split(/\r?\n/).forEach((line, index) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("[") && trimmed.endsWith("]") && trimmed.length > 2) {
+        if (current.entries.length || current.name !== "Global") sections.push(current);
+        current = { name: trimmed.slice(1, -1).trim(), entries: [] };
+        return;
+      }
+      if (!trimmed || trimmed.startsWith(";") || trimmed.startsWith("#")) return;
+      const splitAt = trimmed.indexOf("=");
+      if (splitAt < 0) return;
+      current.entries.push({
+        key: trimmed.slice(0, splitAt).trim().replace(/^\+/, ""),
+        value: trimmed.slice(splitAt + 1).trim(),
+        line: index + 1,
+      });
+    });
+    if (current.entries.length || current.name !== "Global") sections.push(current);
+    return sections;
+  }
+
+  function filterIniSections(sections: IniSection[], filter: string): IniSection[] {
+    const text = filter.trim().toLowerCase();
+    if (!text) return sections;
+    return sections
+      .map((section) => ({
+        ...section,
+        entries: section.entries.filter(
+          (entry) =>
+            section.name.toLowerCase().includes(text) ||
+            entry.key.toLowerCase().includes(text) ||
+            entry.value.toLowerCase().includes(text),
+        ),
+      }))
+      .filter((section) => section.entries.length);
+  }
+
   async function loadDirectorConfig() {
     directorBusy = true;
     directorNotice = "";
@@ -619,11 +672,36 @@
             <div class="rows compact">
               <div class="row"><span>Path</span><b>{settingsFile.path}</b></div>
               <div class="row"><span>Size</span><b>{settingsFile.sizeBytes} bytes</b></div>
-              <div class="row"><span>Sections</span><b>{settingsFile.sections.length}</b></div>
+              <div class="row"><span>Sections</span><b>{settingsDraftSections.length}</b></div>
+            </div>
+            <div class="structured-editor">
+              <div class="editor-title">
+                <div>
+                  <h3>Structured editor</h3>
+                  <p class="muted">Edit values safely while preserving comments, ordering, duplicate keys, and raw syntax.</p>
+                </div>
+                <input bind:value={settingsFilter} placeholder="Filter section, key, or value" />
+              </div>
+              <div class="section-list">
+                {#each visibleSettingsSections as section}
+                  <details open>
+                    <summary>{section.name} <span>{section.entries.length}</span></summary>
+                    <div class="setting-grid">
+                      {#each section.entries.slice(0, 32) as entry}
+                        <label>
+                          <span>{entry.key}</span>
+                          <input value={entry.value} on:input={(event) => updateSettingsEntry(entry.line, event.currentTarget.value)} />
+                        </label>
+                      {/each}
+                    </div>
+                    {#if section.entries.length > 32}<p class="muted setting-note">Showing first 32 matching entries in this section.</p>{/if}
+                  </details>
+                {/each}
+              </div>
             </div>
             <textarea bind:value={settingsDraft} spellcheck="false"></textarea>
             {#if settingsNotice}<p class="warn">{settingsNotice}</p>{/if}
-            <div class="section-list">
+            <div class="section-list compact-preview">
               {#each settingsFile.sections.slice(0, 12) as section}
                 <details>
                   <summary>{section.name} <span>{section.entries.length}</span></summary>
