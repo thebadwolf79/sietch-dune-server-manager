@@ -9,7 +9,7 @@ use tokio::io::AsyncReadExt;
 use crate::{
     errors::ApiError,
     models::{
-        DatabaseGuildProfile, DatabaseGuildSummary, DatabasePlayerProfile,
+        DatabaseActivityEvent, DatabaseGuildProfile, DatabaseGuildSummary, DatabasePlayerProfile,
         DatabasePlayerStatistics, DatabasePlayerSummary, DatabasePlayerTagRequest,
         DatabasePlayerTagsUpdate, DatabaseWorldPartition, DatabaseWorldPartitionUpdateRequest,
         DatabaseWorldStatistics,
@@ -24,6 +24,7 @@ const PLAYER_DIRECTORY_QUERY: &str = "select coalesce(json_agg(t), '[]'::json) f
 const GUILD_DIRECTORY_QUERY: &str = "select coalesce(json_agg(t), '[]'::json) from (select g.guild_id, g.guild_name, g.guild_description, g.guild_faction, count(gm.player_id) as member_count from dune.guilds g left join dune.guild_members gm on gm.guild_id = g.guild_id group by g.guild_id, g.guild_name, g.guild_description, g.guild_faction order by member_count desc, g.guild_name asc limit 250) t";
 const PLAYER_STATISTICS_QUERY: &str = "select json_build_object('total_accounts', (select count(*) from dune.accounts), 'total_players', (select count(*) from dune.player_state), 'guilds', (select count(*) from dune.guilds), 'guild_members', (select count(*) from dune.guild_members), 'tagged_players', (select count(distinct account_id) from dune.player_tags), 'online_statuses', (select coalesce(json_agg(s), '[]'::json) from (select coalesce(online_status::text, 'Unknown') as name, count(*) as count from dune.player_state group by 1 order by count desc, name asc) s), 'life_states', (select coalesce(json_agg(s), '[]'::json) from (select coalesce(life_state::text, 'Unknown') as name, count(*) as count from dune.player_state group by 1 order by count desc, name asc) s), 'recent_players', (select coalesce(json_agg(r), '[]'::json) from (select account_id, character_name, online_status::text as online_status, last_login_time::text as last_login_time from dune.player_state order by last_login_time desc nulls last, character_name asc nulls last limit 8) r))";
 const WORLD_STATISTICS_QUERY: &str = "select json_build_object('buildings', (select count(*) from dune.building_instances), 'vehicles', (select count(*) from dune.vehicles), 'base_backups', (select count(*) from dune.base_backups), 'landclaim_segments', (select count(*) from dune.landclaim_segments), 'respawn_locations', (select count(*) from dune.player_respawn_locations), 'exchange_orders', (select count(*) from dune.dune_exchange_orders), 'exchange_sell_orders', (select count(*) from dune.dune_exchange_sell_orders), 'event_log_entries', (select count(*) from dune.event_log), 'game_events', (select count(*) from dune.game_events))";
+const ACTIVITY_QUERY: &str = "select coalesce(json_agg(t), '[]'::json) from (select * from ((select 'event_log' as source, event_time::text as event_time, category::text as category, message::text as message, function_name::text as function_name, null::text as map, partition_id, null::bigint as actor_id, null::integer as event_type, null::boolean as player_facing from dune.event_log order by event_time desc limit 50) union all (select 'game_events' as source, universe_time::text as event_time, null::text as category, null::text as message, null::text as function_name, map, partition_id, actor_id, event_type, player_facing_event as player_facing from dune.game_events order by universe_time desc limit 50)) combined order by event_time desc nulls last limit 100) t";
 
 pub async fn list_world_partitions(state: &AppState) -> Result<Vec<DatabaseWorldPartition>> {
     let stdout = exec_database_psql_json(state, WORLD_PARTITIONS_QUERY).await?;
@@ -77,6 +78,13 @@ pub async fn database_world_statistics(state: &AppState) -> Result<DatabaseWorld
 
     serde_json::from_str(stdout.trim())
         .with_context(|| "failed to parse database world statistics output".to_string())
+}
+
+pub async fn database_activity_events(state: &AppState) -> Result<Vec<DatabaseActivityEvent>> {
+    let stdout = exec_database_psql_json(state, ACTIVITY_QUERY).await?;
+
+    serde_json::from_str(stdout.trim())
+        .with_context(|| "failed to parse database activity feed output".to_string())
 }
 
 pub async fn database_player_profile(
@@ -367,6 +375,17 @@ mod tests {
         assert_eq!(statistics.buildings, 5);
         assert_eq!(statistics.exchange_orders, 4);
         assert_eq!(statistics.game_events, 8);
+    }
+
+    #[test]
+    fn parses_database_activity_events() {
+        let json = r#"[{"source":"event_log","event_time":"2026-05-12 10:00:00+00","category":"Server","message":"Started","function_name":"Bootstrap","map":null,"partition_id":8,"actor_id":null,"event_type":null,"player_facing":null},{"source":"game_events","event_time":"2026-05-12 10:01:00+00","category":null,"message":null,"function_name":null,"map":"HaggaBasin","partition_id":1,"actor_id":42,"event_type":3,"player_facing":true}]"#;
+
+        let events: Vec<DatabaseActivityEvent> = serde_json::from_str(json).unwrap();
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].source, "event_log");
+        assert_eq!(events[1].map.as_deref(), Some("HaggaBasin"));
     }
 
     #[test]

@@ -6,6 +6,8 @@
     ApiError,
     api,
     type BattlegroupSummary,
+    type DatabaseActivityEvent,
+    type DatabaseActivityResponse,
     type DatabaseGuildProfileResponse,
     type DatabaseGuildSummary,
     type DatabaseGuildsResponse,
@@ -169,6 +171,8 @@
   let playerStatisticsBusy = false;
   let worldStatistics: DatabaseWorldStatisticsResponse | null = null;
   let worldStatisticsBusy = false;
+  let databaseActivity: DatabaseActivityResponse | null = null;
+  let databaseActivityBusy = false;
   let workloadFilter = "";
   let events: EventSummary[] = [];
   let eventsBusy = false;
@@ -366,6 +370,7 @@
       if (!databaseMaintenance) void loadDatabaseMaintenance(false);
       if (!playerStatistics) void loadPlayerStatistics(false);
       if (!worldStatistics) void loadWorldStatistics(false);
+      if (!databaseActivity) void loadDatabaseActivity(false);
       if (!events.length && !eventsBusy) void loadEvents(false);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -735,6 +740,18 @@
       if (showError) error = message(err);
     } finally {
       worldStatisticsBusy = false;
+    }
+  }
+
+  async function loadDatabaseActivity(showError = true) {
+    databaseActivityBusy = true;
+    if (showError) error = "";
+    try {
+      databaseActivity = await api<DatabaseActivityResponse>("/api/database/activity");
+    } catch (err) {
+      if (showError) error = message(err);
+    } finally {
+      databaseActivityBusy = false;
     }
   }
 
@@ -1575,6 +1592,27 @@
     return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString();
   }
 
+  function databaseActivityTitle(event: DatabaseActivityEvent) {
+    if (event.source === "game_events") {
+      return event.eventType === undefined || event.eventType === null
+        ? "Game event"
+        : `Game event ${event.eventType}`;
+    }
+    return event.message || event.category || event.functionName || "Server event";
+  }
+
+  function databaseActivityDetail(event: DatabaseActivityEvent) {
+    const parts = [
+      event.category,
+      event.functionName,
+      event.map,
+      event.partitionId !== undefined && event.partitionId !== null ? `partition ${event.partitionId}` : "",
+      event.actorId !== undefined && event.actorId !== null ? `actor ${event.actorId}` : "",
+      event.playerFacing ? "player-facing" : "",
+    ].filter(Boolean);
+    return parts.join(" · ") || event.source;
+  }
+
   function formatDuration(totalSeconds: number) {
     const seconds = Math.max(0, Math.floor(totalSeconds));
     const hours = Math.floor(seconds / 3600);
@@ -1917,6 +1955,34 @@
               </div>
             {:else}
               <p class="muted">World statistics are loading.</p>
+            {/if}
+          </section>
+          <section class="panel activity-panel">
+            <div class="split-heading">
+              <div>
+                <h2>World Activity</h2>
+                <p class="muted">Recent gameplay and server events from controlled database views.</p>
+              </div>
+              <button class="inline" disabled={databaseActivityBusy} on:click={() => loadDatabaseActivity()}>
+                {databaseActivityBusy ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+            {#if databaseActivity?.events.length}
+              <div class="activity-list">
+                {#each databaseActivity.events.slice(0, 8) as item}
+                  <article>
+                    <div>
+                      <strong>{databaseActivityTitle(item)}</strong>
+                      <span>{databaseActivityDetail(item)}</span>
+                    </div>
+                    <b>{formatEventTime(item.eventTime)}</b>
+                  </article>
+                {/each}
+              </div>
+            {:else if databaseActivity}
+              <p class="muted">No recent gameplay events are recorded yet.</p>
+            {:else}
+              <p class="muted">World activity is loading.</p>
             {/if}
           </section>
         </section>

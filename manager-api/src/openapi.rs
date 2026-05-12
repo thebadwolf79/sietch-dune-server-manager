@@ -284,6 +284,12 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "World and gameplay statistics" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/database/activity": {
+                "get": {
+                    "summary": "Read a controlled gameplay activity feed from selected game database event tables",
+                    "responses": { "200": { "description": "Normalized gameplay activity events" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
             "/api/database-maintenance": {
                 "get": {
                     "summary": "List database backup, restore, migration, schedule, and operation resources",

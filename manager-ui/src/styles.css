@@ -360,6 +360,38 @@ header,
   gap: 0.55rem;
 }
 
+.activity-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.activity-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem;
+  align-items: start;
+  padding: 0.75rem;
+  border: 1px solid rgba(214, 187, 133, 0.13);
+  border-radius: 8px;
+  background: rgba(8, 7, 6, 0.3);
+}
+
+.activity-list strong,
+.activity-list span,
+.activity-list b {
+  display: block;
+}
+
+.activity-list span {
+  color: #b9aa91;
+  font-size: 0.78rem;
+}
+
+.activity-list b {
+  color: #f2d492;
+  white-space: nowrap;
+}
+
 .map-list article {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2016,6 +2048,7 @@ header,
   .quick-actions,
   .dashboard-metrics,
   .issue-list article,
+  .activity-list article,
   .server-command-grid,
   .server-status-grid,
   .manager-summary {

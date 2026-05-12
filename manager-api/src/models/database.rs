@@ -186,6 +186,28 @@ pub struct DatabaseWorldStatisticsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+pub struct DatabaseActivityEvent {
+    pub source: String,
+    pub event_time: Option<String>,
+    pub category: Option<String>,
+    pub message: Option<String>,
+    pub function_name: Option<String>,
+    pub map: Option<String>,
+    pub partition_id: Option<i64>,
+    pub actor_id: Option<i64>,
+    pub event_type: Option<i32>,
+    pub player_facing: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseActivityResponse {
+    pub namespace: String,
+    pub events: Vec<DatabaseActivityEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct DatabasePlayerFaction {
     pub faction_id: i16,
     pub changed_at: Option<String>,

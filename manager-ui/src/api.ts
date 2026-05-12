@@ -280,6 +280,24 @@ export type DatabaseWorldStatisticsResponse = {
   statistics: DatabaseWorldStatistics;
 };
 
+export type DatabaseActivityEvent = {
+  source: string;
+  eventTime?: string;
+  category?: string;
+  message?: string;
+  functionName?: string;
+  map?: string;
+  partitionId?: number;
+  actorId?: number;
+  eventType?: number;
+  playerFacing?: boolean;
+};
+
+export type DatabaseActivityResponse = {
+  namespace: string;
+  events: DatabaseActivityEvent[];
+};
+
 export type PlayerSummary = {
   active: number;
   online: number;
