@@ -675,6 +675,56 @@ header,
   padding: 0.45rem 0.65rem;
 }
 
+.events-panel {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(214, 187, 133, 0.16);
+}
+
+.event-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.event-list article {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) auto;
+  gap: 0.85rem;
+  align-items: start;
+  padding: 0.72rem 0.8rem;
+  border: 1px solid rgba(214, 187, 133, 0.13);
+  border-radius: 8px;
+  background: rgba(8, 7, 6, 0.3);
+}
+
+.event-list article.warning {
+  border-color: rgba(220, 95, 79, 0.34);
+  background: rgba(97, 32, 26, 0.26);
+}
+
+.event-list strong,
+.event-list span {
+  display: block;
+}
+
+.event-list span {
+  color: #b9aa91;
+  font-size: 0.8rem;
+}
+
+.event-list p {
+  margin: 0;
+  color: #d9d1c4;
+  font-size: 0.86rem;
+}
+
+.event-list b {
+  color: #e9c37e;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .metric-card,
 .panel {
   padding: 1rem;
@@ -785,7 +835,8 @@ header,
   .layout-summary,
   .setting-grid,
   .workload-grid,
-  .workload-card {
+  .workload-card,
+  .event-list article {
     grid-template-columns: 1fr;
   }
 

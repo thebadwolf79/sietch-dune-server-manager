@@ -9,6 +9,8 @@
     type DirectorMapConfigDetail,
     type DirectorPathCapability,
     type DirectorPlayerLists,
+    type EventsResponse,
+    type EventSummary,
     type IniSection,
     type LogExportResponse,
     type LogsResponse,
@@ -93,6 +95,8 @@
   let playersBusy = false;
   let playersFull = false;
   let workloadFilter = "";
+  let events: EventSummary[] = [];
+  let eventsBusy = false;
   let managerSelf: ManagerSelf | null = null;
   let managerLogs: ManagerLogResponse | null = null;
   let managerBusy = "";
@@ -106,6 +110,7 @@
   $: visibleSettingsSections = filterIniSections(settingsDraftSections, settingsFilter).slice(0, 16);
   $: visiblePods = filterPods(pods, workloadFilter);
   $: visibleServices = filterServices(services, workloadFilter);
+  $: visibleEvents = filterEvents(events, workloadFilter);
   $: layoutMemory = layout ? estimateLayoutMemory(layout) : null;
   $: layoutDeepDesertMode = layout
     ? layout.deepDesertPvpInstances > 0
@@ -453,6 +458,19 @@
     }
   }
 
+  async function loadEvents() {
+    eventsBusy = true;
+    error = "";
+    try {
+      const result = await api<EventsResponse>("/api/events?tail=120");
+      events = result.events;
+    } catch (err) {
+      error = message(err);
+    } finally {
+      eventsBusy = false;
+    }
+  }
+
   async function loadSettingsFile(file = selectedSettingsFile) {
     error = "";
     settingsNotice = "";
@@ -668,6 +686,17 @@
     );
   }
 
+  function filterEvents(items: EventSummary[], filter: string) {
+    const text = filter.trim().toLowerCase();
+    if (!text) return items;
+    return items.filter((event) =>
+      [event.eventType, event.reason, event.message, event.involvedKind, event.involvedName]
+        .join(" ")
+        .toLowerCase()
+        .includes(text),
+    );
+  }
+
   function servicePorts(service: (typeof services)[number]) {
     return service.ports
       .map((port) => {
@@ -873,6 +902,12 @@
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
   }
 
+  function formatEventTime(value?: string) {
+    if (!value) return "No timestamp";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString();
+  }
+
   function formatDuration(totalSeconds: number) {
     const seconds = Math.max(0, Math.floor(totalSeconds));
     const hours = Math.floor(seconds / 3600);
@@ -1010,6 +1045,33 @@
               </div>
             </section>
           </div>
+          <section class="events-panel">
+            <div class="editor-title">
+              <div>
+                <h3>Cluster Events</h3>
+                <p class="muted">Recent Kubernetes scheduling, readiness, image, and warning events for this server.</p>
+              </div>
+              <button disabled={eventsBusy} on:click={loadEvents}>
+                {eventsBusy ? "Loading..." : events.length ? "Refresh events" : "Load events"}
+              </button>
+            </div>
+            {#if visibleEvents.length}
+              <div class="event-list">
+                {#each visibleEvents.slice(0, 80) as event}
+                  <article class:warning={event.eventType === "Warning"}>
+                    <div>
+                      <strong>{event.reason || event.eventType || "Event"}</strong>
+                      <span>{event.involvedKind}/{event.involvedName} · {formatEventTime(event.lastSeen || event.firstSeen)}</span>
+                    </div>
+                    <p>{event.message}</p>
+                    {#if event.count > 1}<b>{event.count}x</b>{/if}
+                  </article>
+                {/each}
+              </div>
+            {:else}
+              <p class="muted">Load events to inspect recent cluster activity. The workload filter also applies here.</p>
+            {/if}
+          </section>
         </section>
       {:else if page === "battlegroup"}
         <section class="panel">

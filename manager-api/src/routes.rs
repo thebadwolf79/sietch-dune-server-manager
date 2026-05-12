@@ -83,6 +83,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/pods", get(pods))
         .route("/api/services", get(services))
         .route("/api/workloads", get(workloads))
+        .route("/api/events", get(events))
         .route("/api/logs", get(logs))
         .route("/api/logs/export", get(logs_export))
         .route("/api/logs/stream", get(logs_stream))
@@ -566,6 +567,19 @@ async fn workloads(
     authorize(&state, &headers, None)?;
     let (pods, services) = tokio::try_join!(list_pods(&state), list_services(&state))?;
     Ok(Json(WorkloadsResponse { pods, services }))
+}
+
+async fn events(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<LogExportQuery>,
+) -> ApiResponse<EventsResponse> {
+    authorize(&state, &headers, None)?;
+    let limit = query.tail.unwrap_or(80).clamp(1, 500) as usize;
+    Ok(Json(EventsResponse {
+        namespace: state.namespace.clone(),
+        events: list_events(&state, limit).await?,
+    }))
 }
 
 async fn logs(

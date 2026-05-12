@@ -38,3 +38,24 @@ pub struct WorkloadsResponse {
     pub pods: Vec<PodSummary>,
     pub services: Vec<ServiceSummary>,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventSummary {
+    pub name: String,
+    pub event_type: String,
+    pub reason: String,
+    pub message: String,
+    pub involved_kind: String,
+    pub involved_name: String,
+    pub count: i32,
+    pub first_seen: Option<String>,
+    pub last_seen: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsResponse {
+    pub namespace: String,
+    pub events: Vec<EventSummary>,
+}

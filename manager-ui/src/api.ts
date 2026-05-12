@@ -46,6 +46,23 @@ export type Workloads = {
   services: ServiceSummary[];
 };
 
+export type EventSummary = {
+  name: string;
+  eventType: string;
+  reason: string;
+  message: string;
+  involvedKind: string;
+  involvedName: string;
+  count: number;
+  firstSeen?: string;
+  lastSeen?: string;
+};
+
+export type EventsResponse = {
+  namespace: string;
+  events: EventSummary[];
+};
+
 export type PlayerSummary = {
   active: number;
   online: number;

@@ -173,6 +173,15 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Workload summary" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/events": {
+                "get": {
+                    "summary": "List recent Kubernetes namespace events",
+                    "parameters": [
+                        { "name": "tail", "in": "query", "required": false, "schema": { "type": "integer", "minimum": 1, "maximum": 500 } }
+                    ],
+                    "responses": { "200": { "description": "Recent event timeline" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
             "/api/logs": {
                 "get": {
                     "summary": "Read pod logs",

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use k8s_openapi::{
-    api::core::v1::{Pod, Service},
+    api::core::v1::{Event, Pod, Service},
     apimachinery::pkg::util::intstr::IntOrString,
 };
 use kube::{
@@ -14,8 +14,9 @@ use crate::{
     config_files_domain::{read_deep_desert_pvp_partition_ids, write_deep_desert_pvp_settings},
     errors::ApiError,
     models::{
-        BattleGroupDetail, BattleGroupSummary, PodSummary, ServerSetSummary, ServicePortSummary,
-        ServiceSummary, WorldLayout, WorldLayoutUpdateRequest, WorldLayoutUpdateResponse,
+        BattleGroupDetail, BattleGroupSummary, EventSummary, PodSummary, ServerSetSummary,
+        ServicePortSummary, ServiceSummary, WorldLayout, WorldLayoutUpdateRequest,
+        WorldLayoutUpdateResponse,
     },
     state::AppState,
     validation::{validate_kube_name, validate_namespace},
@@ -96,6 +97,27 @@ pub async fn list_services(state: &AppState) -> Result<Vec<ServiceSummary>> {
             }
         })
         .collect())
+}
+
+pub async fn list_events(state: &AppState, limit: usize) -> Result<Vec<EventSummary>> {
+    let events: Api<Event> = Api::namespaced(state.client.clone(), &state.namespace);
+    let list = events
+        .list(&ListParams::default())
+        .await
+        .context("failed to list events")?;
+
+    let mut events = list
+        .items
+        .into_iter()
+        .map(event_summary)
+        .collect::<Vec<_>>();
+    events.sort_by(|left, right| {
+        event_sort_key(right)
+            .cmp(&event_sort_key(left))
+            .then_with(|| right.name.cmp(&left.name))
+    });
+    events.truncate(limit);
+    Ok(events)
 }
 
 pub async fn list_battlegroups(state: &AppState) -> Result<Vec<BattleGroupSummary>> {
@@ -360,6 +382,33 @@ fn battlegroup_resource() -> ApiResource {
         kind: "BattleGroup".to_string(),
         plural: "battlegroups".to_string(),
     }
+}
+
+fn event_summary(event: Event) -> EventSummary {
+    let involved = event.involved_object;
+    EventSummary {
+        name: event.metadata.name.unwrap_or_default(),
+        event_type: event.type_.unwrap_or_default(),
+        reason: event.reason.unwrap_or_default(),
+        message: event.message.unwrap_or_default(),
+        involved_kind: involved.kind.unwrap_or_default(),
+        involved_name: involved.name.unwrap_or_default(),
+        count: event.count.unwrap_or(1),
+        first_seen: event.first_timestamp.map(|time| time.0.to_rfc3339()),
+        last_seen: event
+            .last_timestamp
+            .map(|time| time.0.to_rfc3339())
+            .or_else(|| event.event_time.map(|time| time.0.to_rfc3339())),
+    }
+}
+
+fn event_sort_key(event: &EventSummary) -> String {
+    event
+        .last_seen
+        .as_deref()
+        .or(event.first_seen.as_deref())
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn int_or_string_to_string(value: IntOrString) -> String {
