@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import Card from "./Card.svelte";
+  import PlayerBucket from "./PlayerBucket.svelte";
   import {
     ApiError,
     api,
     type DirectorMapConfigDetail,
+    type DirectorPlayerLists,
     type LogsResponse,
     type Overview,
     type Session,
@@ -30,6 +32,7 @@
   let selectedContainer = "";
   let logLines: string[] = [];
   let titleDraft = "";
+  let lifecycleBusy = "";
   let settingsCatalog: UserSettingsCatalog | null = null;
   let selectedSettingsFile = "game";
   let settingsFile: UserSettingsFile | null = null;
@@ -48,10 +51,14 @@
   let telemetrySnapshots = 0;
   let telemetryLastAt = "";
   let telemetryError = "";
+  let playerLists: DirectorPlayerLists | null = null;
+  let playersBusy = false;
+  let playersFull = false;
 
   $: battlegroup = overview?.battlegroups[0] ?? null;
   $: pods = overview?.workloads.pods ?? [];
   $: selectedPodSummary = pods.find((pod) => pod.name === selectedPod);
+  $: battlegroupStopped = battlegroup?.stop ?? true;
 
   onMount(async () => {
     await loadSession();
@@ -185,12 +192,18 @@
 
   async function lifecycle(action: "start" | "stop" | "restart") {
     if (!battlegroup) return;
+    if (action === "stop" && !window.confirm("Stop the battlegroup now? Connected players may be disconnected.")) {
+      return;
+    }
     error = "";
+    lifecycleBusy = action;
     try {
       await api(`/api/battlegroups/${battlegroup.namespace}/${battlegroup.name}/${action}`, { method: "POST" });
       await refresh();
     } catch (err) {
       error = message(err);
+    } finally {
+      lifecycleBusy = "";
     }
   }
 
@@ -241,6 +254,20 @@
       logLines = logs.lines;
     } catch (err) {
       error = message(err);
+    }
+  }
+
+  async function loadPlayerLists(full = playersFull) {
+    playersBusy = true;
+    playersFull = full;
+    error = "";
+    try {
+      const query = new URLSearchParams({ full: full ? "true" : "false" });
+      playerLists = await api<DirectorPlayerLists>(`/api/director/players?${query}`);
+    } catch (err) {
+      error = message(err);
+    } finally {
+      playersBusy = false;
     }
   }
 
@@ -482,9 +509,15 @@
         <section class="panel">
           <h2>Battlegroup</h2>
           <div class="actions">
-            <button on:click={() => lifecycle("start")}>Start</button>
-            <button on:click={() => lifecycle("restart")}>Restart</button>
-            <button class="danger" on:click={() => lifecycle("stop")}>Stop</button>
+            <button disabled={!battlegroup || !battlegroupStopped || !!lifecycleBusy} on:click={() => lifecycle("start")}>
+              {lifecycleBusy === "start" ? "Starting..." : "Start"}
+            </button>
+            <button disabled={!battlegroup || battlegroupStopped || !!lifecycleBusy} on:click={() => lifecycle("restart")}>
+              {lifecycleBusy === "restart" ? "Restarting..." : "Restart"}
+            </button>
+            <button disabled={!battlegroup || battlegroupStopped || !!lifecycleBusy} class="danger" on:click={() => lifecycle("stop")}>
+              {lifecycleBusy === "stop" ? "Stopping..." : "Stop"}
+            </button>
           </div>
           <div class="rows">
             <div class="row"><span>Name</span><b>{battlegroup?.name}</b></div>
@@ -636,7 +669,36 @@
           <Card label="Active" value={`${overview?.players?.active ?? 0}`} />
           <Card label="Online" value={`${overview?.players?.online ?? 0}`} />
           <Card label="Queued" value={`${overview?.players?.queued ?? 0}`} />
+          <Card label="Travel" value={`${overview?.players?.inTransit ?? 0}`} />
         </div>
+        <section class="panel">
+          <div class="split-heading">
+            <div>
+              <h2>Player Lists</h2>
+              <p class="muted">Load Director player IDs by runtime bucket. Full mode includes transit, grace, completion, and queue lists.</p>
+            </div>
+            <div class="actions">
+              <button disabled={playersBusy} on:click={() => loadPlayerLists(false)}>
+                {playersBusy && !playersFull ? "Loading..." : "Load active"}
+              </button>
+              <button disabled={playersBusy} on:click={() => loadPlayerLists(true)}>
+                {playersBusy && playersFull ? "Loading..." : "Load full"}
+              </button>
+            </div>
+          </div>
+          {#if playerLists}
+            <div class="player-columns">
+              <PlayerBucket title="All" ids={playerLists.all} />
+              <PlayerBucket title="Online" ids={playerLists.online} />
+              <PlayerBucket title="In transit" ids={playerLists.inTransit} />
+              <PlayerBucket title="Grace" ids={playerLists.gracePeriod} />
+              <PlayerBucket title="Completion" ids={playerLists.completion} />
+              <PlayerBucket title="Queued" ids={playerLists.queued} />
+            </div>
+          {:else}
+            <p class="muted">Player IDs are loaded on demand because some Director player queries can be slow.</p>
+          {/if}
+        </section>
         <section class="panel">
           <h2>Maps</h2>
           <div class="rows">

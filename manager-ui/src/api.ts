@@ -41,6 +41,15 @@ export type PlayerSummary = {
   travelRequestsTotal: number;
 };
 
+export type DirectorPlayerLists = {
+  all: string[];
+  online: string[];
+  inTransit: string[];
+  gracePeriod: string[];
+  completion: string[];
+  queued: string[];
+};
+
 export type DirectorMap = {
   name: string;
   kind: string;
