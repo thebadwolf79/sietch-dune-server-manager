@@ -746,6 +746,15 @@ header,
   border-top: 1px solid rgba(214, 187, 133, 0.16);
 }
 
+.api-console > summary {
+  cursor: pointer;
+  color: #f2d492;
+}
+
+.api-console-title {
+  margin-top: 0.85rem;
+}
+
 .api-console-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -757,6 +766,51 @@ header,
 .api-console textarea {
   min-height: 180px;
   max-height: 420px;
+}
+
+.json-field-list {
+  display: grid;
+  gap: 0.6rem;
+  max-height: 34rem;
+  overflow: auto;
+  padding: 0.75rem;
+  border: 1px solid rgba(214, 187, 133, 0.14);
+  border-radius: 8px;
+  background: rgba(8, 7, 6, 0.3);
+}
+
+.map-json-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: 26rem;
+}
+
+.json-field {
+  display: grid;
+  gap: 0.35rem;
+  align-content: start;
+  min-height: 6.3rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(214, 187, 133, 0.11);
+  border-radius: 8px;
+  background: rgba(8, 7, 6, 0.28);
+}
+
+.json-field span,
+.json-field small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.json-field span {
+  color: #d8c9ad;
+  font-size: 0.86rem;
+}
+
+.json-field small {
+  color: #8f826f;
+  font-size: 0.72rem;
 }
 
 .backup-panel {
@@ -1217,6 +1271,7 @@ header,
   .layout-summary,
   .setting-grid,
   .settings-status,
+  .map-json-fields,
   .workload-grid,
   .workload-card,
   .event-list article,

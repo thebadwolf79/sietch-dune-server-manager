@@ -54,6 +54,13 @@
     label: string;
   };
 
+  type JsonField = {
+    pointer: string;
+    label: string;
+    value: string;
+    kind: "boolean" | "number" | "string" | "null";
+  };
+
   const navItems: NavItem[] = [
     { page: "dashboard", label: "Command Center" },
     { page: "players", label: "Players" },
@@ -106,6 +113,7 @@
   let selectedDirectorMap = "";
   let directorMapDetail: DirectorMapConfigDetail | null = null;
   let directorMapDraft = "";
+  let directorAutoLoading = false;
   let directorCapabilities: DirectorCapabilities | null = null;
   let directorApiSelection = "";
   let directorApiBody = "{}";
@@ -160,6 +168,9 @@
   $: runningPods = pods.filter((pod) => pod.ready).length;
   $: onlineMaps = (overview?.maps ?? []).filter((map) => map.servers.some((server) => server.status === "Running")).length;
   $: dashboardMaps = selectDashboardMaps(overview);
+  $: directorFlsFields = jsonPrimitiveFields(directorFlsDraft).slice(0, 80);
+  $: directorTransferFields = jsonPrimitiveFields(directorTransferDraft).slice(0, 80);
+  $: directorMapFields = jsonPrimitiveFields(directorMapDraft).slice(0, 80);
   $: serverHealth = deriveServerHealth(overview, battlegroup, notReadyPods);
   $: nextActions = deriveNextActions(battlegroup, overview, databaseMaintenance, lifecycleBusy);
   $: if (selectedContainer && selectedPodSummary && !selectedPodSummary.containers.includes(selectedContainer)) {
@@ -218,6 +229,12 @@
     }
     if (nextPage === "database" && !databaseMaintenance && !databaseBusy) {
       void loadDatabaseMaintenance(false);
+    }
+    if (nextPage === "director" && !directorFlsDraft && !directorTransferDraft && !directorAutoLoading) {
+      directorAutoLoading = true;
+      void loadDirectorConfig().finally(() => {
+        directorAutoLoading = false;
+      });
     }
   }
 
@@ -1111,6 +1128,81 @@
     }
   }
 
+  function jsonPrimitiveFields(draft: string): JsonField[] {
+    if (!draft.trim()) return [];
+    try {
+      const root = JSON.parse(draft);
+      const fields: JsonField[] = [];
+      collectJsonFields(root, "", [], fields);
+      return fields;
+    } catch {
+      return [];
+    }
+  }
+
+  function collectJsonFields(value: unknown, pointer: string, labels: string[], fields: JsonField[]) {
+    if (fields.length >= 160) return;
+    if (typeof value === "boolean" || typeof value === "number" || typeof value === "string" || value === null) {
+      fields.push({
+        pointer,
+        label: labels.length ? labels.join(" / ") : "Root",
+        value: value === null ? "null" : String(value),
+        kind: value === null ? "null" : typeof value,
+      });
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => collectJsonFields(item, `${pointer}/${index}`, [...labels, `[${index}]`], fields));
+      return;
+    }
+    if (value && typeof value === "object") {
+      Object.entries(value as Record<string, unknown>).forEach(([key, item]) =>
+        collectJsonFields(item, `${pointer}/${escapeJsonPointer(key)}`, [...labels, settingDisplayName(key)], fields),
+      );
+    }
+  }
+
+  function escapeJsonPointer(value: string) {
+    return value.replace(/~/g, "~0").replace(/\//g, "~1");
+  }
+
+  function unescapeJsonPointer(value: string) {
+    return value.replace(/~1/g, "/").replace(/~0/g, "~");
+  }
+
+  function updateDirectorJsonDraft(kind: "fls" | "transfer" | "map", pointer: string, value: string, fieldKind: JsonField["kind"]) {
+    const draft = kind === "fls" ? directorFlsDraft : kind === "transfer" ? directorTransferDraft : directorMapDraft;
+    const root = parseJsonDraft(draft);
+    setJsonPointerValue(root, pointer, coerceJsonFieldValue(value, fieldKind));
+    const next = formatJson(root);
+    if (kind === "fls") directorFlsDraft = next;
+    if (kind === "transfer") directorTransferDraft = next;
+    if (kind === "map") directorMapDraft = next;
+  }
+
+  function setJsonPointerValue(root: unknown, pointer: string, value: unknown) {
+    if (!pointer) return;
+    const parts = pointer.split("/").slice(1).map(unescapeJsonPointer);
+    let current = root as Record<string, unknown> | unknown[];
+    parts.slice(0, -1).forEach((part) => {
+      current = Array.isArray(current) ? (current[Number(part)] as Record<string, unknown> | unknown[]) : (current[part] as Record<string, unknown> | unknown[]);
+    });
+    const last = parts[parts.length - 1];
+    if (Array.isArray(current)) current[Number(last)] = value;
+    else current[last] = value;
+  }
+
+  function coerceJsonFieldValue(value: string, fieldKind: JsonField["kind"]) {
+    if (fieldKind === "boolean") return value === "true";
+    if (fieldKind === "number") {
+      const parsed = Number(value);
+      if (Number.isNaN(parsed)) throw new Error("Number field is invalid.");
+      return parsed;
+    }
+    if (fieldKind === "null" && value.trim().toLowerCase() === "null") return null;
+    return value;
+  }
+
   function formatBackupTime(value?: string) {
     if (!value) return "Unknown time";
     const date = new Date(value);
@@ -1822,34 +1914,90 @@
         <section class="panel form">
           <div class="split-heading">
             <div>
-              <h2>Director Config</h2>
-              <p class="muted">Edit authenticated Director overrides without exposing the internal Director service.</p>
+              <h2>Director Rules</h2>
+              <p class="muted">Edit authenticated Director overrides as controlled fields without exposing the internal Director service.</p>
             </div>
             <button disabled={directorBusy} on:click={loadDirectorConfig}>
-              {directorBusy ? "Working..." : "Load config"}
+              {directorBusy || directorAutoLoading ? "Working..." : directorFlsDraft || directorTransferDraft ? "Refresh rules" : "Load rules"}
             </button>
           </div>
           {#if directorNotice}<p class="warn">{directorNotice}</p>{/if}
           <div class="editor-grid">
             <section>
               <div class="editor-title">
-                <h3>FLS report settings</h3>
+                <div>
+                  <h3>FLS report settings</h3>
+                  <p class="muted">Telemetry and reporting override values.</p>
+                </div>
                 <div class="actions">
                   <button disabled={directorBusy || !directorFlsDraft} on:click={() => saveDirectorConfig("fls")}>Save</button>
                   <button disabled={directorBusy} class="danger" on:click={() => clearDirectorConfig("fls")}>Clear</button>
                 </div>
               </div>
-              <textarea bind:value={directorFlsDraft} spellcheck="false" placeholder="Load config to edit JSON"></textarea>
+              {#if directorFlsFields.length}
+                <div class="json-field-list">
+                  {#each directorFlsFields as field}
+                    <label class="json-field">
+                      <span>{field.label}</span>
+                      <small>{field.pointer || "/"}</small>
+                      {#if field.kind === "boolean"}
+                        <select value={field.value} on:change={(event) => updateDirectorJsonDraft("fls", field.pointer, event.currentTarget.value, field.kind)}>
+                          <option value="true">True</option>
+                          <option value="false">False</option>
+                        </select>
+                      {:else if field.kind === "number"}
+                        <input type="number" value={field.value} on:input={(event) => updateDirectorJsonDraft("fls", field.pointer, event.currentTarget.value, field.kind)} />
+                      {:else}
+                        <input value={field.value} on:input={(event) => updateDirectorJsonDraft("fls", field.pointer, event.currentTarget.value, field.kind)} />
+                      {/if}
+                    </label>
+                  {/each}
+                </div>
+              {:else}
+                <p class="muted">Load rules to edit FLS report settings.</p>
+              {/if}
+              <details class="advanced-ini">
+                <summary>Advanced raw JSON</summary>
+                <textarea bind:value={directorFlsDraft} spellcheck="false" placeholder="Load config to edit JSON"></textarea>
+              </details>
             </section>
             <section>
               <div class="editor-title">
-                <h3>Character transfer</h3>
+                <div>
+                  <h3>Character transfer</h3>
+                  <p class="muted">Travel and transfer override values.</p>
+                </div>
                 <div class="actions">
                   <button disabled={directorBusy || !directorTransferDraft} on:click={() => saveDirectorConfig("transfer")}>Save</button>
                   <button disabled={directorBusy} class="danger" on:click={() => clearDirectorConfig("transfer")}>Clear</button>
                 </div>
               </div>
-              <textarea bind:value={directorTransferDraft} spellcheck="false" placeholder="Load config to edit JSON"></textarea>
+              {#if directorTransferFields.length}
+                <div class="json-field-list">
+                  {#each directorTransferFields as field}
+                    <label class="json-field">
+                      <span>{field.label}</span>
+                      <small>{field.pointer || "/"}</small>
+                      {#if field.kind === "boolean"}
+                        <select value={field.value} on:change={(event) => updateDirectorJsonDraft("transfer", field.pointer, event.currentTarget.value, field.kind)}>
+                          <option value="true">True</option>
+                          <option value="false">False</option>
+                        </select>
+                      {:else if field.kind === "number"}
+                        <input type="number" value={field.value} on:input={(event) => updateDirectorJsonDraft("transfer", field.pointer, event.currentTarget.value, field.kind)} />
+                      {:else}
+                        <input value={field.value} on:input={(event) => updateDirectorJsonDraft("transfer", field.pointer, event.currentTarget.value, field.kind)} />
+                      {/if}
+                    </label>
+                  {/each}
+                </div>
+              {:else}
+                <p class="muted">Load rules to edit character transfer settings.</p>
+              {/if}
+              <details class="advanced-ini">
+                <summary>Advanced raw JSON</summary>
+                <textarea bind:value={directorTransferDraft} spellcheck="false" placeholder="Load config to edit JSON"></textarea>
+              </details>
             </section>
           </div>
           <section class="map-editor">
@@ -1880,7 +2028,32 @@
                 <div class="row"><span>Override</span><b>{directorMapDetail.hasOverride ? "Active" : "None"}</b></div>
                 <div class="row"><span>Payload key</span><b>{directorMapDetail.configKey}</b></div>
               </div>
-              <textarea bind:value={directorMapDraft} spellcheck="false" placeholder="Load a map to edit override JSON"></textarea>
+              {#if directorMapFields.length}
+                <div class="json-field-list map-json-fields">
+                  {#each directorMapFields as field}
+                    <label class="json-field">
+                      <span>{field.label}</span>
+                      <small>{field.pointer || "/"}</small>
+                      {#if field.kind === "boolean"}
+                        <select value={field.value} on:change={(event) => updateDirectorJsonDraft("map", field.pointer, event.currentTarget.value, field.kind)}>
+                          <option value="true">True</option>
+                          <option value="false">False</option>
+                        </select>
+                      {:else if field.kind === "number"}
+                        <input type="number" value={field.value} on:input={(event) => updateDirectorJsonDraft("map", field.pointer, event.currentTarget.value, field.kind)} />
+                      {:else}
+                        <input value={field.value} on:input={(event) => updateDirectorJsonDraft("map", field.pointer, event.currentTarget.value, field.kind)} />
+                      {/if}
+                    </label>
+                  {/each}
+                </div>
+              {:else}
+                <p class="muted">This map override payload has no primitive fields to edit.</p>
+              {/if}
+              <details class="advanced-ini">
+                <summary>Advanced raw JSON</summary>
+                <textarea bind:value={directorMapDraft} spellcheck="false" placeholder="Load a map to edit override JSON"></textarea>
+              </details>
               <details>
                 <summary>Effective config</summary>
                 <pre class="json-preview">{formatJson(directorMapDetail.effectiveConfig)}</pre>
@@ -1900,10 +2073,11 @@
               <p class="muted">Load a map to edit its Director override payload.</p>
             {/if}
           </section>
-          <section class="api-console">
-            <div class="editor-title">
+          <details class="api-console">
+            <summary>Advanced Director API console</summary>
+            <div class="editor-title api-console-title">
               <div>
-                <h3>Director API Console</h3>
+                <h3>Allowlisted API calls</h3>
                 <p class="muted">Run allowlisted Director calls through the authenticated Manager API proxy.</p>
               </div>
               <button disabled={directorApiBusy} on:click={() => loadDirectorCapabilities()}>
@@ -1940,7 +2114,7 @@
             {:else}
               <p class="muted">Load paths to inspect the current Director proxy coverage.</p>
             {/if}
-          </section>
+          </details>
         </section>
       {:else if page === "players"}
         <div class="grid">
