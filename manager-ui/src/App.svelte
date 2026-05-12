@@ -22,6 +22,7 @@
     type UserSettingsBackupsResponse,
     type UserSettingsCatalog,
     type UserSettingsFile,
+    type UserSettingsPreviewResponse,
     type UserSettingsRestoreResponse,
     type UserSettingsUpdateResponse,
     type WorldLayout,
@@ -65,6 +66,8 @@
   let settingsFile: UserSettingsFile | null = null;
   let settingsDraft = "";
   let settingsSaving = false;
+  let settingsPreviewBusy = false;
+  let settingsPreview: UserSettingsPreviewResponse | null = null;
   let settingsBackupBusy = "";
   let settingsBackups: UserSettingsBackupsResponse | null = null;
   let settingsNotice = "";
@@ -457,6 +460,7 @@
     try {
       settingsFile = await api<UserSettingsFile>(`/api/config/user-settings/${file}`);
       settingsDraft = settingsFile.content;
+      settingsPreview = null;
       await loadSettingsBackups(file);
     } catch (err) {
       error = message(err);
@@ -475,6 +479,7 @@
       });
       settingsFile = result.file;
       settingsDraft = result.file.content;
+      settingsPreview = null;
       settingsNotice = result.restartRecommended
         ? "Saved. Restart the battlegroup for every runtime system to pick up the change."
         : "Saved.";
@@ -483,6 +488,27 @@
       error = message(err);
     } finally {
       settingsSaving = false;
+    }
+  }
+
+  async function previewSettingsFile() {
+    if (!settingsFile) return;
+    settingsPreviewBusy = true;
+    error = "";
+    settingsNotice = "";
+    try {
+      settingsPreview = await api<UserSettingsPreviewResponse>(
+        `/api/config/user-settings/${settingsFile.id}/preview`,
+        {
+          method: "POST",
+          body: JSON.stringify({ content: settingsDraft }),
+        },
+      );
+      if (!settingsPreview.changed) settingsNotice = "No changes compared to the live file.";
+    } catch (err) {
+      error = message(err);
+    } finally {
+      settingsPreviewBusy = false;
     }
   }
 
@@ -530,6 +556,7 @@
       );
       settingsFile = result.file;
       settingsDraft = result.file.content;
+      settingsPreview = null;
       settingsNotice = result.restartRecommended
         ? "Backup restored. Restart the battlegroup for every runtime system to pick up the change."
         : "Backup restored.";
@@ -573,6 +600,11 @@
     if (!match) return;
     lines[index] = `${match[1]}${match[2]}${value}`;
     settingsDraft = lines.join("\n");
+    settingsPreview = null;
+  }
+
+  function markSettingsDraftChanged() {
+    settingsPreview = null;
   }
 
   function parseIniSections(content: string): IniSection[] {
@@ -1098,9 +1130,14 @@
               <p class="muted">Edit the runtime ini files mounted through the filebrowser volume.</p>
             </div>
             {#if settingsFile}
-              <button disabled={settingsSaving || settingsDraft === settingsFile.content} on:click={saveSettingsFile}>
-                {settingsSaving ? "Saving..." : "Save file"}
-              </button>
+              <div class="actions">
+                <button disabled={settingsPreviewBusy || settingsDraft === settingsFile.content} on:click={previewSettingsFile}>
+                  {settingsPreviewBusy ? "Previewing..." : "Preview changes"}
+                </button>
+                <button disabled={settingsSaving || settingsDraft === settingsFile.content} on:click={saveSettingsFile}>
+                  {settingsSaving ? "Saving..." : "Save file"}
+                </button>
+              </div>
             {/if}
           </div>
           <div class="file-tabs">
@@ -1143,7 +1180,40 @@
                 {/each}
               </div>
             </div>
-            <textarea bind:value={settingsDraft} spellcheck="false"></textarea>
+            <textarea bind:value={settingsDraft} on:input={markSettingsDraftChanged} spellcheck="false"></textarea>
+            {#if settingsPreview}
+              <section class="diff-panel">
+                <div class="editor-title">
+                  <div>
+                    <h3>Change preview</h3>
+                    <p class="muted">
+                      {settingsPreview.changed
+                        ? `${settingsPreview.addedLines} added, ${settingsPreview.removedLines} removed`
+                        : "No changes compared to the live file."}
+                    </p>
+                  </div>
+                </div>
+                {#if settingsPreview.hunks.length}
+                  <div class="diff-list">
+                    {#each settingsPreview.hunks as hunk}
+                      <article class="diff-hunk">
+                        <header>
+                          -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines}
+                        </header>
+                        {#each hunk.lines as line}
+                          <div class:insert={line.kind === "insert"} class:delete={line.kind === "delete"} class:equal={line.kind === "equal"}>
+                            <span>{line.kind === "insert" ? "+" : line.kind === "delete" ? "-" : " "}</span>
+                            <code>{line.text || " "}</code>
+                          </div>
+                        {/each}
+                      </article>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="muted">The current draft matches the live file.</p>
+                {/if}
+              </section>
+            {/if}
             {#if settingsNotice}<p class="warn">{settingsNotice}</p>{/if}
             <section class="backup-panel">
               <div class="editor-title">

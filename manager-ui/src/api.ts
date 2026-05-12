@@ -218,6 +218,29 @@ export type UserSettingsUpdateResponse = {
   restartRecommended: boolean;
 };
 
+export type UserSettingsPreviewResponse = {
+  file: string;
+  changed: boolean;
+  addedLines: number;
+  removedLines: number;
+  hunks: UserSettingsDiffHunk[];
+};
+
+export type UserSettingsDiffHunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: UserSettingsDiffLine[];
+};
+
+export type UserSettingsDiffLine = {
+  kind: "equal" | "insert" | "delete";
+  oldLine?: number;
+  newLine?: number;
+  text: string;
+};
+
 export type UserSettingsBackupSummary = {
   id: string;
   fileName: string;

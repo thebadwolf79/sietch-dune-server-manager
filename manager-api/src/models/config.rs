@@ -46,6 +46,41 @@ pub struct UserSettingsUpdateRequest {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSettingsPreviewRequest {
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSettingsPreviewResponse {
+    pub file: String,
+    pub changed: bool,
+    pub added_lines: usize,
+    pub removed_lines: usize,
+    pub hunks: Vec<UserSettingsDiffHunk>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSettingsDiffHunk {
+    pub old_start: usize,
+    pub old_lines: usize,
+    pub new_start: usize,
+    pub new_lines: usize,
+    pub lines: Vec<UserSettingsDiffLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSettingsDiffLine {
+    pub kind: String,
+    pub old_line: Option<usize>,
+    pub new_line: Option<usize>,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserSettingsUpdateResponse {

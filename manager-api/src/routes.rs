@@ -95,6 +95,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(user_settings_file).put(update_user_settings_file),
         )
         .route(
+            "/api/config/user-settings/:file/preview",
+            post(preview_user_settings_file_route),
+        )
+        .route(
             "/api/config/user-settings/:file/backups",
             get(user_settings_backups).post(create_user_settings_backup_route),
         )
@@ -490,6 +494,18 @@ async fn update_user_settings_file(
     audit_action("config.user-settings.update", Some(&file));
     Ok(Json(
         write_user_settings_file(&state, &file, request.content).await?,
+    ))
+}
+
+async fn preview_user_settings_file_route(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(file): Path<String>,
+    Json(request): Json<UserSettingsPreviewRequest>,
+) -> ApiResponse<UserSettingsPreviewResponse> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(
+        preview_user_settings_file(&state, &file, request.content).await?,
     ))
 }
 

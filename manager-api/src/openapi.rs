@@ -222,6 +222,13 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Updated settings file content and parsed sections" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/Error" } }
                 }
             },
+            "/api/config/user-settings/{file}/preview": {
+                "post": {
+                    "summary": "Preview changes to UserEngine.ini or UserGame.ini",
+                    "parameters": [settings_file_parameter()],
+                    "responses": { "200": { "description": "Line diff preview without writing the file" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/Error" } }
+                }
+            },
             "/api/config/user-settings/{file}/backups": {
                 "get": {
                     "summary": "List settings file backups",

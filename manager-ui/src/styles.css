@@ -417,6 +417,75 @@ header,
   opacity: 0.82;
 }
 
+.diff-panel {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(214, 187, 133, 0.14);
+  border-radius: 0.75rem;
+  background:
+    linear-gradient(180deg, rgba(207, 158, 84, 0.08), rgba(255, 255, 255, 0.025)),
+    rgba(8, 7, 6, 0.34);
+}
+
+.diff-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.diff-hunk {
+  overflow: hidden;
+  border: 1px solid rgba(214, 175, 105, 0.16);
+  border-radius: 8px;
+  background: rgba(6, 6, 5, 0.48);
+}
+
+.diff-hunk header {
+  padding: 0.45rem 0.65rem;
+  color: #d9c6a2;
+  background: rgba(183, 133, 59, 0.16);
+  font-family: "Cascadia Mono", ui-monospace, monospace;
+  font-size: 0.78rem;
+}
+
+.diff-hunk div {
+  display: grid;
+  grid-template-columns: 1.8rem minmax(0, 1fr);
+  gap: 0.35rem;
+  padding: 0.22rem 0.65rem;
+  color: #d9d1c4;
+  font-family: "Cascadia Mono", ui-monospace, monospace;
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
+.diff-hunk span {
+  color: #b9aa91;
+  user-select: none;
+}
+
+.diff-hunk code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre-wrap;
+}
+
+.diff-hunk .insert {
+  background: rgba(71, 138, 88, 0.16);
+}
+
+.diff-hunk .insert span {
+  color: #91d19d;
+}
+
+.diff-hunk .delete {
+  background: rgba(157, 70, 59, 0.18);
+}
+
+.diff-hunk .delete span {
+  color: #ffb2a8;
+}
+
 .editor-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -4,14 +4,16 @@ use kube::{
     api::{AttachParams, ListParams},
     Api,
 };
+use similar::{ChangeTag, TextDiff};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
     errors::ApiError,
     models::{
         IniEntry, IniSection, UserSettingsBackupCreateResponse, UserSettingsBackupSummary,
-        UserSettingsBackupsResponse, UserSettingsCatalog, UserSettingsFile,
-        UserSettingsFileSummary, UserSettingsRestoreResponse, UserSettingsUpdateResponse,
+        UserSettingsBackupsResponse, UserSettingsCatalog, UserSettingsDiffHunk,
+        UserSettingsDiffLine, UserSettingsFile, UserSettingsFileSummary,
+        UserSettingsPreviewResponse, UserSettingsRestoreResponse, UserSettingsUpdateResponse,
     },
     state::AppState,
 };
@@ -139,6 +141,21 @@ pub async fn write_user_settings_file(
         file: read_user_settings_file(state, file_id).await?,
         restart_recommended: true,
     })
+}
+
+pub async fn preview_user_settings_file(
+    state: &AppState,
+    file_id: &str,
+    content: String,
+) -> Result<UserSettingsPreviewResponse, ApiError> {
+    let current = read_user_settings_file(state, file_id).await?;
+    validate_settings_content(&content)?;
+    Ok(diff_user_settings(
+        current.id,
+        &current.content,
+        &content,
+        3,
+    ))
 }
 
 pub async fn read_deep_desert_pvp_partition_ids(state: &AppState) -> Result<Vec<i64>, ApiError> {
@@ -332,6 +349,73 @@ fn validate_settings_content(content: &str) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+fn diff_user_settings(
+    file_id: &str,
+    old_content: &str,
+    new_content: &str,
+    context_radius: usize,
+) -> UserSettingsPreviewResponse {
+    let diff = TextDiff::from_lines(old_content, new_content);
+    let mut added_lines = 0;
+    let mut removed_lines = 0;
+    let mut hunks = Vec::new();
+
+    for hunk in diff
+        .unified_diff()
+        .context_radius(context_radius)
+        .iter_hunks()
+    {
+        let mut old_seen = 0;
+        let mut new_seen = 0;
+        let mut lines = Vec::new();
+        for change in hunk.iter_changes() {
+            let kind = match change.tag() {
+                ChangeTag::Delete => {
+                    removed_lines += 1;
+                    "delete"
+                }
+                ChangeTag::Insert => {
+                    added_lines += 1;
+                    "insert"
+                }
+                ChangeTag::Equal => "equal",
+            };
+            if change.old_index().is_some() {
+                old_seen += 1;
+            }
+            if change.new_index().is_some() {
+                new_seen += 1;
+            }
+            lines.push(UserSettingsDiffLine {
+                kind: kind.to_string(),
+                old_line: change.old_index().map(|index| index + 1),
+                new_line: change.new_index().map(|index| index + 1),
+                text: change
+                    .value()
+                    .trim_end_matches(&['\r', '\n'][..])
+                    .to_string(),
+            });
+        }
+        let old_start = lines.iter().find_map(|line| line.old_line).unwrap_or(0);
+        let new_start = lines.iter().find_map(|line| line.new_line).unwrap_or(0);
+        hunks.push(UserSettingsDiffHunk {
+            old_start,
+            old_lines: old_seen,
+            new_start,
+            new_lines: new_seen,
+            lines,
+        });
+    }
+
+    UserSettingsPreviewResponse {
+        file: file_id.to_string(),
+        changed: old_content != new_content,
+        added_lines,
+        removed_lines,
+        hunks,
+    }
 }
 
 fn deep_desert_pvp_update_script(pvp_ids: &str) -> String {
@@ -578,6 +662,39 @@ m_bShouldForceEnablePvpOnAllPartitions=False
     fn rejects_oversized_settings_content() {
         let content = "x".repeat(MAX_SETTINGS_BYTES + 1);
         assert!(validate_settings_content(&content).is_err());
+    }
+
+    #[test]
+    fn builds_diff_preview_for_user_settings() {
+        let diff = diff_user_settings(
+            "game",
+            "[Server]\nName=Old\nMaxPlayers=10\n",
+            "[Server]\nName=New\nMaxPlayers=10\nMotd=Ready\n",
+            1,
+        );
+
+        assert!(diff.changed);
+        assert_eq!(diff.added_lines, 2);
+        assert_eq!(diff.removed_lines, 1);
+        assert_eq!(diff.hunks.len(), 1);
+        assert!(diff.hunks[0]
+            .lines
+            .iter()
+            .any(|line| line.kind == "insert" && line.text == "Name=New"));
+        assert!(diff.hunks[0]
+            .lines
+            .iter()
+            .any(|line| line.kind == "delete" && line.text == "Name=Old"));
+    }
+
+    #[test]
+    fn empty_diff_preview_has_no_hunks() {
+        let diff = diff_user_settings("engine", "a=1\n", "a=1\n", 2);
+
+        assert!(!diff.changed);
+        assert_eq!(diff.added_lines, 0);
+        assert_eq!(diff.removed_lines, 0);
+        assert!(diff.hunks.is_empty());
     }
 
     #[test]
