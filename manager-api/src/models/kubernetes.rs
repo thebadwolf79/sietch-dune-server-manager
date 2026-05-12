@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,9 +115,18 @@ pub struct DatabaseMaintenanceItem {
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseMaintenanceResponse {
     pub namespace: String,
+    pub physical_backups_enabled: bool,
+    pub physical_backups_message: String,
     pub backups: Vec<DatabaseMaintenanceItem>,
     pub schedules: Vec<DatabaseMaintenanceItem>,
     pub restores: Vec<DatabaseMaintenanceItem>,
     pub migrations: Vec<DatabaseMaintenanceItem>,
     pub operations: Vec<DatabaseMaintenanceItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDatabaseBackupRequest {
+    pub battle_group: Option<String>,
+    pub originator: Option<String>,
 }

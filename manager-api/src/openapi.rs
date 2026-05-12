@@ -194,6 +194,12 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Database maintenance summary" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/database-maintenance/backups": {
+                "post": {
+                    "summary": "Create a manual database backup",
+                    "responses": { "200": { "description": "Created DatabaseBackup resource" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
             "/api/logs": {
                 "get": {
                     "summary": "Read pod logs",

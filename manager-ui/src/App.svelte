@@ -108,7 +108,9 @@
   let storageFilter = "";
   let databaseMaintenance: DatabaseMaintenanceResponse | null = null;
   let databaseBusy = false;
+  let databaseActionBusy = false;
   let databaseFilter = "";
+  let databaseNotice = "";
   let managerSelf: ManagerSelf | null = null;
   let managerLogs: ManagerLogResponse | null = null;
   let managerBusy = "";
@@ -507,6 +509,31 @@
       error = message(err);
     } finally {
       databaseBusy = false;
+    }
+  }
+
+  async function createDatabaseBackup() {
+    if (databaseMaintenance && !databaseMaintenance.physicalBackupsEnabled) {
+      databaseNotice = databaseMaintenance.physicalBackupsMessage;
+      return;
+    }
+    const label = battlegroup?.title || battlegroup?.name || "this server";
+    const ok = window.confirm(`Create a manual database backup for ${label}?`);
+    if (!ok) return;
+    databaseActionBusy = true;
+    databaseNotice = "";
+    error = "";
+    try {
+      const created = await api<DatabaseMaintenanceItem>("/api/database-maintenance/backups", {
+        method: "POST",
+        body: JSON.stringify({ battleGroup: battlegroup?.name }),
+      });
+      databaseNotice = `Backup requested: ${created.name}`;
+      await loadDatabaseMaintenance();
+    } catch (err) {
+      error = message(err);
+    } finally {
+      databaseActionBusy = false;
     }
   }
 
@@ -1222,11 +1249,21 @@
             </div>
             <div class="actions">
               <input bind:value={databaseFilter} placeholder="Filter database activity" />
+              <button
+                disabled={databaseActionBusy || !battlegroup || (databaseMaintenance && !databaseMaintenance.physicalBackupsEnabled)}
+                on:click={createDatabaseBackup}
+              >
+                {databaseActionBusy ? "Requesting..." : "Create backup"}
+              </button>
               <button disabled={databaseBusy} on:click={loadDatabaseMaintenance}>
                 {databaseBusy ? "Loading..." : databaseMaintenance ? "Refresh" : "Load database"}
               </button>
             </div>
           </div>
+          {#if databaseMaintenance && !databaseMaintenance.physicalBackupsEnabled}
+            <p class="warn">{databaseMaintenance.physicalBackupsMessage}</p>
+          {/if}
+          {#if databaseNotice}<p class="notice">{databaseNotice}</p>{/if}
           {#if databaseMaintenance}
             <div class="database-ribbon">
               <Card label="Schedules" value={`${databaseMaintenance.schedules.length}`} />

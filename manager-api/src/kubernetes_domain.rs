@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use k8s_openapi::{
     api::core::v1::{Container, Event, PersistentVolumeClaim, Pod, Service},
-    apimachinery::pkg::util::intstr::IntOrString,
+    apimachinery::pkg::{apis::meta::v1::ObjectMeta, util::intstr::IntOrString},
 };
 use kube::{
-    api::{ApiResource, DynamicObject, ListParams, Patch, PatchParams},
+    api::{ApiResource, DynamicObject, ListParams, Patch, PatchParams, PostParams, TypeMeta},
     Api,
 };
 use serde_json::{json, Value};
@@ -108,6 +108,9 @@ pub async fn list_persistent_volume_claims(
 }
 
 pub async fn list_database_maintenance(state: &AppState) -> Result<DatabaseMaintenanceResponse> {
+    let capability = database_backup_capability(state)
+        .await
+        .unwrap_or_else(|err| (false, err.message));
     let (backups, schedules, restores, migrations, operations) = tokio::try_join!(
         list_database_resource(state, "DatabaseBackup", "databasebackups"),
         list_database_resource(state, "DatabaseBackupSchedule", "databasebackupschedules"),
@@ -118,12 +121,62 @@ pub async fn list_database_maintenance(state: &AppState) -> Result<DatabaseMaint
 
     Ok(DatabaseMaintenanceResponse {
         namespace: state.namespace.clone(),
+        physical_backups_enabled: capability.0,
+        physical_backups_message: capability.1,
         backups,
         schedules,
         restores,
         migrations,
         operations,
     })
+}
+
+pub async fn create_database_backup(
+    state: &AppState,
+    battle_group: Option<String>,
+    originator: Option<String>,
+) -> Result<DatabaseMaintenanceItem, ApiError> {
+    let battle_group = match battle_group {
+        Some(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => default_battlegroup_name(state).await?,
+    };
+    validate_kube_name(&battle_group)?;
+    ensure_database_backups_enabled(state, &battle_group).await?;
+    let originator = originator
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("dune-manager")
+        .to_string();
+    validate_originator(&originator)?;
+
+    let api: Api<DynamicObject> = Api::namespaced_with(
+        state.client.clone(),
+        &state.namespace,
+        &igw_resource("DatabaseBackup", "databasebackups"),
+    );
+    let object = DynamicObject {
+        types: Some(TypeMeta {
+            api_version: "igw.funcom.com/v1".to_string(),
+            kind: "DatabaseBackup".to_string(),
+        }),
+        metadata: ObjectMeta {
+            generate_name: Some("manual-backup-".to_string()),
+            namespace: Some(state.namespace.clone()),
+            ..ObjectMeta::default()
+        },
+        data: json!({
+            "spec": {
+                "battleGroup": battle_group,
+                "originator": originator,
+            }
+        }),
+    };
+    let created = api
+        .create(&PostParams::default(), &object)
+        .await
+        .context("failed to create database backup")?;
+    Ok(database_maintenance_item("DatabaseBackup", created))
 }
 
 fn pod_summary(pod: Pod) -> PodSummary {
@@ -253,6 +306,60 @@ async fn list_database_resource(
             .then_with(|| right.name.cmp(&left.name))
     });
     Ok(items)
+}
+
+async fn default_battlegroup_name(state: &AppState) -> Result<String, ApiError> {
+    let battlegroups = list_battlegroups(state).await?;
+    match battlegroups.as_slice() {
+        [battlegroup] => Ok(battlegroup.name.clone()),
+        [] => Err(ApiError::bad_request(
+            "No battlegroup is available for database backup",
+        )),
+        _ => Err(ApiError::bad_request(
+            "Multiple battlegroups are available; specify battleGroup",
+        )),
+    }
+}
+
+async fn database_backup_capability(state: &AppState) -> Result<(bool, String), ApiError> {
+    let battlegroups = list_battlegroups(state).await?;
+    match battlegroups.as_slice() {
+        [battlegroup] => {
+            let object = get_battlegroup_object(state, &battlegroup.name).await?;
+            let enabled = database_physical_backups_enabled(&object.data);
+            if enabled {
+                Ok((
+                    true,
+                    "Physical database backups are enabled for this battlegroup.".to_string(),
+                ))
+            } else {
+                Ok((
+                    false,
+                    "Physical database backups are disabled for this battlegroup.".to_string(),
+                ))
+            }
+        }
+        [] => Ok((false, "No battlegroup is available.".to_string())),
+        _ => Ok((
+            false,
+            "Multiple battlegroups are available; select a battlegroup before creating backups."
+                .to_string(),
+        )),
+    }
+}
+
+async fn ensure_database_backups_enabled(
+    state: &AppState,
+    battle_group: &str,
+) -> Result<(), ApiError> {
+    let object = get_battlegroup_object(state, battle_group).await?;
+    if database_physical_backups_enabled(&object.data) {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(
+            "Physical database backups are disabled for this battlegroup",
+        ))
+    }
 }
 
 pub async fn list_battlegroups(state: &AppState) -> Result<Vec<BattleGroupSummary>> {
@@ -876,6 +983,24 @@ fn optional_string(value: &Value) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn validate_originator(value: &str) -> Result<(), ApiError> {
+    let valid = value.len() <= 64
+        && value
+            .chars()
+            .all(|item| item.is_ascii_alphanumeric() || matches!(item, '-' | '_' | '.' | '@'));
+    if valid {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request("invalid database backup originator"))
+    }
+}
+
+fn database_physical_backups_enabled(data: &Value) -> bool {
+    data["spec"]["database"]["template"]["spec"]["deployment"]["spec"]["enablePhysicalBackups"]
+        .as_bool()
+        .unwrap_or(false)
+}
+
 fn maintenance_sort_key(item: &DatabaseMaintenanceItem) -> String {
     item.finish_time
         .as_deref()
@@ -1062,6 +1187,47 @@ mod tests {
         assert_eq!(summary.identifier.as_deref(), Some("base-20260512"));
         assert_eq!(summary.schedule.as_deref(), Some("15 3 * * *"));
         assert_eq!(summary.suspended, Some(false));
+    }
+
+    #[test]
+    fn validates_database_backup_originator() {
+        assert!(validate_originator("dune-manager").is_ok());
+        assert!(validate_originator("ops@example").is_ok());
+        assert!(validate_originator("../secret").is_err());
+        assert!(validate_originator(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn detects_physical_backup_capability() {
+        let disabled = json!({
+            "spec": {
+                "database": {
+                    "template": {
+                        "spec": {
+                            "deployment": {
+                                "spec": { "enablePhysicalBackups": false }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let enabled = json!({
+            "spec": {
+                "database": {
+                    "template": {
+                        "spec": {
+                            "deployment": {
+                                "spec": { "enablePhysicalBackups": true }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        assert!(!database_physical_backups_enabled(&disabled));
+        assert!(database_physical_backups_enabled(&enabled));
     }
 
     #[test]

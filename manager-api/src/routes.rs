@@ -86,6 +86,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/events", get(events))
         .route("/api/storage", get(storage))
         .route("/api/database-maintenance", get(database_maintenance))
+        .route(
+            "/api/database-maintenance/backups",
+            post(create_database_backup_route),
+        )
         .route("/api/logs", get(logs))
         .route("/api/logs/export", get(logs_export))
         .route("/api/logs/stream", get(logs_stream))
@@ -601,6 +605,18 @@ async fn database_maintenance(
 ) -> ApiResponse<DatabaseMaintenanceResponse> {
     authorize(&state, &headers, None)?;
     Ok(Json(list_database_maintenance(&state).await?))
+}
+
+async fn create_database_backup_route(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateDatabaseBackupRequest>,
+) -> ApiResponse<DatabaseMaintenanceItem> {
+    authorize(&state, &headers, None)?;
+    audit_action("database.backup.create", request.battle_group.as_deref());
+    Ok(Json(
+        create_database_backup(&state, request.battle_group, request.originator).await?,
+    ))
 }
 
 async fn logs(

@@ -894,6 +894,14 @@ header,
   background: rgba(97, 32, 26, 0.5);
 }
 
+.notice {
+  border: 1px solid rgba(145, 209, 139, 0.26);
+  border-radius: 8px;
+  padding: 0.75rem;
+  color: #d8f2d3;
+  background: rgba(45, 90, 50, 0.32);
+}
+
 .warn {
   border-color: rgba(229, 179, 84, 0.35);
   color: #ffe3a9;
