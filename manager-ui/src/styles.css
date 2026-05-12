@@ -1307,6 +1307,51 @@ header,
   background: rgba(97, 32, 26, 0.32);
 }
 
+.log-suggestions {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(214, 187, 133, 0.13);
+  border-radius: 8px;
+  background: rgba(8, 7, 6, 0.3);
+}
+
+.log-suggestions h3 {
+  margin-bottom: 0.25rem;
+  color: #f2d492;
+}
+
+.log-targets {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.log-targets button {
+  display: grid;
+  gap: 0.25rem;
+  min-height: 4.7rem;
+  text-align: left;
+  background: rgba(34, 27, 18, 0.7);
+}
+
+.log-targets button.warning {
+  border-color: rgba(229, 179, 84, 0.34);
+  background: rgba(105, 78, 29, 0.32);
+}
+
+.log-targets strong,
+.log-targets span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-targets span {
+  color: #d6c6a8;
+  font-size: 0.78rem;
+}
+
 .backup-readiness {
   display: grid;
   grid-template-columns: minmax(12rem, auto) minmax(0, 1fr);
@@ -1803,6 +1848,7 @@ header,
   .database-ribbon,
   .backup-readiness,
   .health-strip,
+  .log-targets,
   .database-card,
   .partition-list article,
   .partition-controls,

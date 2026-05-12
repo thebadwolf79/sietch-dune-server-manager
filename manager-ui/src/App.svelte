@@ -202,6 +202,7 @@
         : "off"
     : "off";
   $: notReadyPods = pods.filter((pod) => !pod.ready);
+  $: suggestedLogPods = notReadyPods.length ? notReadyPods : pods.slice(0, 6);
   $: runningPods = pods.filter((pod) => pod.ready).length;
   $: onlineMaps = (overview?.maps ?? []).filter((map) => map.servers.some((server) => server.status === "Running")).length;
   $: dashboardMaps = selectDashboardMaps(overview);
@@ -2851,11 +2852,39 @@
         <section class="panel form">
           <div class="split-heading">
             <div>
-              <h2>Logs</h2>
-              <p class="muted">Read a tail snapshot or follow live Kubernetes pod logs.</p>
+              <p class="eyebrow">Diagnostics</p>
+              <h2>Server Logs</h2>
+              <p class="muted">Start with services that need attention, or select any runtime service for detailed logs.</p>
             </div>
             <b class:good={logStreaming}>{logStreaming ? "Streaming" : "Idle"}</b>
           </div>
+          <section class="log-suggestions">
+            <div class="split-heading">
+              <div>
+                <h3>{notReadyPods.length ? "Needs attention" : "Suggested services"}</h3>
+                <p class="muted">{notReadyPods.length ? "These runtime services are not ready." : "No unhealthy service is detected; these are common log targets."}</p>
+              </div>
+              <button class="inline" disabled={!suggestedLogPods.length || logStreaming} on:click={() => openPodLogs(suggestedLogPods[0].name, suggestedLogPods[0].containers[0] || "")}>
+                Open first
+              </button>
+            </div>
+            {#if suggestedLogPods.length}
+              <div class="log-targets">
+                {#each suggestedLogPods as pod}
+                  <button
+                    class:warning={!pod.ready}
+                    disabled={logStreaming}
+                    on:click={() => openPodLogs(pod.name, pod.containers[0] || "")}
+                  >
+                    <strong>{pod.name}</strong>
+                    <span>{pod.ready ? "Ready" : "Not ready"} · {pod.restarts} restarts</span>
+                  </button>
+                {/each}
+              </div>
+            {:else}
+              <p class="muted">No runtime services are currently listed.</p>
+            {/if}
+          </section>
           <select bind:value={selectedPod}>
             {#each pods as pod}<option>{pod.name}</option>{/each}
           </select>
