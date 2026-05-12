@@ -16,6 +16,7 @@
     type DatabasePlayerTagsUpdateResponse,
     type DatabasePlayerSummary,
     type DatabasePlayersResponse,
+    type DatabaseWorldStatisticsResponse,
     type DatabaseWorldPartition,
     type DatabaseWorldPartitionUpdateResponse,
     type DatabaseWorldPartitionsResponse,
@@ -166,6 +167,8 @@
   let playerTagBusy: Record<number, boolean> = {};
   let playerStatistics: DatabasePlayerStatisticsResponse | null = null;
   let playerStatisticsBusy = false;
+  let worldStatistics: DatabaseWorldStatisticsResponse | null = null;
+  let worldStatisticsBusy = false;
   let workloadFilter = "";
   let events: EventSummary[] = [];
   let eventsBusy = false;
@@ -362,6 +365,7 @@
       if (!settingsCatalog) settingsCatalog = await api<UserSettingsCatalog>("/api/config/user-settings");
       if (!databaseMaintenance) void loadDatabaseMaintenance(false);
       if (!playerStatistics) void loadPlayerStatistics(false);
+      if (!worldStatistics) void loadWorldStatistics(false);
       if (!events.length && !eventsBusy) void loadEvents(false);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -719,6 +723,18 @@
       if (showError) error = message(err);
     } finally {
       playerStatisticsBusy = false;
+    }
+  }
+
+  async function loadWorldStatistics(showError = true) {
+    worldStatisticsBusy = true;
+    if (showError) error = "";
+    try {
+      worldStatistics = await api<DatabaseWorldStatisticsResponse>("/api/database/world-statistics");
+    } catch (err) {
+      if (showError) error = message(err);
+    } finally {
+      worldStatisticsBusy = false;
     }
   }
 
@@ -1768,7 +1784,7 @@
           <Card label="Players online" value={`${overview?.players?.online ?? 0}`} />
           <Card label="Queued" value={`${overview?.players?.queued ?? 0}`} />
           <Card label="Maps online" value={`${onlineMaps}/${overview?.maps.length ?? 0}`} />
-          <Card label="Workloads ready" value={`${runningPods}/${pods.length}`} />
+          <Card label="Buildings" value={`${worldStatistics?.statistics.buildings ?? "..."}`} />
         </div>
         <section class="dashboard-grid">
           <section class="panel action-panel">
@@ -1876,6 +1892,31 @@
               {#if !databaseMaintenance.backupsReady}<p class="warn">{databaseMaintenance.physicalBackupsEnabled ? databaseMaintenance.backupStorageMessage : databaseMaintenance.physicalBackupsMessage}</p>{/if}
             {:else}
               <p class="muted">Backup readiness is loading.</p>
+            {/if}
+          </section>
+          <section class="panel">
+            <div class="split-heading">
+              <div>
+                <h2>World Statistics</h2>
+                <p class="muted">Controlled gameplay counts from selected database tables.</p>
+              </div>
+              <button class="inline" disabled={worldStatisticsBusy} on:click={() => loadWorldStatistics()}>
+                {worldStatisticsBusy ? "Loading..." : "Refresh"}
+              </button>
+            </div>
+            {#if worldStatistics}
+              <div class="player-summary world-summary">
+                <div><span>Buildings</span><b>{worldStatistics.statistics.buildings}</b></div>
+                <div><span>Vehicles</span><b>{worldStatistics.statistics.vehicles}</b></div>
+                <div><span>Base backups</span><b>{worldStatistics.statistics.baseBackups}</b></div>
+                <div><span>Land claims</span><b>{worldStatistics.statistics.landclaimSegments}</b></div>
+                <div><span>Respawns</span><b>{worldStatistics.statistics.respawnLocations}</b></div>
+                <div><span>Exchange orders</span><b>{worldStatistics.statistics.exchangeOrders}</b></div>
+                <div><span>Game events</span><b>{worldStatistics.statistics.gameEvents}</b></div>
+                <div><span>Event log</span><b>{worldStatistics.statistics.eventLogEntries}</b></div>
+              </div>
+            {:else}
+              <p class="muted">World statistics are loading.</p>
             {/if}
           </section>
         </section>

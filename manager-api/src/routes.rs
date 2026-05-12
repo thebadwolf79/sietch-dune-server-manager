@@ -112,6 +112,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/database/player-statistics",
             get(database_player_statistics_route),
         )
+        .route(
+            "/api/database/world-statistics",
+            get(database_world_statistics_route),
+        )
         .route("/api/database-maintenance", get(database_maintenance))
         .route(
             "/api/database-maintenance/backups",
@@ -753,6 +757,17 @@ async fn database_player_statistics_route(
     Ok(Json(DatabasePlayerStatisticsResponse {
         namespace: state.namespace.clone(),
         statistics: database_player_statistics(&state).await?,
+    }))
+}
+
+async fn database_world_statistics_route(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<DatabaseWorldStatisticsResponse> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(DatabaseWorldStatisticsResponse {
+        namespace: state.namespace.clone(),
+        statistics: database_world_statistics(&state).await?,
     }))
 }
 

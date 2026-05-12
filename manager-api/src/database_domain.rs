@@ -12,6 +12,7 @@ use crate::{
         DatabaseGuildProfile, DatabaseGuildSummary, DatabasePlayerProfile,
         DatabasePlayerStatistics, DatabasePlayerSummary, DatabasePlayerTagRequest,
         DatabasePlayerTagsUpdate, DatabaseWorldPartition, DatabaseWorldPartitionUpdateRequest,
+        DatabaseWorldStatistics,
     },
     state::AppState,
 };
@@ -22,6 +23,7 @@ const WORLD_PARTITION_SELECT: &str =
 const PLAYER_DIRECTORY_QUERY: &str = "select coalesce(json_agg(t), '[]'::json) from (select ps.account_id, ps.character_name, ps.online_status::text as online_status, ps.life_state::text as life_state, ps.server_id, ps.player_controller_id, ps.player_state_id, ps.previous_server_partition_id, ps.home_dimension_index, ps.last_login_time::text as last_login_time, ps.last_avatar_activity::text as last_avatar_activity, g.guild_id, g.guild_name, coalesce(tags.tags, '[]'::json) as tags from dune.player_state ps left join dune.guild_members gm on gm.player_id = ps.player_state_id left join dune.guilds g on g.guild_id = gm.guild_id left join lateral (select json_agg(pt.tag order by pt.tag) as tags from dune.player_tags pt where pt.account_id = ps.account_id) tags on true order by ps.last_login_time desc nulls last, ps.character_name asc nulls last limit 500) t";
 const GUILD_DIRECTORY_QUERY: &str = "select coalesce(json_agg(t), '[]'::json) from (select g.guild_id, g.guild_name, g.guild_description, g.guild_faction, count(gm.player_id) as member_count from dune.guilds g left join dune.guild_members gm on gm.guild_id = g.guild_id group by g.guild_id, g.guild_name, g.guild_description, g.guild_faction order by member_count desc, g.guild_name asc limit 250) t";
 const PLAYER_STATISTICS_QUERY: &str = "select json_build_object('total_accounts', (select count(*) from dune.accounts), 'total_players', (select count(*) from dune.player_state), 'guilds', (select count(*) from dune.guilds), 'guild_members', (select count(*) from dune.guild_members), 'tagged_players', (select count(distinct account_id) from dune.player_tags), 'online_statuses', (select coalesce(json_agg(s), '[]'::json) from (select coalesce(online_status::text, 'Unknown') as name, count(*) as count from dune.player_state group by 1 order by count desc, name asc) s), 'life_states', (select coalesce(json_agg(s), '[]'::json) from (select coalesce(life_state::text, 'Unknown') as name, count(*) as count from dune.player_state group by 1 order by count desc, name asc) s), 'recent_players', (select coalesce(json_agg(r), '[]'::json) from (select account_id, character_name, online_status::text as online_status, last_login_time::text as last_login_time from dune.player_state order by last_login_time desc nulls last, character_name asc nulls last limit 8) r))";
+const WORLD_STATISTICS_QUERY: &str = "select json_build_object('buildings', (select count(*) from dune.building_instances), 'vehicles', (select count(*) from dune.vehicles), 'base_backups', (select count(*) from dune.base_backups), 'landclaim_segments', (select count(*) from dune.landclaim_segments), 'respawn_locations', (select count(*) from dune.player_respawn_locations), 'exchange_orders', (select count(*) from dune.dune_exchange_orders), 'exchange_sell_orders', (select count(*) from dune.dune_exchange_sell_orders), 'event_log_entries', (select count(*) from dune.event_log), 'game_events', (select count(*) from dune.game_events))";
 
 pub async fn list_world_partitions(state: &AppState) -> Result<Vec<DatabaseWorldPartition>> {
     let stdout = exec_database_psql_json(state, WORLD_PARTITIONS_QUERY).await?;
@@ -68,6 +70,13 @@ pub async fn database_player_statistics(state: &AppState) -> Result<DatabasePlay
 
     serde_json::from_str(stdout.trim())
         .with_context(|| "failed to parse database player statistics output".to_string())
+}
+
+pub async fn database_world_statistics(state: &AppState) -> Result<DatabaseWorldStatistics> {
+    let stdout = exec_database_psql_json(state, WORLD_STATISTICS_QUERY).await?;
+
+    serde_json::from_str(stdout.trim())
+        .with_context(|| "failed to parse database world statistics output".to_string())
 }
 
 pub async fn database_player_profile(
@@ -347,6 +356,17 @@ mod tests {
         assert_eq!(statistics.total_players, 2);
         assert_eq!(statistics.online_statuses[0].name, "Online");
         assert_eq!(statistics.recent_players[0].account_id, 42);
+    }
+
+    #[test]
+    fn parses_database_world_statistics() {
+        let json = r#"{"buildings":5,"vehicles":2,"base_backups":1,"landclaim_segments":9,"respawn_locations":3,"exchange_orders":4,"exchange_sell_orders":2,"event_log_entries":7,"game_events":8}"#;
+
+        let statistics: DatabaseWorldStatistics = serde_json::from_str(json).unwrap();
+
+        assert_eq!(statistics.buildings, 5);
+        assert_eq!(statistics.exchange_orders, 4);
+        assert_eq!(statistics.game_events, 8);
     }
 
     #[test]

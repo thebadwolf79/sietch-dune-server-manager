@@ -165,6 +165,27 @@ pub struct DatabasePlayerStatisticsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+pub struct DatabaseWorldStatistics {
+    pub buildings: i64,
+    pub vehicles: i64,
+    pub base_backups: i64,
+    pub landclaim_segments: i64,
+    pub respawn_locations: i64,
+    pub exchange_orders: i64,
+    pub exchange_sell_orders: i64,
+    pub event_log_entries: i64,
+    pub game_events: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseWorldStatisticsResponse {
+    pub namespace: String,
+    pub statistics: DatabaseWorldStatistics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
 pub struct DatabasePlayerFaction {
     pub faction_id: i16,
     pub changed_at: Option<String>,

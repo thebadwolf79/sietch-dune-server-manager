@@ -263,6 +263,23 @@ export type DatabasePlayerStatisticsResponse = {
   statistics: DatabasePlayerStatistics;
 };
 
+export type DatabaseWorldStatistics = {
+  buildings: number;
+  vehicles: number;
+  baseBackups: number;
+  landclaimSegments: number;
+  respawnLocations: number;
+  exchangeOrders: number;
+  exchangeSellOrders: number;
+  eventLogEntries: number;
+  gameEvents: number;
+};
+
+export type DatabaseWorldStatisticsResponse = {
+  namespace: string;
+  statistics: DatabaseWorldStatistics;
+};
+
 export type PlayerSummary = {
   active: number;
   online: number;
