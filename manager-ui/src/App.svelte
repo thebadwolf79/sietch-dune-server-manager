@@ -144,7 +144,6 @@
   let directorAutoLoading = false;
   let directorCapabilities: DirectorCapabilities | null = null;
   let directorApiSelection = "";
-  let directorApiBody = "{}";
   let directorApiResult = "";
   let directorNotice = "";
   let directorBusy = false;
@@ -1380,20 +1379,16 @@
   async function runDirectorApiCall() {
     const capability = selectedDirectorCapability();
     if (!capability) return;
-    if (capability.method !== "GET" && !window.confirm("Run this Director write operation?")) return;
+    if (capability.method !== "GET") {
+      error = "Director write operations are handled by the controlled editors above.";
+      return;
+    }
     directorApiBusy = true;
     directorApiResult = "";
     error = "";
     try {
       const proxyPath = `/api/director${capability.path}`;
-      const init: RequestInit =
-        capability.method === "GET"
-          ? {}
-          : {
-              method: capability.method,
-              body: JSON.stringify(parseJsonDraft(directorApiBody || "{}")),
-            };
-      directorApiResult = formatJson(await api<unknown>(proxyPath, init));
+      directorApiResult = formatJson(await api<unknown>(proxyPath));
     } catch (err) {
       error = message(err);
     } finally {
@@ -2827,8 +2822,8 @@
             <summary>Advanced Director API console</summary>
             <div class="editor-title api-console-title">
               <div>
-                <h3>Allowlisted API calls</h3>
-                <p class="muted">Run allowlisted Director calls through the authenticated Manager API proxy.</p>
+                <h3>Director diagnostics</h3>
+                <p class="muted">Inspect allowlisted Director reads through the authenticated Manager API proxy.</p>
               </div>
               <button disabled={directorApiBusy} on:click={() => loadDirectorCapabilities()}>
                 {directorApiBusy ? "Working..." : "Load paths"}
@@ -2848,15 +2843,15 @@
                     {/each}
                   </select>
                 </label>
-                <button disabled={directorApiBusy || !selectedDirectorCapability()} on:click={runDirectorApiCall}>
-                  {directorApiBusy ? "Running..." : "Run"}
+                <button
+                  disabled={directorApiBusy || !selectedDirectorCapability() || selectedDirectorCapability()?.method !== "GET"}
+                  on:click={runDirectorApiCall}
+                >
+                  {directorApiBusy ? "Loading..." : "Inspect"}
                 </button>
               </div>
               {#if selectedDirectorCapability()?.method !== "GET"}
-                <label>
-                  JSON body
-                  <textarea bind:value={directorApiBody} spellcheck="false"></textarea>
-                </label>
+                <p class="muted">This write route is available through controlled fields above, so raw request bodies are not exposed here.</p>
               {/if}
               {#if directorApiResult}
                 <textarea readonly value={directorApiResult} spellcheck="false"></textarea>
