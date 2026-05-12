@@ -10,6 +10,7 @@
     type DatabaseGuildsResponse,
     type DatabaseMaintenanceItem,
     type DatabaseMaintenanceResponse,
+    type DatabasePlayerProfileResponse,
     type DatabasePlayerStatisticsResponse,
     type DatabasePlayerTagsUpdateResponse,
     type DatabasePlayerSummary,
@@ -154,6 +155,8 @@
   let playerFilter = "";
   let databasePlayers: DatabasePlayersResponse | null = null;
   let databasePlayersBusy = false;
+  let selectedPlayerProfile: DatabasePlayerProfileResponse | null = null;
+  let selectedPlayerProfileBusy = false;
   let databaseGuilds: DatabaseGuildsResponse | null = null;
   let databaseGuildsBusy = false;
   let playerTagDrafts: Record<number, string> = {};
@@ -620,6 +623,18 @@
     }
   }
 
+  async function loadPlayerProfile(accountId: number) {
+    selectedPlayerProfileBusy = true;
+    error = "";
+    try {
+      selectedPlayerProfile = await api<DatabasePlayerProfileResponse>(`/api/database/players/${accountId}`);
+    } catch (err) {
+      error = message(err);
+    } finally {
+      selectedPlayerProfileBusy = false;
+    }
+  }
+
   async function loadDatabaseGuilds(showError = true) {
     databaseGuildsBusy = true;
     if (showError) error = "";
@@ -664,6 +679,12 @@
           rows: databasePlayers.rows.map((player) =>
             player.accountId === result.result.accountId ? { ...player, tags: result.result.tags } : player,
           ),
+        };
+      }
+      if (selectedPlayerProfile?.profile.accountId === result.result.accountId) {
+        selectedPlayerProfile = {
+          ...selectedPlayerProfile,
+          profile: { ...selectedPlayerProfile.profile, tags: result.result.tags },
         };
       }
       void loadPlayerStatistics(false);
@@ -2724,6 +2745,13 @@
                   <div class="player-directory-state">
                     <b class:good={player.onlineStatus === "Online"}>{player.onlineStatus || "Unknown"}</b>
                     <span>{player.lifeState || "No life state"}</span>
+                    <button
+                      class="inline"
+                      disabled={selectedPlayerProfileBusy}
+                      on:click={() => loadPlayerProfile(player.accountId)}
+                    >
+                      {selectedPlayerProfileBusy && selectedPlayerProfile?.profile.accountId === player.accountId ? "Opening..." : "Profile"}
+                    </button>
                   </div>
                   <div class="player-directory-meta">
                     <span>Server</span><b>{player.serverId || "None"}</b>
@@ -2776,6 +2804,87 @@
             <p class="muted">Loading the player directory. This is a controlled database view, not raw SQL access.</p>
           {/if}
         </section>
+        {#if selectedPlayerProfile}
+          <section class="panel player-profile-panel">
+            <div class="split-heading">
+              <div>
+                <p class="eyebrow">Player profile</p>
+                <h2>{selectedPlayerProfile.profile.characterName || `Account ${selectedPlayerProfile.profile.accountId}`}</h2>
+                <p class="muted">A controlled support view across selected account, character, guild, faction, currency, and safety tables.</p>
+              </div>
+              <button class="inline" on:click={() => (selectedPlayerProfile = null)}>Close</button>
+            </div>
+            <div class="profile-grid">
+              <article>
+                <span>Account</span>
+                <strong>{selectedPlayerProfile.profile.accountId}</strong>
+                <p>{selectedPlayerProfile.profile.platformName || "Platform unknown"}{selectedPlayerProfile.profile.takeoverable ? " · takeoverable" : ""}</p>
+              </article>
+              <article>
+                <span>Status</span>
+                <strong>{selectedPlayerProfile.profile.onlineStatus || "Unknown"}</strong>
+                <p>{selectedPlayerProfile.profile.lifeState || "No life state"}</p>
+              </article>
+              <article>
+                <span>World position</span>
+                <strong>{selectedPlayerProfile.profile.serverId || "No server"}</strong>
+                <p>Partition {selectedPlayerProfile.profile.previousServerPartitionId ?? "unknown"} · dimension {selectedPlayerProfile.profile.homeDimensionIndex ?? "unknown"}</p>
+              </article>
+              <article>
+                <span>Guild</span>
+                <strong>{selectedPlayerProfile.profile.guildName || "No guild"}</strong>
+                <p>{selectedPlayerProfile.profile.guildId ? `Guild ${selectedPlayerProfile.profile.guildId}, role ${selectedPlayerProfile.profile.guildRoleId ?? "unknown"}` : "No membership row"}</p>
+              </article>
+            </div>
+            <div class="profile-columns">
+              <div>
+                <h3>Activity</h3>
+                <div class="rows compact">
+                  <div class="row"><span>Last login</span><b>{formatBackupTime(selectedPlayerProfile.profile.lastLoginTime)}</b></div>
+                  <div class="row"><span>Last avatar activity</span><b>{formatBackupTime(selectedPlayerProfile.profile.lastAvatarActivity)}</b></div>
+                </div>
+                <h3>Operator tags</h3>
+                <div class="tag-row">
+                  {#each selectedPlayerProfile.profile.tags as tag}
+                    <span>{tag}</span>
+                  {/each}
+                  {#if !selectedPlayerProfile.profile.tags.length}<em>No tags</em>{/if}
+                </div>
+              </div>
+              <div>
+                <h3>Faction and currency</h3>
+                <div class="rows compact">
+                  {#each selectedPlayerProfile.profile.factions as faction}
+                    <div class="row"><span>Faction {faction.factionId}</span><b>{formatEventTime(faction.changedAt)}</b></div>
+                  {/each}
+                  {#if !selectedPlayerProfile.profile.factions.length}<p class="muted">No faction rows.</p>{/if}
+                  {#each selectedPlayerProfile.profile.currencyBalances as balance}
+                    <div class="row"><span>Currency {balance.currencyId}</span><b>{balance.balance}</b></div>
+                  {/each}
+                  {#if !selectedPlayerProfile.profile.currencyBalances.length}<p class="muted">No currency rows.</p>{/if}
+                </div>
+              </div>
+              <div>
+                <h3>Access and safety</h3>
+                <div class="rows compact">
+                  {#each selectedPlayerProfile.profile.accessCodes as code}
+                    <div class="row"><span>Code type {code.accessCodeType}</span><b>{code.accessCode}{code.resettable ? " resettable" : ""}</b></div>
+                  {/each}
+                  {#if !selectedPlayerProfile.profile.accessCodes.length}<p class="muted">No access code rows.</p>{/if}
+                  {#each selectedPlayerProfile.profile.cheatFlags as flag}
+                    <div class="row warning"><span>{flag.cheatType}</span><b>{formatEventTime(flag.eventTime)}</b></div>
+                  {/each}
+                  {#each selectedPlayerProfile.profile.removalLogs as log}
+                    <div class="row warning"><span>{log.reason || "Removal log"}</span><b>{formatEventTime(log.eventTime)}</b></div>
+                  {/each}
+                  {#if !selectedPlayerProfile.profile.cheatFlags.length && !selectedPlayerProfile.profile.removalLogs.length}
+                    <p class="muted">No cheat or removal rows found.</p>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          </section>
+        {/if}
         <section class="panel guild-directory-panel">
           <div class="split-heading">
             <div>

@@ -95,6 +95,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             axum::routing::patch(update_database_world_partition),
         )
         .route("/api/database/players", get(database_players))
+        .route(
+            "/api/database/players/:account_id",
+            get(database_player_profile_route),
+        )
         .route("/api/database/guilds", get(database_guilds))
         .route(
             "/api/database/players/:account_id/tags",
@@ -661,6 +665,21 @@ async fn database_players(
     Ok(Json(DatabasePlayersResponse {
         namespace: state.namespace.clone(),
         rows: list_database_players(&state).await?,
+    }))
+}
+
+async fn database_player_profile_route(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(account_id): Path<i64>,
+) -> ApiResponse<DatabasePlayerProfileResponse> {
+    authorize(&state, &headers, None)?;
+    let profile = database_player_profile(&state, account_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("player account was not found"))?;
+    Ok(Json(DatabasePlayerProfileResponse {
+        namespace: state.namespace.clone(),
+        profile,
     }))
 }
 

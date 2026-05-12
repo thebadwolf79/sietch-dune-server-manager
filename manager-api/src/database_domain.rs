@@ -9,9 +9,9 @@ use tokio::io::AsyncReadExt;
 use crate::{
     errors::ApiError,
     models::{
-        DatabaseGuildSummary, DatabasePlayerStatistics, DatabasePlayerSummary,
-        DatabasePlayerTagRequest, DatabasePlayerTagsUpdate, DatabaseWorldPartition,
-        DatabaseWorldPartitionUpdateRequest,
+        DatabaseGuildSummary, DatabasePlayerProfile, DatabasePlayerStatistics,
+        DatabasePlayerSummary, DatabasePlayerTagRequest, DatabasePlayerTagsUpdate,
+        DatabaseWorldPartition, DatabaseWorldPartitionUpdateRequest,
     },
     state::AppState,
 };
@@ -49,6 +49,25 @@ pub async fn database_player_statistics(state: &AppState) -> Result<DatabasePlay
 
     serde_json::from_str(stdout.trim())
         .with_context(|| "failed to parse database player statistics output".to_string())
+}
+
+pub async fn database_player_profile(
+    state: &AppState,
+    account_id: i64,
+) -> Result<Option<DatabasePlayerProfile>, ApiError> {
+    if account_id <= 0 {
+        return Err(ApiError::bad_request("account id must be positive"));
+    }
+    let query = player_profile_query(account_id);
+    let stdout = exec_database_psql_json(state, &query).await?;
+    let value: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|_| ApiError::bad_gateway("failed to parse player profile"))?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    let profile = serde_json::from_value(value)
+        .map_err(|_| ApiError::bad_gateway("failed to parse player profile fields"))?;
+    Ok(Some(profile))
 }
 
 pub async fn add_database_player_tag(
@@ -217,6 +236,12 @@ fn player_tag_update_query(action: &str, account_id: i64, tag: &str) -> Result<S
     ))
 }
 
+fn player_profile_query(account_id: i64) -> String {
+    format!(
+        "select coalesce((select json_build_object('account_id', ps.account_id, 'character_name', ps.character_name, 'platform_name', ea.platform_name, 'takeoverable', ea.takeoverable, 'online_status', ps.online_status::text, 'life_state', ps.life_state::text, 'server_id', ps.server_id, 'previous_server_partition_id', ps.previous_server_partition_id, 'home_dimension_index', ps.home_dimension_index, 'last_login_time', ps.last_login_time::text, 'last_avatar_activity', ps.last_avatar_activity::text, 'guild_id', g.guild_id, 'guild_name', g.guild_name, 'guild_role_id', gm.role_id, 'tags', coalesce(tags.tags, '[]'::json), 'factions', coalesce(factions.rows, '[]'::json), 'currency_balances', coalesce(currency.rows, '[]'::json), 'access_codes', coalesce(access_codes.rows, '[]'::json), 'cheat_flags', coalesce(cheat_flags.rows, '[]'::json), 'removal_logs', coalesce(removal_logs.rows, '[]'::json)) from dune.player_state ps left join dune.encrypted_accounts ea on ea.id = ps.account_id left join dune.guild_members gm on gm.player_id = ps.player_state_id left join dune.guilds g on g.guild_id = gm.guild_id left join lateral (select json_agg(pt.tag order by pt.tag) as tags from dune.player_tags pt where pt.account_id = ps.account_id) tags on true left join lateral (select json_agg(f order by f.faction_id) as rows from (select faction_id, utc_time_faction_change::text as changed_at from dune.player_faction where actor_id in (ps.player_state_id, ps.player_controller_id, ps.player_pawn_id)) f) factions on true left join lateral (select json_agg(c order by c.currency_id) as rows from (select currency_id, balance from dune.player_virtual_currency_balances where player_controller_id = ps.player_controller_id) c) currency on true left join lateral (select json_agg(a order by a.access_code_type, a.access_code) as rows from (select access_code_type, access_code, is_resettable as resettable from dune.player_access_codes where account_id = ps.account_id limit 20) a) access_codes on true left join lateral (select json_agg(cf order by cf.event_time desc) as rows from (select event_time::text as event_time, cheat_type::text as cheat_type from dune.cheater_tracking where fls_id = ea.platform_id order by event_time desc limit 20) cf) cheat_flags on true left join lateral (select json_agg(rl order by rl.event_time desc) as rows from (select event_time::text as event_time, reason from dune.account_removal_log where account_id = ps.account_id order by event_time desc limit 20) rl) removal_logs on true where ps.account_id = {account_id} limit 1), 'null'::json)"
+    )
+}
+
 fn parse_player_tags_update(stdout: &str) -> Result<DatabasePlayerTagsUpdate, ApiError> {
     let value: serde_json::Value = serde_json::from_str(stdout.trim())
         .map_err(|_| ApiError::bad_gateway("failed to parse player tags update"))?;
@@ -286,6 +311,19 @@ mod tests {
         assert_eq!(statistics.total_players, 2);
         assert_eq!(statistics.online_statuses[0].name, "Online");
         assert_eq!(statistics.recent_players[0].account_id, 42);
+    }
+
+    #[test]
+    fn parses_database_player_profile() {
+        let json = r#"{"account_id":42,"character_name":"Siona","platform_name":"Steam","takeoverable":false,"online_status":"Online","life_state":"Alive","server_id":"server-a","previous_server_partition_id":8,"home_dimension_index":0,"last_login_time":"2026-05-12 10:00:00+00","last_avatar_activity":"2026-05-12 10:05:00+00","guild_id":7,"guild_name":"Atreides","guild_role_id":2,"tags":["helper"],"factions":[{"faction_id":1,"changed_at":"2026-05-12 09:00:00+00"}],"currency_balances":[{"currency_id":3,"balance":500}],"access_codes":[{"access_code_type":1,"access_code":1234,"resettable":true}],"cheat_flags":[{"event_time":"2026-05-12 08:00:00+00","cheat_type":"Speed"}],"removal_logs":[{"event_time":"2026-05-12 07:00:00+00","reason":"test"}]}"#;
+
+        let profile: DatabasePlayerProfile = serde_json::from_str(json).unwrap();
+
+        assert_eq!(profile.account_id, 42);
+        assert_eq!(profile.platform_name.as_deref(), Some("Steam"));
+        assert_eq!(profile.factions[0].faction_id, 1);
+        assert_eq!(profile.currency_balances[0].balance, 500);
+        assert_eq!(profile.access_codes[0].access_code, 1234);
     }
 
     #[test]

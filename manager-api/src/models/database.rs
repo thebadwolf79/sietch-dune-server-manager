@@ -131,3 +131,71 @@ pub struct DatabasePlayerStatisticsResponse {
     pub namespace: String,
     pub statistics: DatabasePlayerStatistics,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+pub struct DatabasePlayerFaction {
+    pub faction_id: i16,
+    pub changed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+pub struct DatabasePlayerCurrencyBalance {
+    pub currency_id: i16,
+    pub balance: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+pub struct DatabasePlayerAccessCode {
+    pub access_code_type: i32,
+    pub access_code: i32,
+    pub resettable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+pub struct DatabasePlayerCheatFlag {
+    pub event_time: Option<String>,
+    pub cheat_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+pub struct DatabasePlayerRemovalLog {
+    pub event_time: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase", deserialize = "snake_case"))]
+pub struct DatabasePlayerProfile {
+    pub account_id: i64,
+    pub character_name: Option<String>,
+    pub platform_name: Option<String>,
+    pub takeoverable: Option<bool>,
+    pub online_status: Option<String>,
+    pub life_state: Option<String>,
+    pub server_id: Option<String>,
+    pub previous_server_partition_id: Option<i64>,
+    pub home_dimension_index: Option<i32>,
+    pub last_login_time: Option<String>,
+    pub last_avatar_activity: Option<String>,
+    pub guild_id: Option<i64>,
+    pub guild_name: Option<String>,
+    pub guild_role_id: Option<i16>,
+    pub tags: Vec<String>,
+    pub factions: Vec<DatabasePlayerFaction>,
+    pub currency_balances: Vec<DatabasePlayerCurrencyBalance>,
+    pub access_codes: Vec<DatabasePlayerAccessCode>,
+    pub cheat_flags: Vec<DatabasePlayerCheatFlag>,
+    pub removal_logs: Vec<DatabasePlayerRemovalLog>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabasePlayerProfileResponse {
+    pub namespace: String,
+    pub profile: DatabasePlayerProfile,
+}

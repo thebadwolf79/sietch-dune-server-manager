@@ -224,6 +224,15 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Player directory rows" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/database/players/{accountId}": {
+                "get": {
+                    "summary": "Read a controlled player profile from selected game database tables",
+                    "parameters": [
+                        { "name": "accountId", "in": "path", "required": true, "schema": { "type": "integer", "minimum": 1 } }
+                    ],
+                    "responses": { "200": { "description": "Player profile, guild, faction, currency, access code, tag, and safety summaries" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "404": { "$ref": "#/components/responses/Error" } }
+                }
+            },
             "/api/database/guilds": {
                 "get": {
                     "summary": "List controlled guild directory rows from the game database",

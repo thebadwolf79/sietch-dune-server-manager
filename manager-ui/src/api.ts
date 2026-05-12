@@ -184,6 +184,34 @@ export type DatabasePlayerTagsUpdateResponse = {
   };
 };
 
+export type DatabasePlayerProfile = {
+  accountId: number;
+  characterName?: string;
+  platformName?: string;
+  takeoverable?: boolean;
+  onlineStatus?: string;
+  lifeState?: string;
+  serverId?: string;
+  previousServerPartitionId?: number;
+  homeDimensionIndex?: number;
+  lastLoginTime?: string;
+  lastAvatarActivity?: string;
+  guildId?: number;
+  guildName?: string;
+  guildRoleId?: number;
+  tags: string[];
+  factions: Array<{ factionId: number; changedAt?: string }>;
+  currencyBalances: Array<{ currencyId: number; balance: number }>;
+  accessCodes: Array<{ accessCodeType: number; accessCode: number; resettable: boolean }>;
+  cheatFlags: Array<{ eventTime?: string; cheatType: string }>;
+  removalLogs: Array<{ eventTime?: string; reason?: string }>;
+};
+
+export type DatabasePlayerProfileResponse = {
+  namespace: string;
+  profile: DatabasePlayerProfile;
+};
+
 export type DatabaseNamedCount = {
   name: string;
   count: number;
