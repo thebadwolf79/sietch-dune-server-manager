@@ -8,8 +8,10 @@ use kube::{
     Api,
 };
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 use crate::{
+    config_files_domain::{read_deep_desert_pvp_partition_ids, write_deep_desert_pvp_settings},
     errors::ApiError,
     models::{
         BattleGroupDetail, BattleGroupSummary, PodSummary, ServerSetSummary, ServicePortSummary,
@@ -186,7 +188,14 @@ pub async fn get_battlegroup_layout(
     validate_namespace(state, namespace)?;
     validate_kube_name(name)?;
     let item = get_battlegroup_object(state, name).await?;
-    Ok(world_layout_from_object(item, false, Vec::new()))
+    let mut layout = world_layout_from_object(item, false, Vec::new());
+    match read_deep_desert_pvp_partition_ids(state).await {
+        Ok(ids) => apply_deep_desert_pvp_ids(&mut layout, &ids),
+        Err(_) => layout.warnings.push(
+            "Deep Desert PvP config could not be read from the filebrowser volume.".to_string(),
+        ),
+    }
+    Ok(layout)
 }
 
 pub async fn patch_battlegroup_layout(
@@ -240,18 +249,26 @@ pub async fn patch_battlegroup_layout(
         battlegroup_patched = true;
     }
 
-    let mut warnings = Vec::new();
-    if pvp > 0 {
-        warnings.push(
-            "Deep Desert PvP config requires the runtime config writer; this endpoint only updated partition counts.".to_string(),
-        );
+    let warnings = Vec::new();
+    let mut pvp_config_updated = false;
+    let mut selected_pvp_ids = Vec::new();
+    if request.deep_desert_pvp_instances.is_some() {
+        let patched_data = serde_json::to_value(patched.data.clone()).unwrap_or_else(|_| json!({}));
+        let deep_desert_ids = partition_ids_for_map(&patched_data, "DeepDesert_1");
+        selected_pvp_ids = deep_desert_pvp_ids(&deep_desert_ids, pvp);
+        write_deep_desert_pvp_settings(state, &selected_pvp_ids).await?;
+        pvp_config_updated = true;
     }
-    let layout = world_layout_from_object(patched, battlegroup_patched, warnings.clone());
+    let mut layout = world_layout_from_object(patched, battlegroup_patched, warnings.clone());
+    if pvp_config_updated {
+        apply_deep_desert_pvp_ids(&mut layout, &selected_pvp_ids);
+        layout.restart_required = true;
+    }
     Ok(WorldLayoutUpdateResponse {
         restart_required: layout.restart_required,
         layout,
         battlegroup_patched,
-        pvp_config_updated: false,
+        pvp_config_updated,
         warnings,
     })
 }
@@ -434,6 +451,32 @@ fn world_layout_from_object(
         restart_required,
         warnings,
     }
+}
+
+fn apply_deep_desert_pvp_ids(layout: &mut WorldLayout, pvp_partition_ids: &[i64]) {
+    let selected = pvp_partition_ids.iter().copied().collect::<HashSet<_>>();
+    let pvp_count = layout
+        .deep_desert_partition_ids
+        .iter()
+        .filter(|id| selected.contains(id))
+        .count();
+    layout.deep_desert_pvp_instances = pvp_count;
+    layout.deep_desert_pve_instances = layout.deep_desert_total_instances.saturating_sub(pvp_count);
+}
+
+fn deep_desert_pvp_ids(partition_ids: &[i64], pvp_instance_count: usize) -> Vec<i64> {
+    if pvp_instance_count == 0 {
+        return Vec::new();
+    }
+    partition_ids
+        .iter()
+        .rev()
+        .take(pvp_instance_count)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 fn append_social_hubs_patch(
@@ -697,5 +740,27 @@ mod tests {
 
         let layout = world_layout_from_object(object, false, Vec::new());
         assert!(!layout.social_hubs_enabled);
+    }
+
+    #[test]
+    fn derives_deep_desert_pvp_ids_from_selected_count() {
+        assert_eq!(deep_desert_pvp_ids(&[8], 0), Vec::<i64>::new());
+        assert_eq!(deep_desert_pvp_ids(&[8], 1), vec![8]);
+        assert_eq!(deep_desert_pvp_ids(&[8, 29], 1), vec![29]);
+    }
+
+    #[test]
+    fn applies_deep_desert_pvp_ids_to_layout() {
+        let object = DynamicObject {
+            types: None,
+            metadata: Default::default(),
+            data: sample_battlegroup_data(),
+        };
+        let mut layout = world_layout_from_object(object, false, Vec::new());
+
+        apply_deep_desert_pvp_ids(&mut layout, &[8]);
+
+        assert_eq!(layout.deep_desert_pve_instances, 0);
+        assert_eq!(layout.deep_desert_pvp_instances, 1);
     }
 }

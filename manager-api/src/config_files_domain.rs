@@ -18,6 +18,7 @@ use crate::{
 
 const SETTINGS_DIR: &str = "/srv/UserSettings";
 const BACKUP_DIR: &str = "/srv/UserSettings/.dune-manager-backups";
+const LIVE_GAME_SETTINGS_PATH: &str = "/srv/Config/LinuxServer/Game.ini";
 const MAX_SETTINGS_BYTES: usize = 512 * 1024;
 const MISSING_MARKER: &str = "__DUNE_MANAGER_SETTINGS_FILE_MISSING__";
 
@@ -138,6 +139,50 @@ pub async fn write_user_settings_file(
         file: read_user_settings_file(state, file_id).await?,
         restart_recommended: true,
     })
+}
+
+pub async fn read_deep_desert_pvp_partition_ids(state: &AppState) -> Result<Vec<i64>, ApiError> {
+    let content = exec_filebrowser(
+        state,
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "set -eu\nfile={}\nif [ ! -f \"$file\" ]; then exit 0; fi\ncat \"$file\"\n",
+                sh_single_quoted(&UserSettingsKind::Game.remote_path()),
+            ),
+        ],
+        None,
+    )
+    .await?;
+    Ok(parse_deep_desert_pvp_partition_ids(&content))
+}
+
+pub async fn write_deep_desert_pvp_settings(
+    state: &AppState,
+    pvp_partition_ids: &[i64],
+) -> Result<(), ApiError> {
+    if pvp_partition_ids.iter().any(|id| *id <= 0) {
+        return Err(ApiError::bad_request(
+            "PvP partition IDs must be positive integers",
+        ));
+    }
+    let pvp_ids = pvp_partition_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    exec_filebrowser(
+        state,
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            deep_desert_pvp_update_script(&pvp_ids),
+        ],
+        None,
+    )
+    .await?;
+    Ok(())
 }
 
 pub async fn list_user_settings_backups(
@@ -287,6 +332,86 @@ fn validate_settings_content(content: &str) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+fn deep_desert_pvp_update_script(pvp_ids: &str) -> String {
+    format!(
+        r#"
+set -eu
+pvp_ids={pvp_ids}
+
+update_ini() {{
+  file="$1"
+  mkdir -p "$(dirname "$file")"
+  touch "$file"
+  backup="$file.manager-backup-$(date -u +%Y%m%dT%H%M%SZ)"
+  cp "$file" "$backup"
+  tmp=$(mktemp)
+  awk -v ids="$pvp_ids" '
+  BEGIN {{ section="[/Script/DuneSandbox.PvpPveSettings]"; insec=0; wrote=0 }}
+  function write_block(    n, parts, i) {{
+    if (!wrote) {{
+      print section
+      print "; Managed by Dune Dedicated Server Manager"
+      print "m_bIsInitialized=True"
+      print "m_bShouldForceEnablePvpOnAllPartitions=False"
+      print "!m_PvpEnabledPartitions=ClearArray"
+      n=split(ids, parts, " ")
+      for (i=1; i<=n; i++) if (parts[i] != "") print "+m_PvpEnabledPartitions=" parts[i]
+      print "!m_EffectivePvpEnabledPartitions=ClearArray"
+      for (i=1; i<=n; i++) if (parts[i] != "") print "+m_EffectivePvpEnabledPartitions=(UID=" parts[i] ")"
+      wrote=1
+    }}
+  }}
+  $0 == section {{ insec=1; next }}
+  /^\[/ {{
+    if (insec) {{ write_block(); insec=0 }}
+    print
+    next
+  }}
+  insec {{ next }}
+  {{ print }}
+  END {{ if (insec || !wrote) write_block() }}
+  ' "$file" > "$tmp"
+  cp "$tmp" "$file"
+  chmod 0644 "$file"
+  rm -f "$tmp"
+}}
+
+update_ini {user_game}
+update_ini {live_game}
+"#,
+        pvp_ids = sh_single_quoted(pvp_ids),
+        user_game = sh_single_quoted(&UserSettingsKind::Game.remote_path()),
+        live_game = sh_single_quoted(LIVE_GAME_SETTINGS_PATH),
+    )
+}
+
+fn parse_deep_desert_pvp_partition_ids(content: &str) -> Vec<i64> {
+    let mut ids = Vec::new();
+    let mut in_section = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_section = trimmed == "[/Script/DuneSandbox.PvpPveSettings]";
+            continue;
+        }
+        if !in_section || trimmed.starts_with(';') || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if key.trim().trim_start_matches('+') != "m_PvpEnabledPartitions" {
+            continue;
+        }
+        if let Ok(id) = value.trim().parse::<i64>() {
+            ids.push(id);
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 async fn exec_filebrowser(
@@ -479,5 +604,31 @@ m_bShouldForceEnablePvpOnAllPartitions=False
             backups[0].modified_at.as_deref(),
             Some("2026-05-12T01:02:03Z")
         );
+    }
+
+    #[test]
+    fn parses_deep_desert_pvp_partition_ids() {
+        let ids = parse_deep_desert_pvp_partition_ids(
+            r#"
+[/Script/DuneSandbox.PvpPveSettings]
+m_bIsInitialized=True
+!m_PvpEnabledPartitions=ClearArray
++m_PvpEnabledPartitions=29
++m_PvpEnabledPartitions=8
++m_EffectivePvpEnabledPartitions=(UID=29)
+"#,
+        );
+
+        assert_eq!(ids, vec![8, 29]);
+    }
+
+    #[test]
+    fn builds_deep_desert_pvp_update_script() {
+        let script = deep_desert_pvp_update_script("8 29");
+
+        assert!(script.contains("+m_PvpEnabledPartitions="));
+        assert!(script.contains("+m_EffectivePvpEnabledPartitions=(UID="));
+        assert!(script.contains("/srv/UserSettings/UserGame.ini"));
+        assert!(script.contains("/srv/Config/LinuxServer/Game.ini"));
     }
 }
