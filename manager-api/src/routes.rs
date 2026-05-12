@@ -85,6 +85,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/workloads", get(workloads))
         .route("/api/events", get(events))
         .route("/api/storage", get(storage))
+        .route("/api/database-maintenance", get(database_maintenance))
         .route("/api/logs", get(logs))
         .route("/api/logs/export", get(logs_export))
         .route("/api/logs/stream", get(logs_stream))
@@ -592,6 +593,14 @@ async fn storage(
         namespace: state.namespace.clone(),
         claims: list_persistent_volume_claims(&state).await?,
     }))
+}
+
+async fn database_maintenance(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResponse<DatabaseMaintenanceResponse> {
+    authorize(&state, &headers, None)?;
+    Ok(Json(list_database_maintenance(&state).await?))
 }
 
 async fn logs(

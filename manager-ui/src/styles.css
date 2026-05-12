@@ -793,6 +793,54 @@ header,
   white-space: nowrap;
 }
 
+.database-ribbon {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.database-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.database-card {
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.7fr) minmax(0, 1.3fr);
+  gap: 0.85rem;
+  align-items: start;
+  padding: 0.9rem;
+  border: 1px solid rgba(214, 187, 133, 0.14);
+  border-radius: 8px;
+  background:
+    linear-gradient(140deg, rgba(199, 149, 76, 0.095), rgba(120, 89, 54, 0.035)),
+    rgba(8, 7, 6, 0.34);
+}
+
+.database-card span,
+.database-card small {
+  color: #b9aa91;
+  font-size: 0.8rem;
+}
+
+.database-card strong {
+  display: block;
+  margin: 0.15rem 0;
+  overflow-wrap: anywhere;
+}
+
+.database-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 0.65rem;
+}
+
+.database-fields b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .metric-card,
 .panel {
   padding: 1rem;
@@ -905,7 +953,9 @@ header,
   .workload-grid,
   .workload-card,
   .event-list article,
-  .storage-grid {
+  .storage-grid,
+  .database-ribbon,
+  .database-card {
     grid-template-columns: 1fr;
   }
 

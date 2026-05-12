@@ -14,9 +14,10 @@ use crate::{
     config_files_domain::{read_deep_desert_pvp_partition_ids, write_deep_desert_pvp_settings},
     errors::ApiError,
     models::{
-        BattleGroupDetail, BattleGroupSummary, ContainerResourceSummary, EventSummary,
-        PersistentVolumeClaimSummary, PodSummary, ServerSetSummary, ServicePortSummary,
-        ServiceSummary, WorldLayout, WorldLayoutUpdateRequest, WorldLayoutUpdateResponse,
+        BattleGroupDetail, BattleGroupSummary, ContainerResourceSummary, DatabaseMaintenanceItem,
+        DatabaseMaintenanceResponse, EventSummary, PersistentVolumeClaimSummary, PodSummary,
+        ServerSetSummary, ServicePortSummary, ServiceSummary, WorldLayout,
+        WorldLayoutUpdateRequest, WorldLayoutUpdateResponse,
     },
     state::AppState,
     validation::{validate_kube_name, validate_namespace},
@@ -104,6 +105,25 @@ pub async fn list_persistent_volume_claims(
         .collect::<Vec<_>>();
     claims.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(claims)
+}
+
+pub async fn list_database_maintenance(state: &AppState) -> Result<DatabaseMaintenanceResponse> {
+    let (backups, schedules, restores, migrations, operations) = tokio::try_join!(
+        list_database_resource(state, "DatabaseBackup", "databasebackups"),
+        list_database_resource(state, "DatabaseBackupSchedule", "databasebackupschedules"),
+        list_database_resource(state, "DatabaseRestore", "databaserestores"),
+        list_database_resource(state, "DatabaseMigrate", "databasemigrates"),
+        list_database_resource(state, "DatabaseOperation", "databaseoperations"),
+    )?;
+
+    Ok(DatabaseMaintenanceResponse {
+        namespace: state.namespace.clone(),
+        backups,
+        schedules,
+        restores,
+        migrations,
+        operations,
+    })
 }
 
 fn pod_summary(pod: Pod) -> PodSummary {
@@ -205,6 +225,34 @@ fn container_resources(container: &Container) -> ContainerResourceSummary {
             .and_then(|items| items.get("memory"))
             .map(|value| value.0.clone()),
     }
+}
+
+async fn list_database_resource(
+    state: &AppState,
+    kind: &str,
+    plural: &str,
+) -> Result<Vec<DatabaseMaintenanceItem>> {
+    let api: Api<DynamicObject> = Api::namespaced_with(
+        state.client.clone(),
+        &state.namespace,
+        &igw_resource(kind, plural),
+    );
+    let list = api
+        .list(&ListParams::default())
+        .await
+        .with_context(|| format!("failed to list {plural}"))?;
+
+    let mut items = list
+        .items
+        .into_iter()
+        .map(|item| database_maintenance_item(kind, item))
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| {
+        maintenance_sort_key(right)
+            .cmp(&maintenance_sort_key(left))
+            .then_with(|| right.name.cmp(&left.name))
+    });
+    Ok(items)
 }
 
 pub async fn list_battlegroups(state: &AppState) -> Result<Vec<BattleGroupSummary>> {
@@ -462,12 +510,39 @@ pub fn battlegroup_detail_from_object(
 }
 
 fn battlegroup_resource() -> ApiResource {
+    igw_resource("BattleGroup", "battlegroups")
+}
+
+fn igw_resource(kind: &str, plural: &str) -> ApiResource {
     ApiResource {
         group: "igw.funcom.com".to_string(),
         version: "v1".to_string(),
         api_version: "igw.funcom.com/v1".to_string(),
-        kind: "BattleGroup".to_string(),
-        plural: "battlegroups".to_string(),
+        kind: kind.to_string(),
+        plural: plural.to_string(),
+    }
+}
+
+fn database_maintenance_item(kind: &str, item: DynamicObject) -> DatabaseMaintenanceItem {
+    let data = serde_json::to_value(item.data).unwrap_or_else(|_| json!({}));
+    DatabaseMaintenanceItem {
+        name: item.metadata.name.unwrap_or_default(),
+        kind: kind.to_string(),
+        battle_group: optional_string(&data["spec"]["battleGroup"]),
+        phase: optional_string(&data["status"]["phase"]),
+        created_at: item
+            .metadata
+            .creation_timestamp
+            .map(|time| time.0.to_rfc3339()),
+        start_time: optional_string(&data["status"]["startTime"]),
+        finish_time: optional_string(&data["status"]["finishTime"]),
+        duration: optional_string(&data["status"]["duration"]),
+        identifier: optional_string(&data["status"]["identifier"]),
+        schedule: optional_string(&data["spec"]["schedule"]),
+        suspended: data["spec"]["suspend"].as_bool(),
+        backup: optional_string(&data["spec"]["backup"]),
+        action: optional_string(&data["spec"]["action"]),
+        originator: optional_string(&data["spec"]["originator"]),
     }
 }
 
@@ -794,6 +869,22 @@ fn string_at_paths(data: &Value, paths: &[&[&str]]) -> String {
     String::new()
 }
 
+fn optional_string(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn maintenance_sort_key(item: &DatabaseMaintenanceItem) -> String {
+    item.finish_time
+        .as_deref()
+        .or(item.start_time.as_deref())
+        .or(item.created_at.as_deref())
+        .unwrap_or_default()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -935,6 +1026,42 @@ mod tests {
         assert_eq!(summary.capacity_storage.as_deref(), Some("100Gi"));
         assert_eq!(summary.storage_class.as_deref(), Some("local-path"));
         assert_eq!(summary.access_modes, vec!["ReadWriteOnce"]);
+    }
+
+    #[test]
+    fn summarizes_database_maintenance_item() {
+        let object = DynamicObject {
+            types: None,
+            metadata: ObjectMeta {
+                name: Some("daily-backup".to_string()),
+                ..ObjectMeta::default()
+            },
+            data: json!({
+                "spec": {
+                    "battleGroup": "battle-group-a",
+                    "schedule": "15 3 * * *",
+                    "suspend": false,
+                    "originator": "dune-manager"
+                },
+                "status": {
+                    "phase": "Completed",
+                    "identifier": "base-20260512",
+                    "duration": "38s",
+                    "startTime": "2026-05-12T03:15:00Z",
+                    "finishTime": "2026-05-12T03:15:38Z"
+                }
+            }),
+        };
+
+        let summary = database_maintenance_item("DatabaseBackupSchedule", object);
+
+        assert_eq!(summary.name, "daily-backup");
+        assert_eq!(summary.kind, "DatabaseBackupSchedule");
+        assert_eq!(summary.battle_group.as_deref(), Some("battle-group-a"));
+        assert_eq!(summary.phase.as_deref(), Some("Completed"));
+        assert_eq!(summary.identifier.as_deref(), Some("base-20260512"));
+        assert_eq!(summary.schedule.as_deref(), Some("15 3 * * *"));
+        assert_eq!(summary.suspended, Some(false));
     }
 
     #[test]

@@ -91,3 +91,33 @@ pub struct StorageResponse {
     pub namespace: String,
     pub claims: Vec<PersistentVolumeClaimSummary>,
 }
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseMaintenanceItem {
+    pub name: String,
+    pub kind: String,
+    pub battle_group: Option<String>,
+    pub phase: Option<String>,
+    pub created_at: Option<String>,
+    pub start_time: Option<String>,
+    pub finish_time: Option<String>,
+    pub duration: Option<String>,
+    pub identifier: Option<String>,
+    pub schedule: Option<String>,
+    pub suspended: Option<bool>,
+    pub backup: Option<String>,
+    pub action: Option<String>,
+    pub originator: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseMaintenanceResponse {
+    pub namespace: String,
+    pub backups: Vec<DatabaseMaintenanceItem>,
+    pub schedules: Vec<DatabaseMaintenanceItem>,
+    pub restores: Vec<DatabaseMaintenanceItem>,
+    pub migrations: Vec<DatabaseMaintenanceItem>,
+    pub operations: Vec<DatabaseMaintenanceItem>,
+}

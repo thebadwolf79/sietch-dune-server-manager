@@ -5,6 +5,8 @@
   import {
     ApiError,
     api,
+    type DatabaseMaintenanceItem,
+    type DatabaseMaintenanceResponse,
     type DirectorCapabilities,
     type DirectorMapConfigDetail,
     type DirectorPathCapability,
@@ -38,6 +40,7 @@
     | "battlegroup"
     | "workloads"
     | "storage"
+    | "database"
     | "layout"
     | "config"
     | "director"
@@ -103,6 +106,9 @@
   let storageClaims: PersistentVolumeClaimSummary[] = [];
   let storageBusy = false;
   let storageFilter = "";
+  let databaseMaintenance: DatabaseMaintenanceResponse | null = null;
+  let databaseBusy = false;
+  let databaseFilter = "";
   let managerSelf: ManagerSelf | null = null;
   let managerLogs: ManagerLogResponse | null = null;
   let managerBusy = "";
@@ -118,6 +124,7 @@
   $: visibleServices = filterServices(services, workloadFilter);
   $: visibleEvents = filterEvents(events, workloadFilter);
   $: visibleStorageClaims = filterStorageClaims(storageClaims, storageFilter);
+  $: visibleDatabaseItems = filterDatabaseMaintenance(databaseMaintenanceItems(databaseMaintenance), databaseFilter);
   $: layoutMemory = layout ? estimateLayoutMemory(layout) : null;
   $: layoutDeepDesertMode = layout
     ? layout.deepDesertPvpInstances > 0
@@ -491,6 +498,18 @@
     }
   }
 
+  async function loadDatabaseMaintenance() {
+    databaseBusy = true;
+    error = "";
+    try {
+      databaseMaintenance = await api<DatabaseMaintenanceResponse>("/api/database-maintenance");
+    } catch (err) {
+      error = message(err);
+    } finally {
+      databaseBusy = false;
+    }
+  }
+
   async function loadSettingsFile(file = selectedSettingsFile) {
     error = "";
     settingsNotice = "";
@@ -722,6 +741,38 @@
     if (!text) return items;
     return items.filter((claim) =>
       [claim.name, claim.phase, claim.requestedStorage, claim.capacityStorage, claim.storageClass, claim.volumeName]
+        .join(" ")
+        .toLowerCase()
+        .includes(text),
+    );
+  }
+
+  function databaseMaintenanceItems(value: DatabaseMaintenanceResponse | null): DatabaseMaintenanceItem[] {
+    if (!value) return [];
+    return [
+      ...value.schedules,
+      ...value.backups,
+      ...value.restores,
+      ...value.migrations,
+      ...value.operations,
+    ];
+  }
+
+  function filterDatabaseMaintenance(items: DatabaseMaintenanceItem[], filter: string) {
+    const text = filter.trim().toLowerCase();
+    if (!text) return items;
+    return items.filter((item) =>
+      [
+        item.name,
+        item.kind,
+        item.phase,
+        item.battleGroup,
+        item.identifier,
+        item.schedule,
+        item.backup,
+        item.action,
+        item.originator,
+      ]
         .join(" ")
         .toLowerCase()
         .includes(text),
@@ -1000,7 +1051,7 @@
         <strong>Dune Manager</strong>
         <span>{session.namespace}</span>
       </div>
-      {#each ["dashboard", "battlegroup", "workloads", "storage", "layout", "config", "director", "players", "logs", "settings"] as item}
+      {#each ["dashboard", "battlegroup", "workloads", "storage", "database", "layout", "config", "director", "players", "logs", "settings"] as item}
         <button class:active={page === item} on:click={() => (page = item as Page)}>{item}</button>
       {/each}
       <button class="ghost" on:click={logout}>Sign out</button>
@@ -1160,6 +1211,53 @@
             </div>
           {:else}
             <p class="muted">Load storage to inspect PVC capacity and binding state. The filter applies after loading.</p>
+          {/if}
+        </section>
+      {:else if page === "database"}
+        <section class="panel form">
+          <div class="split-heading">
+            <div>
+              <h2>Database</h2>
+              <p class="muted">Track backup schedules, backup runs, restores, migrations, and database utility operations.</p>
+            </div>
+            <div class="actions">
+              <input bind:value={databaseFilter} placeholder="Filter database activity" />
+              <button disabled={databaseBusy} on:click={loadDatabaseMaintenance}>
+                {databaseBusy ? "Loading..." : databaseMaintenance ? "Refresh" : "Load database"}
+              </button>
+            </div>
+          </div>
+          {#if databaseMaintenance}
+            <div class="database-ribbon">
+              <Card label="Schedules" value={`${databaseMaintenance.schedules.length}`} />
+              <Card label="Backups" value={`${databaseMaintenance.backups.length}`} />
+              <Card label="Restores" value={`${databaseMaintenance.restores.length}`} />
+              <Card label="Operations" value={`${databaseMaintenance.operations.length + databaseMaintenance.migrations.length}`} />
+            </div>
+          {/if}
+          {#if visibleDatabaseItems.length}
+            <div class="database-list">
+              {#each visibleDatabaseItems as item}
+                <article class="database-card">
+                  <div>
+                    <span>{item.kind.replace("Database", "")}</span>
+                    <strong>{item.name}</strong>
+                    <small>{item.battleGroup || "No battlegroup"}{item.originator ? ` · ${item.originator}` : ""}</small>
+                  </div>
+                  <div class="database-fields">
+                    <span>Phase</span><b class:good={item.phase === "Completed" || item.phase === "Ready"}>{item.phase || (item.suspended ? "Suspended" : "Observed")}</b>
+                    {#if item.schedule}<span>Schedule</span><b>{item.schedule}</b>{/if}
+                    {#if item.identifier}<span>Identifier</span><b>{item.identifier}</b>{/if}
+                    {#if item.backup}<span>Backup</span><b>{item.backup}</b>{/if}
+                    {#if item.action}<span>Action</span><b>{item.action}</b>{/if}
+                    <span>Time</span><b>{formatBackupTime(item.finishTime || item.startTime || item.createdAt)}</b>
+                    {#if item.duration}<span>Duration</span><b>{item.duration}</b>{/if}
+                  </div>
+                </article>
+              {/each}
+            </div>
+          {:else}
+            <p class="muted">Load database maintenance to inspect operator-managed backup and restore resources.</p>
           {/if}
         </section>
       {:else if page === "battlegroup"}

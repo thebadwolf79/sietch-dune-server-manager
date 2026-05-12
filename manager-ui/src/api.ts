@@ -89,6 +89,32 @@ export type StorageResponse = {
   claims: PersistentVolumeClaimSummary[];
 };
 
+export type DatabaseMaintenanceItem = {
+  name: string;
+  kind: string;
+  battleGroup?: string;
+  phase?: string;
+  createdAt?: string;
+  startTime?: string;
+  finishTime?: string;
+  duration?: string;
+  identifier?: string;
+  schedule?: string;
+  suspended?: boolean;
+  backup?: string;
+  action?: string;
+  originator?: string;
+};
+
+export type DatabaseMaintenanceResponse = {
+  namespace: string;
+  backups: DatabaseMaintenanceItem[];
+  schedules: DatabaseMaintenanceItem[];
+  restores: DatabaseMaintenanceItem[];
+  migrations: DatabaseMaintenanceItem[];
+  operations: DatabaseMaintenanceItem[];
+};
+
 export type PlayerSummary = {
   active: number;
   online: number;

@@ -188,6 +188,12 @@ pub fn document() -> Value {
                     "responses": { "200": { "description": "Persistent volume claim summaries" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
                 }
             },
+            "/api/database-maintenance": {
+                "get": {
+                    "summary": "List database backup, restore, migration, schedule, and operation resources",
+                    "responses": { "200": { "description": "Database maintenance summary" }, "401": { "$ref": "#/components/responses/Unauthorized" } }
+                }
+            },
             "/api/logs": {
                 "get": {
                     "summary": "Read pod logs",
