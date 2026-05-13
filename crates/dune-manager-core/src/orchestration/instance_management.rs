@@ -319,12 +319,59 @@ fn build_world_partition_update(
     } else {
         Vec::new()
     };
+    let mut patch_operations = patch_operations;
+
+    if map == InstanceMap::Survival1 {
+        append_server_group_set_patch(battlegroup, map, &partition_ids, &mut patch_operations)?;
+    }
 
     Ok(WorldPartitionUpdate {
         partition_ids,
-        patch_required,
+        patch_required: !patch_operations.is_empty(),
         patch_operations,
     })
+}
+
+fn append_server_group_set_patch(
+    battlegroup: &Value,
+    map: InstanceMap,
+    partition_ids: &[i64],
+    patch_operations: &mut Vec<Value>,
+) -> CommandResult<()> {
+    let sets_path = ["spec", "serverGroup", "template", "spec", "sets"];
+    let sets = descend(battlegroup, &sets_path)?
+        .as_array()
+        .ok_or_else(|| failure("BattleGroup serverGroup sets is not an array"))?;
+    let map_name = map.map_name();
+    let set_index = sets
+        .iter()
+        .position(|item| item["map"].as_str() == Some(map_name))
+        .ok_or_else(|| {
+            failure(format!(
+                "BattleGroup has no serverGroup set entry for {map_name}"
+            ))
+        })?;
+    let set = &sets[set_index];
+    let desired_replicas = partition_ids.len() as u64;
+    let current_replicas = set["replicas"].as_u64();
+    if current_replicas != Some(desired_replicas) {
+        patch_operations.push(json!({
+            "op": if set.get("replicas").is_some() { "replace" } else { "add" },
+            "path": format!("/spec/serverGroup/template/spec/sets/{set_index}/replicas"),
+            "value": desired_replicas,
+        }));
+    }
+
+    let desired_partitions = partition_ids.iter().map(|id| json!(id)).collect::<Vec<_>>();
+    let current_partitions = set.get("partitions").and_then(Value::as_array);
+    if current_partitions != Some(&desired_partitions) {
+        patch_operations.push(json!({
+            "op": if set.get("partitions").is_some() { "replace" } else { "add" },
+            "path": format!("/spec/serverGroup/template/spec/sets/{set_index}/partitions"),
+            "value": desired_partitions,
+        }));
+    }
+    Ok(())
 }
 
 fn next_partition_dimension(map: InstanceMap, desired: &[Value]) -> i64 {
@@ -474,6 +521,17 @@ mod tests {
                             }
                         }
                     }
+                },
+                "serverGroup": {
+                    "template": {
+                        "spec": {
+                            "sets": [
+                                {"map":"Survival_1","replicas":1,"partitions":[1]},
+                                {"map":"Overmap","replicas":1,"partitions":[2]},
+                                {"map":"DeepDesert_1","replicas":0}
+                            ]
+                        }
+                    }
                 }
             }
         })
@@ -554,6 +612,14 @@ mod tests {
 
         assert_eq!(update.partition_ids, vec![1, 29]);
         assert!(update.patch_required);
+        assert_eq!(
+            update.patch_operations[1],
+            json!({"op":"replace","path":"/spec/serverGroup/template/spec/sets/0/replicas","value":2})
+        );
+        assert_eq!(
+            update.patch_operations[2],
+            json!({"op":"replace","path":"/spec/serverGroup/template/spec/sets/0/partitions","value":[1,29]})
+        );
     }
 
     #[test]
@@ -569,6 +635,38 @@ mod tests {
                 {"id":9,"dimension":1,"disable":false,"minX":0,"minY":0,"maxX":1,"maxY":1},
                 {"id":10,"dimension":2,"disable":false,"minX":0,"minY":0,"maxX":1,"maxY":1}
             ])
+        );
+        assert_eq!(
+            update.patch_operations[1],
+            json!({"op":"replace","path":"/spec/serverGroup/template/spec/sets/0/replicas","value":3})
+        );
+        assert_eq!(
+            update.patch_operations[2],
+            json!({"op":"replace","path":"/spec/serverGroup/template/spec/sets/0/partitions","value":[1,9,10]})
+        );
+    }
+
+    #[test]
+    fn leaves_survival_server_group_when_count_is_current() {
+        let update =
+            build_world_partition_update(&sample_battlegroup(), InstanceMap::Survival1, 1).unwrap();
+
+        assert_eq!(update.partition_ids, vec![1]);
+        assert!(!update.patch_required);
+        assert!(update.patch_operations.is_empty());
+    }
+
+    #[test]
+    fn adds_survival_partitions_field_when_missing() {
+        let mut bg = sample_battlegroup();
+        bg["spec"]["serverGroup"]["template"]["spec"]["sets"][0] =
+            json!({"map":"Survival_1","replicas":1});
+
+        let update = build_world_partition_update(&bg, InstanceMap::Survival1, 1).unwrap();
+
+        assert_eq!(
+            update.patch_operations[0],
+            json!({"op":"add","path":"/spec/serverGroup/template/spec/sets/0/partitions","value":[1]})
         );
     }
 }
