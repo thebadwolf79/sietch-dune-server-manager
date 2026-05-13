@@ -275,6 +275,27 @@ type RemoteComponentLogResult = {
   output: string;
 };
 
+type TunnelService = "director" | "fileBrowser";
+
+type ServerTunnelStatus = {
+  tunnelId: string;
+  service: TunnelService;
+  localPort: number;
+  remotePort: number;
+  url: string;
+};
+
+type ServerTunnelStartRequest = {
+  tunnelId: string;
+  serverKind: "hyperv" | "ubuntu";
+  service: TunnelService;
+  host: string;
+  user?: string;
+  keyPath?: string;
+  vmName?: string;
+  namespace: string;
+};
+
 type RemoteComponentRestartResult = {
   component: string;
   output: string;
@@ -456,6 +477,8 @@ export function App() {
   const [remoteComponentRestartBusy, setRemoteComponentRestartBusy] = useState<Record<string, boolean>>({});
   const [remoteServerStatusErrors, setRemoteServerStatusErrors] = useState<Record<string, string>>({});
   const [remoteServerBusy, setRemoteServerBusy] = useState<Record<string, string>>({});
+  const [serverTunnels, setServerTunnels] = useState<Record<string, ServerTunnelStatus>>({});
+  const [serverTunnelBusy, setServerTunnelBusy] = useState<Record<string, boolean>>({});
   const [remotePreflight, setRemotePreflight] = useState<UbuntuSshPreflight | null>(null);
   const [remotePreflightStatus, setRemotePreflightStatus] = useState<DetectionState>("idle");
   const calculatedMemory = useMemo(() => calculateRequiredMemory(form), [form]);
@@ -700,6 +723,7 @@ export function App() {
   };
 
   const removeRemoteServer = (server: RemoteServerRecord) => {
+    stopTunnelsForServer(server.id);
     setRemoteServers((servers) => {
       const next = persistRemoteServers(servers.filter((candidate) => candidate.id !== server.id));
       return next;
@@ -715,6 +739,7 @@ export function App() {
   };
 
   const removeLocalHyperVServer = (server: DuneVmCandidate) => {
+    stopTunnelsForServer(localServerKey(server));
     setDuneVms((servers) => persistLocalServers(servers.filter((candidate) => candidate.vm.name !== server.vm.name)));
     setLocalHyperVRuntimes((runtimes) => omitKey(runtimes, localServerKey(server)));
     setLocalHyperVRuntimeErrors((errors) => omitKey(errors, localServerKey(server)));
@@ -722,6 +747,12 @@ export function App() {
     setRemoteComponentLogBusy((busy) => omitPrefix(busy, `${localServerKey(server)}:`));
     setRemoteComponentRestartBusy((busy) => omitPrefix(busy, `${localServerKey(server)}:`));
     setSetupRows((rows) => [...rows, log.info("local.attach", `Forgot local Hyper-V VM ${server.vm.name}.`)]);
+  };
+
+  const stopTunnelsForServer = (serverKey: string) => {
+    for (const tunnelId of Object.keys(serverTunnels).filter((id) => id.startsWith(`${serverKey}:tunnel:`))) {
+      void stopServerTunnel(tunnelId);
+    }
   };
 
   const refreshLocalHyperVServer = async (server: DuneVmCandidate) => {
@@ -865,6 +896,88 @@ export function App() {
       setSetupRows((rows) => [...rows, log.error("bg", message)]);
     } finally {
       setRemoteServerBusy((busy) => omitKey(busy, server.id));
+    }
+  };
+
+  const runLocalHyperVBattlegroupAction = async (server: DuneVmCandidate, action: "start" | "stop") => {
+    const serverKey = localServerKey(server);
+    const runtime = localHyperVRuntimes[serverKey];
+    if (!runtime) return;
+    setRemoteServerBusy((busy) => ({
+      ...busy,
+      [serverKey]: action === "start" ? "Starting battlegroup" : "Stopping battlegroup",
+    }));
+    setSetupRows((rows) => [...rows, log.info("bg", `${action === "start" ? "Starting" : "Stopping"} local battlegroup.`)]);
+    try {
+      const status = await invoke<RemoteServerStatus>(
+        action === "start" ? "start_local_hyperv_battlegroup" : "stop_local_hyperv_battlegroup",
+        {
+          request: {
+            vmName: server.vm.name,
+            host: primaryLocalServerIp(server),
+            namespace: runtime.namespace,
+            battlegroupName: runtime.battlegroupName,
+          },
+        },
+      );
+      setLocalHyperVRuntimes((runtimes) => ({
+        ...runtimes,
+        [serverKey]: { ...runtime, status },
+      }));
+      void refreshLocalHyperVServer(server);
+    } catch (err) {
+      const message = errorMessage(err);
+      setLocalHyperVRuntimeErrors((errors) => ({ ...errors, [serverKey]: message }));
+      setSetupRows((rows) => [...rows, log.error("bg", message)]);
+    } finally {
+      setRemoteServerBusy((busy) => omitKey(busy, serverKey));
+    }
+  };
+
+  const startServerTunnel = async (request: ServerTunnelStartRequest) => {
+    setServerTunnelBusy((busy) => ({ ...busy, [request.tunnelId]: true }));
+    setSetupRows((rows) => [...rows, log.info("tunnel", `Starting ${tunnelServiceLabel(request.service)} tunnel.`)]);
+    try {
+      const status = await invoke<ServerTunnelStatus>("start_server_tunnel", { request });
+      setServerTunnels((tunnels) => ({ ...tunnels, [status.tunnelId]: status }));
+      setSetupRows((rows) => [
+        ...rows,
+        log.info("tunnel", `${tunnelServiceLabel(request.service)} tunnel is ready at ${status.url}`),
+      ]);
+    } catch (err) {
+      setSetupRows((rows) => [...rows, log.error("tunnel", errorMessage(err))]);
+    } finally {
+      setServerTunnelBusy((busy) => omitKey(busy, request.tunnelId));
+    }
+  };
+
+  const openServerTunnel = async (tunnel: ServerTunnelStatus) => {
+    try {
+      const status = await invoke<ServerTunnelStatus | null>("server_tunnel_status", {
+        request: { tunnelId: tunnel.tunnelId },
+      });
+      if (!status) {
+        setServerTunnels((tunnels) => omitKey(tunnels, tunnel.tunnelId));
+        setSetupRows((rows) => [...rows, log.warn("tunnel", "The SSH tunnel is no longer running.")]);
+        return;
+      }
+      setServerTunnels((tunnels) => ({ ...tunnels, [status.tunnelId]: status }));
+      await openExternal(status.url);
+    } catch (err) {
+      setSetupRows((rows) => [...rows, log.error("tunnel", errorMessage(err))]);
+    }
+  };
+
+  const stopServerTunnel = async (tunnelId: string) => {
+    setServerTunnelBusy((busy) => ({ ...busy, [tunnelId]: true }));
+    try {
+      await invoke("stop_server_tunnel", { request: { tunnelId } });
+      setServerTunnels((tunnels) => omitKey(tunnels, tunnelId));
+      setSetupRows((rows) => [...rows, log.info("tunnel", "SSH tunnel stopped.")]);
+    } catch (err) {
+      setSetupRows((rows) => [...rows, log.error("tunnel", errorMessage(err))]);
+    } finally {
+      setServerTunnelBusy((busy) => omitKey(busy, tunnelId));
     }
   };
 
@@ -1065,6 +1178,32 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    return () => {
+      void invoke("stop_all_tunnels");
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const tunnel of Object.values(serverTunnels)) {
+        invoke<ServerTunnelStatus | null>("server_tunnel_status", {
+          request: { tunnelId: tunnel.tunnelId },
+        })
+          .then((status) => {
+            if (!status) {
+              setServerTunnels((tunnels) => omitKey(tunnels, tunnel.tunnelId));
+            }
+          })
+          .catch(() => {
+            setServerTunnels((tunnels) => omitKey(tunnels, tunnel.tunnelId));
+          });
+      }
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [serverTunnels]);
+
+
+  useEffect(() => {
     const onError = (event: ErrorEvent) => {
       appendSetupRow(log.error("ui", event.message || "Unhandled browser error."));
     };
@@ -1228,6 +1367,8 @@ export function App() {
                 remoteComponentRestartBusy={remoteComponentRestartBusy}
                 remoteStatusErrors={remoteServerStatusErrors}
                 remoteBusy={remoteServerBusy}
+                tunnels={serverTunnels}
+                tunnelBusy={serverTunnelBusy}
                 onAddLocalServer={() => setLocalAttachOpen(true)}
                 onAddRemoteServer={() => {
                   setRemoteAttachForm({
@@ -1244,6 +1385,11 @@ export function App() {
                 onRefreshRemoteStatus={(server) => void refreshRemoteServerStatus(server)}
                 onStartRemoteBattlegroup={(server) => void runRemoteBattlegroupAction(server, "start")}
                 onStopRemoteBattlegroup={(server) => void runRemoteBattlegroupAction(server, "stop")}
+                onStartLocalBattlegroup={(server) => void runLocalHyperVBattlegroupAction(server, "start")}
+                onStopLocalBattlegroup={(server) => void runLocalHyperVBattlegroupAction(server, "stop")}
+                onStartTunnel={(request) => void startServerTunnel(request)}
+                onStopTunnel={(tunnelId) => void stopServerTunnel(tunnelId)}
+                onOpenTunnel={(tunnel) => void openServerTunnel(tunnel)}
                 onRefreshRemoteComponentLog={(server, component) =>
                   void refreshRemoteComponentLog(server, component)
                 }
@@ -1442,6 +1588,8 @@ function ServersPage({
   remoteComponentRestartBusy,
   remoteStatusErrors,
   remoteBusy,
+  tunnels,
+  tunnelBusy,
   onAddLocalServer,
   onAddRemoteServer,
   onRemoveLocalServer,
@@ -1452,6 +1600,11 @@ function ServersPage({
   onRefreshRemoteStatus,
   onStartRemoteBattlegroup,
   onStopRemoteBattlegroup,
+  onStartLocalBattlegroup,
+  onStopLocalBattlegroup,
+  onStartTunnel,
+  onStopTunnel,
+  onOpenTunnel,
   onRefreshRemoteComponentLog,
   onRestartRemoteComponent,
   onRefreshLocalComponentLog,
@@ -1468,6 +1621,8 @@ function ServersPage({
   remoteComponentRestartBusy: Record<string, boolean>;
   remoteStatusErrors: Record<string, string>;
   remoteBusy: Record<string, string>;
+  tunnels: Record<string, ServerTunnelStatus>;
+  tunnelBusy: Record<string, boolean>;
   onAddLocalServer: () => void;
   onAddRemoteServer: () => void;
   onRemoveLocalServer: (server: DuneVmCandidate) => void;
@@ -1478,6 +1633,11 @@ function ServersPage({
   onRefreshRemoteStatus: (server: RemoteServerRecord) => void;
   onStartRemoteBattlegroup: (server: RemoteServerRecord) => void;
   onStopRemoteBattlegroup: (server: RemoteServerRecord) => void;
+  onStartLocalBattlegroup: (server: DuneVmCandidate) => void;
+  onStopLocalBattlegroup: (server: DuneVmCandidate) => void;
+  onStartTunnel: (request: ServerTunnelStartRequest) => void;
+  onStopTunnel: (tunnelId: string) => void;
+  onOpenTunnel: (tunnel: ServerTunnelStatus) => void;
   onRefreshRemoteComponentLog: (server: RemoteServerRecord, component: RemoteServerComponent) => void;
   onRestartRemoteComponent: (server: RemoteServerRecord, component: RemoteServerComponent) => void;
   onRefreshLocalComponentLog: (server: DuneVmCandidate, component: RemoteServerComponent) => void;
@@ -1517,10 +1677,17 @@ function ServersPage({
                     componentLogBusy={remoteComponentLogBusy}
                     componentRestartBusy={remoteComponentRestartBusy}
                     busyLabel={remoteBusy[localServerKey(candidate)]}
+                    tunnels={tunnels}
+                    tunnelBusy={tunnelBusy}
                     onRemove={() => onRemoveLocalServer(candidate)}
                     onRefresh={() => onRefreshLocalServer(candidate)}
                     onStart={() => onStartLocalServer(candidate)}
                     onStop={() => onStopLocalServer(candidate)}
+                    onStartBattlegroup={() => onStartLocalBattlegroup(candidate)}
+                    onStopBattlegroup={() => onStopLocalBattlegroup(candidate)}
+                    onStartTunnel={onStartTunnel}
+                    onStopTunnel={onStopTunnel}
+                    onOpenTunnel={onOpenTunnel}
                     onRefreshComponentLog={(component) => onRefreshLocalComponentLog(candidate, component)}
                     onRestartComponent={(component) => onRestartLocalComponent(candidate, component)}
                   />
@@ -1537,10 +1704,15 @@ function ServersPage({
                     componentRestartBusy={remoteComponentRestartBusy}
                     statusError={remoteStatusErrors[server.id]}
                     busyLabel={remoteBusy[server.id]}
+                    tunnels={tunnels}
+                    tunnelBusy={tunnelBusy}
                     onRemove={() => onRemoveRemoteServer(server)}
                     onRefresh={() => onRefreshRemoteStatus(server)}
                     onStartBattlegroup={() => onStartRemoteBattlegroup(server)}
                     onStopBattlegroup={() => onStopRemoteBattlegroup(server)}
+                    onStartTunnel={onStartTunnel}
+                    onStopTunnel={onStopTunnel}
+                    onOpenTunnel={onOpenTunnel}
                     onRefreshComponentLog={(component) => onRefreshRemoteComponentLog(server, component)}
                     onRestartComponent={(component) => onRestartRemoteComponent(server, component)}
                   />
@@ -1568,10 +1740,17 @@ function ServerCard({
   componentLogBusy,
   componentRestartBusy,
   busyLabel,
+  tunnels,
+  tunnelBusy,
   onRemove,
   onRefresh,
   onStart,
   onStop,
+  onStartBattlegroup,
+  onStopBattlegroup,
+  onStartTunnel,
+  onStopTunnel,
+  onOpenTunnel,
   onRefreshComponentLog,
   onRestartComponent,
 }: {
@@ -1583,10 +1762,17 @@ function ServerCard({
   componentLogBusy: Record<string, boolean>;
   componentRestartBusy: Record<string, boolean>;
   busyLabel?: string;
+  tunnels: Record<string, ServerTunnelStatus>;
+  tunnelBusy: Record<string, boolean>;
   onRemove?: () => void;
   onRefresh?: () => void;
   onStart?: () => void;
   onStop?: () => void;
+  onStartBattlegroup?: () => void;
+  onStopBattlegroup?: () => void;
+  onStartTunnel?: (request: ServerTunnelStartRequest) => void;
+  onStopTunnel?: (tunnelId: string) => void;
+  onOpenTunnel?: (tunnel: ServerTunnelStatus) => void;
   onRefreshComponentLog?: (component: RemoteServerComponent) => void;
   onRestartComponent?: (component: RemoteServerComponent) => void;
 }) {
@@ -1598,7 +1784,35 @@ function ServerCard({
   const canStart = vm.state === "off" || vm.state === "saved" || vm.state === "paused";
   const canStop = vm.state === "running" || vm.state === "starting" || vm.state === "paused";
   const battlegroup = runtime?.status?.battlegroup;
+  const battlegroupStarted = battlegroup ? isBattlegroupStarted(battlegroup) : false;
+  const battlegroupStartRequested = battlegroup ? !battlegroup.stop : false;
+  const battlegroupStopped = battlegroup ? battlegroup.stop : false;
   const runtimeComponents = Array.isArray(runtime?.components) ? runtime.components : [];
+  const serverKey = localServerKey(candidate);
+  const statusBadgeColor = runtimeError
+    ? "red"
+    : battlegroup
+      ? battlegroupStarted
+        ? "green"
+        : battlegroupStartRequested
+          ? "amber"
+          : battlegroupStopped
+            ? "gray"
+            : "green"
+      : vm.state === "running"
+        ? "green"
+        : vm.state === "off"
+          ? "gray"
+          : "amber";
+  const statusBadgeLabel = runtimeError
+    ? "Check failed"
+    : battlegroup
+      ? battlegroupStarted
+        ? "Started"
+        : battlegroupStartRequested
+          ? "Starting"
+          : "Stopped"
+      : vm.state;
 
   return (
     <Box className="server-card">
@@ -1606,25 +1820,62 @@ function ServerCard({
         <Box>
           <Flex align="center" gap="2">
             <Heading size={compact ? "3" : "4"}>{vm.name}</Heading>
+            <Badge color="bronze" variant="soft">
+              Hyper-V
+            </Badge>
             <Badge color={candidate.confidence === "high" ? "green" : candidate.confidence === "medium" ? "amber" : "gray"} variant="soft">
               {candidate.confidence}
             </Badge>
           </Flex>
           <Text as="div" size="2" color="gray">
-            {vm.rawState} · {primaryIp}
+            {primaryIp} · {runtime?.battlegroupName || "setup pending"}
           </Text>
         </Box>
-          <Badge color={vm.state === "running" ? "green" : vm.state === "off" ? "gray" : "amber"} variant="surface">
-          {busy ? (
-            <Flex align="center" gap="1">
-              <BusySpinner /> {busyLabel}
-            </Flex>
-          ) : (
-            vm.state
-          )}
-        </Badge>
+        <Flex align="center" gap="2">
+          <Button
+            type="button"
+            size="1"
+            variant="surface"
+            disabled={busy}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRefresh?.();
+            }}
+          >
+            Refresh
+          </Button>
+          <Badge color={statusBadgeColor} variant="surface">
+            {busy ? (
+              <Flex align="center" gap="1">
+                <BusySpinner /> {busyLabel}
+              </Flex>
+            ) : (
+              statusBadgeLabel
+            )}
+          </Badge>
+          <Button
+            type="button"
+            size="1"
+            color="red"
+            variant="soft"
+            disabled={busy}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRemove?.();
+            }}
+          >
+            Forget
+          </Button>
+        </Flex>
       </Flex>
 
+      <Grid columns={compact ? "2" : "5"} gap="3" mt="3">
+        <Metric label="Namespace" value={runtime?.namespace || "pending"} />
+        <Metric label="BattleGroup" value={runtime?.battlegroupName || "pending"} />
+        <Metric label="Type" value="Local Hyper-V VM" />
+        <Metric label="Guest IP" value={primaryIp} />
+        <Metric label="VM State" value={vm.rawState || vm.state} />
+      </Grid>
       <Grid columns={compact ? "2" : "5"} gap="3" mt="3">
         <Metric label="Memory" value={formatGiB(vm.memoryAssignedBytes)} />
         <Metric label="CPU" value={vm.processorCount ? `${vm.processorCount} cores` : "unknown"} />
@@ -1648,7 +1899,7 @@ function ServerCard({
             <Metric label="Server Group" value={battlegroup.serverGroupPhase || "unknown"} />
           </Grid>
           <ComponentHealthList
-            serverKey={localServerKey(candidate)}
+            serverKey={serverKey}
             components={runtimeComponents}
             logs={componentLogs}
             logBusy={componentLogBusy}
@@ -1658,19 +1909,43 @@ function ServerCard({
           />
         </Box>
       ) : null}
+      <ServerTunnelControls
+        serverKey={serverKey}
+        namespace={runtime?.namespace ?? ""}
+        host={primaryLocalServerIp(candidate)}
+        serverKind="hyperv"
+        vmName={vm.name}
+        canStartDirectorTunnel={!!battlegroup && !battlegroup.stop && isDirectorReadyPhase(battlegroup.directorPhase)}
+        canStartFileBrowserTunnel={!!battlegroup && !battlegroup.stop}
+        tunnels={tunnels}
+        tunnelBusy={tunnelBusy}
+        onStartTunnel={onStartTunnel}
+        onStopTunnel={onStopTunnel}
+        onOpenTunnel={onOpenTunnel}
+      />
       <Flex align="center" justify="between" gap="2" mt="3" wrap="wrap">
         <Flex gap="2" wrap="wrap">
-          <Button size="1" variant="surface" disabled={busy} onClick={onRefresh}>
-            Refresh
+          <Button
+            size="1"
+            variant="surface"
+            disabled={busy || !runtime || !battlegroupStopped}
+            onClick={onStartBattlegroup}
+          >
+            Start BattleGroup
+          </Button>
+          <Button
+            size="1"
+            variant="surface"
+            disabled={busy || !runtime || !battlegroupStartRequested}
+            onClick={onStopBattlegroup}
+          >
+            Stop BattleGroup
           </Button>
           <Button size="1" variant="surface" disabled={busy || !canStart} onClick={onStart}>
             Start VM
           </Button>
           <Button size="1" variant="surface" disabled={busy || !canStop} onClick={onStop}>
             Stop VM
-          </Button>
-          <Button size="1" color="red" variant="soft" disabled={busy} onClick={onRemove}>
-            Forget
           </Button>
         </Flex>
         {busyLabel ? (
@@ -1694,9 +1969,14 @@ function RemoteServerCard({
   componentRestartBusy,
   statusError,
   busyLabel,
+  tunnels,
+  tunnelBusy,
   onRefresh,
   onStartBattlegroup,
   onStopBattlegroup,
+  onStartTunnel,
+  onStopTunnel,
+  onOpenTunnel,
   onRefreshComponentLog,
   onRestartComponent,
 }: {
@@ -1710,9 +1990,14 @@ function RemoteServerCard({
   componentRestartBusy: Record<string, boolean>;
   statusError?: string;
   busyLabel?: string;
+  tunnels: Record<string, ServerTunnelStatus>;
+  tunnelBusy: Record<string, boolean>;
   onRefresh?: () => void;
   onStartBattlegroup?: () => void;
   onStopBattlegroup?: () => void;
+  onStartTunnel?: (request: ServerTunnelStartRequest) => void;
+  onStopTunnel?: (tunnelId: string) => void;
+  onOpenTunnel?: (tunnel: ServerTunnelStatus) => void;
   onRefreshComponentLog?: (component: RemoteServerComponent) => void;
   onRestartComponent?: (component: RemoteServerComponent) => void;
 }) {
@@ -1841,6 +2126,21 @@ function RemoteServerCard({
           onRefreshLog={onRefreshComponentLog}
           onRestart={onRestartComponent}
         />
+        <ServerTunnelControls
+          serverKey={server.id}
+          namespace={server.namespace}
+          host={server.host}
+          serverKind="ubuntu"
+          user={server.user || "root"}
+          keyPath={server.keyPath}
+          canStartDirectorTunnel={!!liveStatus && !liveStatus.battlegroup.stop && isDirectorReadyPhase(liveStatus.battlegroup.directorPhase)}
+          canStartFileBrowserTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
+          tunnels={tunnels}
+          tunnelBusy={tunnelBusy}
+          onStartTunnel={onStartTunnel}
+          onStopTunnel={onStopTunnel}
+          onOpenTunnel={onOpenTunnel}
+        />
         <Flex align="center" justify="between" gap="2" mt="3" wrap="wrap">
           <Flex gap="2" wrap="wrap">
             <Button size="1" variant="surface" disabled={busy} onClick={onRefresh}>
@@ -1870,6 +2170,135 @@ function RemoteServerCard({
           ) : null}
         </Flex>
       </Box>
+    </Box>
+  );
+}
+
+function ServerTunnelControls({
+  serverKey,
+  namespace,
+  host,
+  serverKind,
+  vmName,
+  user,
+  keyPath,
+  canStartDirectorTunnel,
+  canStartFileBrowserTunnel,
+  tunnels,
+  tunnelBusy,
+  onStartTunnel,
+  onStopTunnel,
+  onOpenTunnel,
+}: {
+  serverKey: string;
+  namespace: string;
+  host: string;
+  serverKind: "hyperv" | "ubuntu";
+  vmName?: string;
+  user?: string;
+  keyPath?: string;
+  canStartDirectorTunnel: boolean;
+  canStartFileBrowserTunnel: boolean;
+  tunnels: Record<string, ServerTunnelStatus>;
+  tunnelBusy: Record<string, boolean>;
+  onStartTunnel?: (request: ServerTunnelStartRequest) => void;
+  onStopTunnel?: (tunnelId: string) => void;
+  onOpenTunnel?: (tunnel: ServerTunnelStatus) => void;
+}) {
+  const services: Array<{ service: TunnelService; label: string }> = [
+    { service: "director", label: "Director UI" },
+    { service: "fileBrowser", label: "File Browser" },
+  ];
+  return (
+    <Box className="tunnel-controls" mt="3">
+      <Flex direction="column" gap="2">
+        {services.map(({ service, label }) => {
+          const tunnelId = serverTunnelKey(serverKey, service);
+          const active = tunnels[tunnelId];
+          const busy = !!tunnelBusy[tunnelId];
+          const serviceAvailable = service === "director" ? canStartDirectorTunnel : canStartFileBrowserTunnel;
+          const disabled =
+            busy || !onStopTunnel || (!active && (!serviceAvailable || !host.trim() || !namespace.trim() || !onStartTunnel));
+          return (
+            <Flex key={service} align="center" justify="between" gap="3" wrap="wrap" className="tunnel-row">
+              <Flex direction="column" gap="1" minWidth="0">
+                <Text size="2" weight="medium">
+                  {label}
+                </Text>
+                <Text size="1" color="gray">
+                  {active
+                    ? `Forwarding remote port ${active.remotePort} to local port ${active.localPort}`
+                    : !serviceAvailable
+                      ? service === "director"
+                        ? "Requires started BattleGroup and healthy Director"
+                        : "Requires started BattleGroup"
+                      : !host.trim() || !namespace.trim()
+                        ? "Requires detected server namespace and IP"
+                        : "Tunnel stopped"}
+                </Text>
+              </Flex>
+              <Flex align="center" gap="2" wrap="wrap" justify="end">
+                {active ? (
+                  <Button
+                    type="button"
+                    size="1"
+                    variant="surface"
+                    onClick={() => onOpenTunnel?.(active)}
+                  >
+                    Open {label}
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  size="1"
+                  variant={active ? "soft" : "surface"}
+                  color={active ? "red" : undefined}
+                  disabled={disabled}
+                  onClick={() => {
+                    if (active) {
+                      onStopTunnel?.(tunnelId);
+                      return;
+                    }
+                    onStartTunnel?.({
+                      tunnelId,
+                      serverKind,
+                      service,
+                      host,
+                      user,
+                      keyPath,
+                      vmName,
+                      namespace,
+                    });
+                  }}
+                >
+                  {busy ? (
+                    <Flex align="center" gap="1">
+                      <BusySpinner /> Working
+                    </Flex>
+                  ) : active ? (
+                    `Stop Tunnel`
+                  ) : (
+                    `Start Tunnel`
+                  )}
+                </Button>
+                {active ? (
+                  <Link
+                    size="1"
+                    href="#"
+                    className="mono tunnel-url"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      onOpenTunnel?.(active);
+                    }}
+                  >
+                    {active.url}
+                  </Link>
+                ) : null}
+              </Flex>
+            </Flex>
+          );
+        })}
+      </Flex>
     </Box>
   );
 }
@@ -3065,6 +3494,14 @@ function localServerKey(server: DuneVmCandidate): string {
 
 function componentLogStateKey(serverKey: string, component: RemoteServerComponent): string {
   return `${serverKey}:${component.logKey}`;
+}
+
+function serverTunnelKey(serverKey: string, service: TunnelService): string {
+  return `${serverKey}:tunnel:${service}`;
+}
+
+function tunnelServiceLabel(service: TunnelService): string {
+  return service === "director" ? "Director UI" : "File Browser";
 }
 
 function isCriticalRestartComponent(component: RemoteServerComponent): boolean {

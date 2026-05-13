@@ -350,6 +350,24 @@ button:disabled,
   background: var(--red-a2);
 }
 
+.tunnel-controls {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--gray-a4);
+}
+
+.tunnel-row {
+  padding: var(--space-2);
+  border: 1px solid var(--gray-a4);
+  border-radius: var(--radius-3);
+  background: var(--gray-a1);
+}
+
+.tunnel-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .component-health {
   padding-top: var(--space-3);
   border-top: 1px solid var(--gray-a4);

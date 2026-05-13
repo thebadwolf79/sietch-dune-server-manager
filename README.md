@@ -6,6 +6,14 @@ A Windows-first manager for the Dune Awakening Playtest dedicated server.
 
 The app provisions and manages Dune dedicated servers through a Rust core library, managed local tools, Hyper-V or remote Ubuntu setup, SSH bootstrap, and Kubernetes control commands.
 
+## Features
+
+- Local Hyper-V based server provisioning
+- Remote Ubuntu server provisioning via SSH
+- Basic server management capabilities such as log viewer, secure Director and File Browser access via SSH
+
+More management features coming soon.
+
 ## Installation Guide
 
 1. Download the latest Windows installer from GitHub Releases.

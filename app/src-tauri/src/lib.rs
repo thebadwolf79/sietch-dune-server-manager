@@ -1,10 +1,16 @@
-use std::{path::PathBuf, process::Command};
+use std::{
+    collections::HashMap,
+    net::{TcpListener, TcpStream},
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    sync::{Arc, Mutex},
+};
 
 use dune_manager_core::environment::{detect_setup_environment, SetupEnvironment};
 use dune_manager_core::models::{CommandFailure, CommandResult};
 use dune_manager_core::orchestration::{
-    classify_dune_vm, is_started_state, BattlegroupManagementOrchestrator, BattlegroupRef,
-    CreatedWorld, DuneVmCandidate, DuneVmConfidence, ExperimentalSwapOrchestrator,
+    classify_dune_vm, is_started_state, openssh_base_args, BattlegroupManagementOrchestrator,
+    BattlegroupRef, CreatedWorld, DuneVmCandidate, DuneVmConfidence, ExperimentalSwapOrchestrator,
     ExperimentalSwapRequest, GuestBootstrapPlan, GuestBootstrapProvider, GuestNetworkConfig,
     GuestNetworkPlan, HyperVInitialSetupOrchestrator, HyperVInitialSetupRequest,
     HyperVVmLifecycleOrchestrator, HyperVVmSetupRequest, InstanceMap, KubernetesProvider,
@@ -21,7 +27,7 @@ use dune_manager_core::toolchain::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 #[tauri::command]
 async fn detect_environment() -> Result<SetupEnvironment, String> {
@@ -182,6 +188,35 @@ struct RemoteServerActionRequest {
     battlegroup_name: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerTunnelStartRequest {
+    tunnel_id: String,
+    server_kind: String,
+    service: String,
+    host: String,
+    user: Option<String>,
+    key_path: Option<String>,
+    vm_name: Option<String>,
+    namespace: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerTunnelStopRequest {
+    tunnel_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerTunnelStatus {
+    tunnel_id: String,
+    service: String,
+    local_port: u16,
+    remote_port: u16,
+    url: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteBattlegroupStatus {
@@ -263,6 +298,15 @@ struct LocalHyperVComponentLogRequest {
     tail: u32,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalHyperVBattlegroupActionRequest {
+    vm_name: String,
+    host: Option<String>,
+    namespace: String,
+    battlegroup_name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SetupLogPayload {
@@ -324,6 +368,28 @@ struct RollbackResult {
 
 struct TauriOperationSink {
     app: tauri::AppHandle,
+}
+
+#[derive(Default, Clone)]
+struct TunnelRegistry {
+    tunnels: Arc<Mutex<HashMap<String, ManagedTunnel>>>,
+}
+
+struct ManagedTunnel {
+    child: Child,
+    status: ServerTunnelStatus,
+}
+
+impl TunnelRegistry {
+    fn stop_all(&self) {
+        let Ok(mut tunnels) = self.tunnels.lock() else {
+            return;
+        };
+        for (_, mut tunnel) in tunnels.drain() {
+            let _ = tunnel.child.kill();
+            let _ = tunnel.child.wait();
+        }
+    }
 }
 
 impl TauriOperationSink {
@@ -503,10 +569,11 @@ async fn local_hyperv_runtime(
         let Some(record) = records.first() else {
             return Err("No Dune battlegroups were detected inside the VM.".to_string());
         };
-        let status = read_remote_server_status(&runner, &record.namespace, &record.battlegroup_name)
+        let status =
+            read_remote_server_status(&runner, &record.namespace, &record.battlegroup_name)
+                .map_err(command_error_message)?;
+        let components = read_remote_server_components(&runner, &record.namespace)
             .map_err(command_error_message)?;
-        let components =
-            read_remote_server_components(&runner, &record.namespace).map_err(command_error_message)?;
         Ok(LocalHyperVRuntime {
             namespace: record.namespace.clone(),
             battlegroup_name: record.battlegroup_name.clone(),
@@ -516,6 +583,49 @@ async fn local_hyperv_runtime(
     })
     .await
     .map_err(|err| format!("Local Hyper-V runtime worker failed: {err}"))?
+}
+
+#[tauri::command]
+async fn start_server_tunnel(
+    registry: tauri::State<'_, TunnelRegistry>,
+    request: ServerTunnelStartRequest,
+) -> Result<ServerTunnelStatus, String> {
+    let registry = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || start_server_tunnel_inner(&registry, request))
+        .await
+        .map_err(|err| format!("Tunnel worker failed: {err}"))?
+}
+
+#[tauri::command]
+async fn stop_server_tunnel(
+    registry: tauri::State<'_, TunnelRegistry>,
+    request: ServerTunnelStopRequest,
+) -> Result<(), String> {
+    let registry = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        stop_server_tunnel_inner(&registry, &request.tunnel_id)
+    })
+    .await
+    .map_err(|err| format!("Tunnel stop worker failed: {err}"))?
+}
+
+#[tauri::command]
+async fn server_tunnel_status(
+    registry: tauri::State<'_, TunnelRegistry>,
+    request: ServerTunnelStopRequest,
+) -> Result<Option<ServerTunnelStatus>, String> {
+    let registry = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        existing_running_tunnel(&registry, request.tunnel_id.trim())
+    })
+    .await
+    .map_err(|err| format!("Tunnel status worker failed: {err}"))?
+}
+
+#[tauri::command]
+async fn stop_all_tunnels(registry: tauri::State<'_, TunnelRegistry>) -> Result<(), String> {
+    registry.stop_all();
+    Ok(())
 }
 
 #[tauri::command]
@@ -596,6 +706,22 @@ async fn stop_remote_battlegroup(
     run_remote_battlegroup_action(app, request, true).await
 }
 
+#[tauri::command]
+async fn start_local_hyperv_battlegroup(
+    app: tauri::AppHandle,
+    request: LocalHyperVBattlegroupActionRequest,
+) -> Result<RemoteServerStatus, String> {
+    run_local_hyperv_battlegroup_action(app, request, false).await
+}
+
+#[tauri::command]
+async fn stop_local_hyperv_battlegroup(
+    app: tauri::AppHandle,
+    request: LocalHyperVBattlegroupActionRequest,
+) -> Result<RemoteServerStatus, String> {
+    run_local_hyperv_battlegroup_action(app, request, true).await
+}
+
 async fn run_local_hyperv_action(
     app: tauri::AppHandle,
     request: LocalHyperVServerRequest,
@@ -620,6 +746,28 @@ async fn run_local_hyperv_action(
     .map_err(|err| format!("Local Hyper-V action worker failed: {err}"))?
 }
 
+async fn run_local_hyperv_battlegroup_action(
+    app: tauri::AppHandle,
+    request: LocalHyperVBattlegroupActionRequest,
+    stop: bool,
+) -> Result<RemoteServerStatus, String> {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut sink = TauriOperationSink { app: worker_app };
+        sink.info("bg.check", "Checking local Hyper-V battlegroup state.");
+        let runner = local_hyperv_runner(&request.vm_name, request.host.as_deref())?;
+        run_battlegroup_action_with_runner(
+            &runner,
+            &mut sink,
+            request.namespace,
+            request.battlegroup_name,
+            stop,
+        )
+    })
+    .await
+    .map_err(|err| format!("Local Hyper-V battlegroup action worker failed: {err}"))?
+}
+
 async fn run_remote_battlegroup_action(
     app: tauri::AppHandle,
     request: RemoteServerActionRequest,
@@ -630,40 +778,56 @@ async fn run_remote_battlegroup_action(
         let mut sink = TauriOperationSink { app: worker_app };
         sink.info("bg.check", "Checking remote battlegroup state.");
         let runner = remote_runner(request.host, request.user, request.key_path)?;
-        let kubernetes = StructuredKubectl::new(runner.clone());
-        let before = kubernetes
-            .battlegroup_state(&request.namespace, &request.battlegroup_name)
-            .map_err(command_error_message)?;
-        let before_started = is_started_state(&before);
-        if stop && !before_started {
-            return Err(format!(
-                "Battlegroup is not running (phase={}, stop={}, serverGroup={}, director={}).",
-                before.phase, before.stop, before.server_group_phase, before.director_phase
-            ));
-        }
-        if !stop && before_started {
-            return Err("Battlegroup is already started.".to_string());
-        }
-        let battlegroup = BattlegroupRef {
-            namespace: request.namespace,
-            name: request.battlegroup_name,
-        };
-        let manager = BattlegroupManagementOrchestrator::new(kubernetes);
-        if stop {
-            manager
-                .stop(&battlegroup, &mut sink)
-                .map_err(command_error_message)?;
-        } else {
-            manager
-                .start_and_wait_director(&battlegroup, 180, &mut sink)
-                .map_err(command_error_message)?;
-        }
-        sink.info("bg.check", "Refreshing remote battlegroup state.");
-        read_remote_server_status(&runner, &battlegroup.namespace, &battlegroup.name)
-            .map_err(command_error_message)
+        run_battlegroup_action_with_runner(
+            &runner,
+            &mut sink,
+            request.namespace,
+            request.battlegroup_name,
+            stop,
+        )
     })
     .await
     .map_err(|err| format!("Remote battlegroup action worker failed: {err}"))?
+}
+
+fn run_battlegroup_action_with_runner(
+    runner: &OpenSshRunner,
+    sink: &mut TauriOperationSink,
+    namespace: String,
+    battlegroup_name: String,
+    stop: bool,
+) -> Result<RemoteServerStatus, String> {
+    let kubernetes = StructuredKubectl::new(runner.clone());
+    let before = kubernetes
+        .battlegroup_state(&namespace, &battlegroup_name)
+        .map_err(command_error_message)?;
+    let before_started = is_started_state(&before);
+    if stop && !before_started {
+        return Err(format!(
+            "Battlegroup is not running (phase={}, stop={}, serverGroup={}, director={}).",
+            before.phase, before.stop, before.server_group_phase, before.director_phase
+        ));
+    }
+    if !stop && before_started {
+        return Err("Battlegroup is already started.".to_string());
+    }
+    let battlegroup = BattlegroupRef {
+        namespace,
+        name: battlegroup_name,
+    };
+    let manager = BattlegroupManagementOrchestrator::new(kubernetes);
+    if stop {
+        manager
+            .stop(&battlegroup, sink)
+            .map_err(command_error_message)?;
+    } else {
+        manager
+            .start_and_wait_director(&battlegroup, 180, sink)
+            .map_err(command_error_message)?;
+    }
+    sink.info("bg.check", "Refreshing battlegroup state.");
+    read_remote_server_status(&runner, &battlegroup.namespace, &battlegroup.name)
+        .map_err(command_error_message)
 }
 
 #[tauri::command]
@@ -1186,7 +1350,256 @@ fn remote_runner(host: String, user: String, key_path: String) -> Result<OpenSsh
     )))
 }
 
-fn local_hyperv_runner(vm_name: &str, explicit_host: Option<&str>) -> Result<OpenSshRunner, String> {
+fn start_server_tunnel_inner(
+    registry: &TunnelRegistry,
+    request: ServerTunnelStartRequest,
+) -> Result<ServerTunnelStatus, String> {
+    let tunnel_id = request.tunnel_id.trim();
+    if tunnel_id.is_empty() {
+        return Err("Tunnel id is required.".to_string());
+    }
+    if let Some(status) = existing_running_tunnel(registry, tunnel_id)? {
+        return Ok(status);
+    }
+
+    let target = tunnel_target(&request)?;
+    target.validate().map_err(|err| err.message)?;
+    let service = normalize_tunnel_service(&request.service)?;
+    let remote_port = match service.as_str() {
+        "director" => discover_director_tunnel_port(&target, &request.namespace)?,
+        "fileBrowser" => 18888,
+        _ => unreachable!(),
+    };
+    let local_port = pick_available_local_port()?;
+    if !is_local_port_available(local_port) {
+        return Err(format!("Local port {local_port} is already in use."));
+    }
+
+    let mut command = Command::new(&target.ssh_path);
+    let mut args = openssh_base_args(&target);
+    args.extend([
+        "-o".to_string(),
+        "ExitOnForwardFailure=yes".to_string(),
+        "-N".to_string(),
+        "-L".to_string(),
+        format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
+        target.destination(),
+    ]);
+    command.args(args);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::null());
+    command.stderr(Stdio::null());
+    dune_manager_core::shell::suppress_console_window(&mut command);
+
+    let mut child = command
+        .spawn()
+        .map_err(|err| format!("Failed to start SSH tunnel: {err}"))?;
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    if let Some(status) = child
+        .try_wait()
+        .map_err(|err| format!("Failed to inspect SSH tunnel: {err}"))?
+    {
+        return Err(format!(
+            "SSH tunnel exited immediately with status {status}."
+        ));
+    }
+    if !wait_for_local_tunnel(local_port, std::time::Duration::from_secs(3)) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!(
+            "SSH tunnel did not start listening on local port {local_port}."
+        ));
+    }
+
+    let status = ServerTunnelStatus {
+        tunnel_id: tunnel_id.to_string(),
+        service,
+        local_port,
+        remote_port,
+        url: format!("http://127.0.0.1:{local_port}/"),
+    };
+    let mut tunnels = registry
+        .tunnels
+        .lock()
+        .map_err(|_| "Tunnel registry is unavailable.".to_string())?;
+    if let Some(mut existing) = tunnels.remove(tunnel_id) {
+        let _ = existing.child.kill();
+        let _ = existing.child.wait();
+    }
+    tunnels.insert(
+        tunnel_id.to_string(),
+        ManagedTunnel {
+            child,
+            status: status.clone(),
+        },
+    );
+    Ok(status)
+}
+
+fn stop_server_tunnel_inner(registry: &TunnelRegistry, tunnel_id: &str) -> Result<(), String> {
+    let mut tunnels = registry
+        .tunnels
+        .lock()
+        .map_err(|_| "Tunnel registry is unavailable.".to_string())?;
+    if let Some(mut tunnel) = tunnels.remove(tunnel_id.trim()) {
+        let _ = tunnel.child.kill();
+        let _ = tunnel.child.wait();
+    }
+    Ok(())
+}
+
+fn existing_running_tunnel(
+    registry: &TunnelRegistry,
+    tunnel_id: &str,
+) -> Result<Option<ServerTunnelStatus>, String> {
+    let mut tunnels = registry
+        .tunnels
+        .lock()
+        .map_err(|_| "Tunnel registry is unavailable.".to_string())?;
+    let Some(tunnel) = tunnels.get_mut(tunnel_id) else {
+        return Ok(None);
+    };
+    match tunnel
+        .child
+        .try_wait()
+        .map_err(|err| format!("Failed to inspect SSH tunnel: {err}"))?
+    {
+        None => Ok(Some(tunnel.status.clone())),
+        Some(_) => {
+            tunnels.remove(tunnel_id);
+            Ok(None)
+        }
+    }
+}
+
+fn tunnel_target(request: &ServerTunnelStartRequest) -> Result<OpenSshTarget, String> {
+    let toolchain = Toolchain::from_default_root().map_err(|err| err.message)?;
+    toolchain
+        .install(ManagedTool::OpenSsh, false, None)
+        .map_err(|err| err.message)?;
+    let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
+    match request.server_kind.trim() {
+        "ubuntu" => Ok(OpenSshTarget::new(
+            ssh_path,
+            PathBuf::from(
+                request
+                    .key_path
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+            ),
+            request.user.as_deref().unwrap_or("root").trim().to_string(),
+            request.host.trim().to_string(),
+        )),
+        "hyperv" => {
+            let vm_name = request
+                .vm_name
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if vm_name.is_empty() {
+                return Err("Hyper-V VM name is required.".to_string());
+            }
+            let candidate = local_hyperv_candidate(&vm_name)?;
+            let host = request
+                .host
+                .trim()
+                .to_string()
+                .is_empty()
+                .then(|| candidate.vm.ipv4_addresses.first().cloned())
+                .flatten()
+                .unwrap_or_else(|| request.host.trim().to_string());
+            if host.trim().is_empty() {
+                return Err(format!(
+                    "Hyper-V VM '{}' has no reported IPv4 address and no configured static IP.",
+                    candidate.vm.name
+                ));
+            }
+            let server_package_dir = default_server_package_dir().map_err(|err| err.message)?;
+            let key_path =
+                prepare_vendor_ssh_key(&server_package_dir).map_err(command_error_message)?;
+            Ok(OpenSshTarget::new(ssh_path, key_path, "dune", host))
+        }
+        other => Err(format!("Unsupported tunnel server kind: {other}")),
+    }
+}
+
+fn normalize_tunnel_service(service: &str) -> Result<String, String> {
+    match service.trim() {
+        "director" => Ok("director".to_string()),
+        "fileBrowser" => Ok("fileBrowser".to_string()),
+        other => Err(format!("Unsupported tunnel service: {other}")),
+    }
+}
+
+fn discover_director_tunnel_port(target: &OpenSshTarget, namespace: &str) -> Result<u16, String> {
+    let namespace = namespace.trim();
+    if namespace.is_empty() {
+        return Err(
+            "BattleGroup namespace is required before starting the Director tunnel.".to_string(),
+        );
+    }
+    let runner = OpenSshRunner::new(target.clone());
+    let value = runner
+        .run_json(
+            &format!(
+                "sudo kubectl get svc -n {} -o json",
+                sh_single_quoted(namespace)
+            ),
+            "director service list",
+        )
+        .map_err(command_error_message)?;
+    for service in value["items"].as_array().cloned().unwrap_or_default() {
+        for port in service["spec"]["ports"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
+            if port["port"].as_u64() == Some(11717) {
+                if let Some(node_port) = port["nodePort"]
+                    .as_u64()
+                    .and_then(|value| u16::try_from(value).ok())
+                {
+                    return Ok(node_port);
+                }
+            }
+        }
+    }
+    Err("Director service is not currently exposed in Kubernetes.".to_string())
+}
+
+fn pick_available_local_port() -> Result<u16, String> {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|err| format!("Failed to reserve a local tunnel port: {err}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|err| format!("Failed to read local tunnel port: {err}"))?
+        .port();
+    drop(listener);
+    Ok(port)
+}
+
+fn is_local_port_available(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+fn wait_for_local_tunnel(port: u16, timeout: std::time::Duration) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+fn local_hyperv_runner(
+    vm_name: &str,
+    explicit_host: Option<&str>,
+) -> Result<OpenSshRunner, String> {
     let candidate = local_hyperv_candidate(vm_name)?;
     let ip = explicit_host
         .map(str::trim)
@@ -1207,10 +1620,7 @@ fn local_hyperv_runner(vm_name: &str, explicit_host: Option<&str>) -> Result<Ope
     let server_package_dir = default_server_package_dir().map_err(|err| err.message)?;
     let key_path = prepare_vendor_ssh_key(&server_package_dir).map_err(command_error_message)?;
     Ok(OpenSshRunner::new(OpenSshTarget::new(
-        ssh_path,
-        key_path,
-        "dune",
-        ip,
+        ssh_path, key_path, "dune", ip,
     )))
 }
 
@@ -1896,7 +2306,8 @@ fn recommended_ubuntu_swap_gib(
         request.deep_desert_pve_instances + request.deep_desert_pvp_instances,
     );
     let required_bytes = required.saturating_mul(1024 * 1024 * 1024);
-    let shortfall = bytes_to_gib_ceil(required_bytes.saturating_sub(preflight.available_memory_bytes));
+    let shortfall =
+        bytes_to_gib_ceil(required_bytes.saturating_sub(preflight.available_memory_bytes));
     shortfall.clamp(2, 64)
 }
 
@@ -1946,6 +2357,7 @@ if ($usedByVms.Count -eq 0) {{
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(TunnelRegistry::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
@@ -1957,12 +2369,18 @@ pub fn run() {
             remote_server_status,
             remote_server_components,
             local_hyperv_runtime,
+            start_server_tunnel,
+            stop_server_tunnel,
+            server_tunnel_status,
+            stop_all_tunnels,
             remote_component_log_tail,
             local_hyperv_component_log_tail,
             restart_remote_component,
             restart_local_hyperv_component,
             start_remote_battlegroup,
             stop_remote_battlegroup,
+            start_local_hyperv_battlegroup,
+            stop_local_hyperv_battlegroup,
             register_local_hyperv_server,
             start_local_hyperv_server,
             stop_local_hyperv_server,
@@ -1973,6 +2391,11 @@ pub fn run() {
             start_remote_ubuntu_setup,
             rollback_setup
         ])
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                window.state::<TunnelRegistry>().stop_all();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("failed to run Tauri application");
 }
