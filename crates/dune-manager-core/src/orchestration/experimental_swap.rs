@@ -302,15 +302,15 @@ fn experimental_swap_patch_operations(value: &Value) -> CommandResult<Vec<Value>
             ));
             continue;
         }
-        ensure_memory_value(set, &mut base, "limits", profile.limit, &mut operations);
-        ensure_memory_value(set, &mut base, "requests", profile.request, &mut operations);
+        ensure_memory_value(set, &base, "limits", profile.limit, &mut operations);
+        ensure_memory_value(set, &base, "requests", profile.request, &mut operations);
     }
     Ok(operations)
 }
 
 fn ensure_memory_value(
     set: &Value,
-    base_path: &mut Vec<String>,
+    base_path: &[String],
     resource_kind: &str,
     desired: &str,
     operations: &mut Vec<Value>,
@@ -319,7 +319,7 @@ fn ensure_memory_value(
         .get("resources")
         .and_then(|resources| resources.get(resource_kind));
     if resource.is_none() || !resource.is_some_and(Value::is_object) {
-        let mut path = base_path.clone();
+        let mut path = base_path.to_owned();
         path.push("resources".to_string());
         path.push(resource_kind.to_string());
         operations.push(add_operation(&path, json!({ "memory": desired })));
@@ -333,7 +333,7 @@ fn ensure_memory_value(
         return;
     }
     let op = if current.is_some() { "replace" } else { "add" };
-    let mut path = base_path.clone();
+    let mut path = base_path.to_owned();
     path.push("resources".to_string());
     path.push(resource_kind.to_string());
     path.push("memory".to_string());

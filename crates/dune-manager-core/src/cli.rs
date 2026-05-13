@@ -13,11 +13,10 @@ use crate::{
         DuneVmDetector, ExperimentalSwapOrchestrator, ExperimentalSwapRequest,
         GuestBootstrapOrchestrator, GuestBootstrapPlan, GuestNetworkConfig,
         HyperVVmLifecycleOrchestrator, HyperVVmSetupOrchestrator, HyperVVmSetupRequest,
-        InstanceMap, ManagerApiInstallRequest, ManagerApiInstaller, ManagerApiServiceManager,
-        MapInstanceOrchestrator, MemoryProfile, OpenSshGuestProvider, OpenSshRunner, OpenSshTarget,
-        OrchestrationEvent, SetMapInstancesRequest, SshGuestBootstrapProvider, StepAction,
-        StepDomain, StrictPowerShellHyperV, StructuredBattlegroupOps, StructuredKubectl,
-        UbuntuSshPrepareRequest, UbuntuSshSetup, VecOperationSink, VmProvider,
+        InstanceMap, MapInstanceOrchestrator, MemoryProfile, OpenSshGuestProvider, OpenSshRunner,
+        OpenSshTarget, OrchestrationEvent, SetMapInstancesRequest, SshGuestBootstrapProvider,
+        StepAction, StepDomain, StrictPowerShellHyperV, StructuredBattlegroupOps,
+        StructuredKubectl, UbuntuSshPrepareRequest, UbuntuSshSetup, VecOperationSink, VmProvider,
         WorldManifestRequest, DEFAULT_VM_DISK_BYTES,
     },
     security::redact_json,
@@ -495,49 +494,6 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
             BattlegroupUpdateOrchestrator::new(provider).update_from_downloads(&bg, &mut sink)?;
             operation_ok(sink)
         }
-        ["manager", "install"] => {
-            let token = args.token()?;
-            let mut request = ManagerApiInstallRequest::new(
-                args.required("--binary")?,
-                token,
-                args.required("--namespace")?,
-            );
-            request.port = optional_port(&args, "--port")?.unwrap_or(request.port);
-            request.director_base_url = args.optional("--director-base-url");
-            if let Some(path) = args.optional("--remote-binary") {
-                request.remote_binary_path = path;
-            }
-            if let Some(path) = args.optional("--env-path") {
-                request.env_path = path;
-            }
-            if let Some(path) = args.optional("--log-path") {
-                request.log_path = path;
-            }
-            if let Some(path) = args.optional("--kubeconfig-path") {
-                request.kubeconfig_path = path;
-            }
-            if let Some(path) = args.optional("--ui-dist") {
-                request.ui_dist_path = Some(path.into());
-            }
-            if let Some(path) = args.optional("--remote-ui-dir") {
-                request.remote_ui_dir = path;
-            }
-            if args.has_flag("--systemd") {
-                request.service_manager = ManagerApiServiceManager::Systemd;
-            }
-            let mut sink = VecOperationSink::default();
-            let result =
-                ManagerApiInstaller::new(ssh_runner(&args)?).install(&request, &mut sink)?;
-            to_json(OperationOutput {
-                ok: true,
-                result,
-                events: sink.events,
-            })
-        }
-        ["manager", "status"] => {
-            let port = optional_port(&args, "--port")?.unwrap_or(8787);
-            to_json(ManagerApiInstaller::new(ssh_runner(&args)?).status(port)?)
-        }
         other => Err(failure(format!(
             "Unknown command: {}",
             if other.is_empty() {
@@ -931,8 +887,6 @@ fn usage() -> Vec<&'static str> {
         "dune-manager-cli bg update --ssh PATH --key PATH --host IP --namespace NS --name BG",
         "dune-manager-cli bg file-browser-url --ssh PATH --key PATH --host IP --vm-ip IP",
         "dune-manager-cli bg director-url --ssh PATH --key PATH --host IP --namespace NS --name BG --vm-ip IP",
-        "dune-manager-cli manager install --ssh PATH --key PATH --host IP --binary PATH --namespace NS (--token TOKEN | --token-file PATH | --token-env NAME) [--port 8787] [--director-base-url URL] [--kubeconfig-path /etc/rancher/k3s/k3s.yaml] [--ui-dist PATH] [--remote-ui-dir /opt/dune-manager/manager-ui] [--systemd] [--user dune]",
-        "dune-manager-cli manager status --ssh PATH --key PATH --host IP [--port 8787] [--user dune]",
     ]
 }
 
