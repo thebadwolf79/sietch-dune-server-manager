@@ -17,8 +17,6 @@ pub mod environment;
 pub mod errors;
 /// Common command result types used by core operations.
 pub mod models;
-/// Controlled operation-log classification and redaction-aware capture.
-pub mod operation_log;
 /// Native setup, guest bootstrap, and battlegroup orchestration primitives.
 pub mod orchestration;
 /// Secret redaction helpers for plain text and JSON payloads.

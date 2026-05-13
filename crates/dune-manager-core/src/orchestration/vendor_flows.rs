@@ -186,6 +186,21 @@ impl BattlegroupCommandSpec {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct StepFlags {
+    requires_admin: bool,
+    optional: bool,
+}
+
+impl StepFlags {
+    const fn new(requires_admin: bool, optional: bool) -> Self {
+        Self {
+            requires_admin,
+            optional,
+        }
+    }
+}
+
 fn step(
     id: &'static str,
     label: &'static str,
@@ -193,8 +208,7 @@ fn step(
     action: StepAction,
     source: &'static str,
     native_strategy: &'static str,
-    requires_admin: bool,
-    optional: bool,
+    flags: StepFlags,
 ) -> FlowStep {
     FlowStep {
         id,
@@ -204,8 +218,8 @@ fn step(
         provider: ProviderKind::HyperV,
         source,
         native_strategy,
-        requires_admin,
-        optional,
+        requires_admin: flags.requires_admin,
+        optional: flags.optional,
     }
 }
 
@@ -234,8 +248,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Check,
                 "initial-setup.ps1 #Requires -RunAsAdministrator",
                 "Windows token elevation check",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "host.check-hyperv-module",
@@ -244,8 +257,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Check,
                 "Get-Module -ListAvailable -Name Hyper-V",
                 "Windows capability/provider check; strict JSON fallback is allowed",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "host.check-vmms",
@@ -254,8 +266,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Check,
                 "Get-Service vmms",
                 "Windows service query; strict JSON fallback is allowed",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "package.locate-vmcx",
@@ -264,8 +275,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Detect,
                 "Virtual Machines/*.vmcx",
                 "Rust filesystem glob",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "host.select-destination",
@@ -274,8 +284,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Choose,
                 "Get-PSDrive free > 100GB",
                 "Rust drive/disk discovery plus caller-selected destination",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "hyperv.detect-existing-vm",
@@ -284,8 +293,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Detect,
                 "Get-VM -Name <vendor-vm-name>",
                 "Hyper-V provider get_vm",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "hyperv.stop-existing-vm",
@@ -294,8 +302,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Stop,
                 "Stop-VM -TurnOff -Force",
                 "Hyper-V provider stop_vm(turn_off=true)",
-                true,
-                true,
+                StepFlags::new(true, true),
             ),
             step(
                 "hyperv.remove-existing-vm",
@@ -304,8 +311,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Stop,
                 "Remove-VM -Force",
                 "Hyper-V provider remove_vm",
-                true,
-                true,
+                StepFlags::new(true, true),
             ),
             step(
                 "host.clear-vm-destination",
@@ -314,8 +320,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "Remove-Item destination",
                 "Rust filesystem delete guarded by resolved-path containment and confirmation",
-                false,
-                true,
+                StepFlags::new(false, true),
             ),
             step(
                 "hyperv.compare-vm",
@@ -324,8 +329,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Check,
                 "Compare-VM -Copy",
                 "Hyper-V provider compare_import",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "hyperv.import-vm",
@@ -334,8 +338,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Import,
                 "Import-VM -CompatibilityReport",
                 "Hyper-V provider import_vm_copy",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "host.detect-physical-nics",
@@ -344,8 +347,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Detect,
                 "Get-NetAdapter Status Up excluding Hyper-V/Virtual",
                 "Network adapter provider with IPv4/range metadata",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "hyperv.choose-or-create-switch",
@@ -354,8 +356,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Create,
                 "Get-VMSwitch/New-VMSwitch",
                 "Hyper-V provider ensure_external_switch",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "hyperv.connect-switch",
@@ -364,8 +365,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "Connect-VMNetworkAdapter",
                 "Hyper-V provider connect_network_adapter",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "hyperv.resize-vhd",
@@ -374,8 +374,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "Resize-VHD -SizeBytes 100GB",
                 "Hyper-V provider resize_vhd",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "hyperv.set-first-boot",
@@ -384,8 +383,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "Set-VMFirmware -FirstBootDevice",
                 "Hyper-V provider set_first_boot_disk",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "hyperv.choose-memory",
@@ -394,8 +392,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Choose,
                 "20/30/40GB Read-Host menu",
                 "Caller-selected memory profile enum",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "hyperv.set-memory",
@@ -404,8 +401,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "Set-VMMemory",
                 "Hyper-V provider set_startup_memory",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "hyperv.start-vm",
@@ -414,8 +410,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Start,
                 "Start-VM",
                 "Hyper-V provider start_vm",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "hyperv.wait-ip",
@@ -424,8 +419,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Wait,
                 "Get-VMNetworkAdapter IPAddresses loop",
                 "Hyper-V provider wait_ipv4",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "ssh.prepare-key",
@@ -434,8 +428,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "Copy-Item + icacls temp key",
                 "Rust key manager with Windows ACL helper",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.choose-ip-mode",
@@ -444,8 +437,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Choose,
                 "Read-Host DHCP/static menu",
                 "Caller-selected network mode",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.apply-static-network",
@@ -454,8 +446,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "/etc/network/interfaces and /etc/resolv.conf via SSH",
                 "SSH script with structured success marker",
-                false,
-                true,
+                StepFlags::new(false, true),
             ),
             step(
                 "guest.wait-static-ssh",
@@ -464,8 +455,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Wait,
                 "ssh true loop",
                 "SSH executor wait_ready",
-                false,
-                true,
+                StepFlags::new(false, true),
             ),
             step(
                 "guest.detect-public-ip",
@@ -474,8 +464,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Detect,
                 "wget api.ipify.org",
                 "detect_player_address_candidates via GuestProvider::detect_public_ip",
-                false,
-                true,
+                StepFlags::new(false, true),
             ),
             step(
                 "guest.select-player-ip",
@@ -484,8 +473,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Choose,
                 "public/private/manual Read-Host menu",
                 "Caller selects from PlayerAddressCandidates or supplies manual player-facing IP",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.write-settings-conf",
@@ -494,8 +482,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "printf '\\n\\n\\n$selectedIP\\n' > settings.conf",
                 "SSH file write with exact settings format",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.upload-bootstrap",
@@ -504,8 +491,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Upload,
                 "base64 tee /home/dune/.dune/bin/setup",
                 "SSH stdin upload and chmod",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.validate-disk",
@@ -514,8 +500,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "bootstrap/setup validate_disk_space",
                 "Guest disk provider using df/growpart/lvm/resize2fs",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.download-payload",
@@ -524,8 +509,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Download,
                 "steamcmd app_update 3104830",
                 "Guest SteamCMD executor with retry policy",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.k3s.start",
@@ -534,8 +518,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Start,
                 "setup/k3s.sh rc-service k3s start",
                 "OpenRC service provider start/wait",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.k3s.import-core-images",
@@ -544,8 +527,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Import,
                 "ctr images import prerequisites",
                 "Container image import step with retry/restart policy",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.k3s.scale-core",
@@ -554,8 +536,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "kubectl scale coredns/local-path/metrics/cert-manager",
                 "Kubernetes client scale deployments",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.operators.update-crds",
@@ -564,8 +545,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "kubectl replace/apply images/operators/crds",
                 "Kubernetes apply server-side manifests",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.operators.patch-images",
@@ -574,8 +554,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Patch,
                 "kubectl set image operators",
                 "Kubernetes patch deployments",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.operators.scale",
@@ -584,8 +563,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "kubectl scale funcom-operators",
                 "Kubernetes client scale deployments",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.system.install-battlegroup-helper",
@@ -594,8 +572,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "setup/system.sh ln -s battlegroup.sh",
                 "Guest filesystem symlink creation",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.world.read-region",
@@ -604,8 +581,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Choose,
                 "world.sh Europe Test/North America Test",
                 "Caller-selected region enum",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.world.read-name",
@@ -614,8 +590,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Choose,
                 "world.sh world name prompt",
                 "Caller-selected validated world name",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.world.read-token",
@@ -624,8 +599,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Choose,
                 "world.sh self-host token prompt",
                 "Secret input never persisted",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.world.derive-host-id",
@@ -634,8 +608,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "Rust JWT payload decode HostId lowercase",
                 "GuestBootstrapPlan::from_self_host_token extracts HostId with secret redaction",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.world.generate-name",
@@ -644,8 +617,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Create,
                 "sh-$HostId- six lowercase random letters",
                 "GuestBootstrapPlan::from_self_host_token generates lowercase-only vendor suffix",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.world.render-manifests",
@@ -654,8 +626,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "sed substitutions on templates",
                 "Structured template renderer preserving vendor YAML",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.world.wait-operators",
@@ -664,8 +635,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Wait,
                 "kubectl deployment ready loop",
                 "Kubernetes wait deployments",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.world.create-resources",
@@ -674,8 +644,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Create,
                 "kubectl create ns/secret/battlegroup",
                 "Kubernetes create resources",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.images.import-battlegroup",
@@ -684,8 +653,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Import,
                 "battlegroup.sh update-from-downloads image imports",
                 "Container image import by manifest version",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.images.patch-battlegroup",
@@ -694,8 +662,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Patch,
                 "Rust JSON patch generation + kubectl patch",
                 "Kubernetes JSON patch generated from live resource",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.defaults.wait-filebrowser",
@@ -704,8 +671,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Wait,
                 "battlegroup.sh apply-default-usersettings",
                 "Kubernetes pod wait by label",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "guest.defaults.copy-user-settings",
@@ -714,8 +680,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Configure,
                 "kubectl cp UserEngine.ini/UserGame.ini",
                 "Kubernetes copy/exec to mounted filebrowser data",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "setup.complete",
@@ -724,8 +689,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 StepAction::Complete,
                 "initial-setup.ps1 final message",
                 "Flow result",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
         ],
     }
@@ -750,8 +714,7 @@ pub fn battlegroup_management_flow() -> FlowSpec {
                 StepAction::Check,
                 "battlegroup.ps1 #Requires -RunAsAdministrator",
                 "Split into admin VM operations and non-admin guest operations",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "bg.hyperv.get-vm",
@@ -760,8 +723,7 @@ pub fn battlegroup_management_flow() -> FlowSpec {
                 StepAction::Detect,
                 "Get-VM -Name <vendor-vm-name>",
                 "Hyper-V provider get_vm",
-                true,
-                false,
+                StepFlags::new(true, false),
             ),
             step(
                 "bg.ssh.prepare-key",
@@ -770,8 +732,7 @@ pub fn battlegroup_management_flow() -> FlowSpec {
                 StepAction::Configure,
                 "Copy-Item + icacls temp key",
                 "Rust key manager with Windows ACL helper",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
             step(
                 "bg.hyperv.get-ip-if-running",
@@ -780,8 +741,7 @@ pub fn battlegroup_management_flow() -> FlowSpec {
                 StepAction::Detect,
                 "Get-VMNetworkAdapter IPAddresses",
                 "Hyper-V provider vm_ipv4",
-                true,
-                true,
+                StepFlags::new(true, true),
             ),
             step(
                 "bg.menu.dispatch",
@@ -790,8 +750,7 @@ pub fn battlegroup_management_flow() -> FlowSpec {
                 StepAction::Choose,
                 "Read-Host menu",
                 "Typed command enum",
-                false,
-                false,
+                StepFlags::new(false, false),
             ),
         ],
     }
@@ -804,16 +763,17 @@ fn battlegroup_kubernetes_step(
     source: &'static str,
     native_strategy: &'static str,
 ) -> FlowStep {
-    step(
+    let mut flow_step = step(
         id,
         description,
         StepDomain::Kubernetes,
         action,
         source,
         native_strategy,
-        false,
-        false,
-    )
+        StepFlags::new(false, false),
+    );
+    flow_step.provider = ProviderKind::Kubernetes;
+    flow_step
 }
 
 /// Returns the catalog of supported battlegroup management commands.
@@ -862,8 +822,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Wait,
                     "kubectl get svc port 11717 nodePort",
                     "Kubernetes service discovery",
-                    false,
-                    false,
+                    StepFlags::new(false, false),
                 ),
             ],
         ),
@@ -893,8 +852,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Wait,
                     "kubectl get svc port 11717 nodePort",
                     "Kubernetes service discovery",
-                    false,
-                    false,
+                    StepFlags::new(false, false),
                 ),
             ],
         ),
@@ -922,8 +880,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Import,
                     "ctr -n k8s.io images import downloaded battlegroup tars",
                     "BattlegroupUpdateOrchestrator::update_from_downloads",
-                    false,
-                    false,
+                    StepFlags::new(false, false),
                 ),
                 battlegroup_kubernetes_step(
                     "bg.command.update.patch-images",
@@ -946,8 +903,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Detect,
                     "kubectl get ns grep funcom-seabass",
                     "Kubernetes namespace list",
-                    false,
-                    false,
+                    StepFlags::new(false, false),
                 ),
                 step(
                     "bg.edit.region",
@@ -956,8 +912,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Patch,
                     "kubectl get battlegroup -o json; Rust JSON patch; kubectl patch",
                     "StructuredBattlegroupOps::patch_region",
-                    false,
-                    false,
+                    StepFlags::new(false, false),
                 ),
             ],
         ),
@@ -996,8 +951,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                 StepAction::Open,
                 "Start-Process http://ip:18888",
                 "Return URL to caller; UI opens it",
-                false,
-                false,
+                StepFlags::new(false, false),
             )],
         ),
         BattlegroupCommandSpec::new(
@@ -1012,8 +966,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Detect,
                     "kubectl get svc port 11717 nodePort",
                     "Kubernetes service discovery",
-                    false,
-                    false,
+                    StepFlags::new(false, false),
                 ),
                 step(
                     "bg.director.open",
@@ -1022,8 +975,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Open,
                     "Start-Process http://ip:nodePort",
                     "Return URL to caller; UI opens it",
-                    false,
-                    false,
+                    StepFlags::new(false, false),
                 ),
             ],
         ),
@@ -1038,8 +990,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                 StepAction::Shell,
                 "ssh -t dune@ip",
                 "Interactive terminal adapter",
-                false,
-                false,
+                StepFlags::new(false, false),
             )],
         ),
         BattlegroupCommandSpec::new(
@@ -1054,8 +1005,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Detect,
                     "kubectl get pods -n ns",
                     "Kubernetes pod list",
-                    false,
-                    false,
+                    StepFlags::new(false, false),
                 ),
                 step(
                     "bg.shell-pod.open",
@@ -1064,8 +1014,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Shell,
                     "kubectl exec -it pod -- bash/sh",
                     "Interactive Kubernetes exec adapter",
-                    false,
-                    false,
+                    StepFlags::new(false, false),
                 ),
             ],
         ),
@@ -1081,8 +1030,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Start,
                     "Start-VM",
                     "Hyper-V provider start_vm",
-                    true,
-                    false,
+                    StepFlags::new(true, false),
                 ),
                 step(
                     "bg.vm.wait-ip",
@@ -1091,8 +1039,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                     StepAction::Wait,
                     "Get-VMNetworkAdapter IPAddresses loop",
                     "Hyper-V provider wait_ipv4",
-                    true,
-                    false,
+                    StepFlags::new(true, false),
                 ),
             ],
         ),
@@ -1107,8 +1054,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                 StepAction::Stop,
                 "Stop-VM -Force",
                 "Hyper-V provider stop_vm",
-                true,
-                false,
+                StepFlags::new(true, false),
             )],
         ),
         BattlegroupCommandSpec::new(
@@ -1122,8 +1068,7 @@ pub fn battlegroup_command_catalog() -> Vec<BattlegroupCommandSpec> {
                 StepAction::Complete,
                 "break loop",
                 "Return control to caller",
-                false,
-                false,
+                StepFlags::new(false, false),
             )],
         ),
     ]

@@ -826,7 +826,7 @@ fn run_battlegroup_action_with_runner(
             .map_err(command_error_message)?;
     }
     sink.info("bg.check", "Refreshing battlegroup state.");
-    read_remote_server_status(&runner, &battlegroup.namespace, &battlegroup.name)
+    read_remote_server_status(runner, &battlegroup.namespace, &battlegroup.name)
         .map_err(command_error_message)
 }
 
