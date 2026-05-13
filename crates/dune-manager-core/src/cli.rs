@@ -18,10 +18,10 @@ use crate::{
         HyperVVmLifecycleOrchestrator, HyperVVmSetupOrchestrator, HyperVVmSetupRequest,
         InstanceMap, MapInstanceOrchestrator, MemoryProfile, OpenSshGuestProvider, OpenSshRunner,
         OpenSshTarget, OrchestrationEvent, ProxmoxClient, ProxmoxClientConfig,
-        ProxmoxCreateVmRequest, SetMapInstancesRequest, SshGuestBootstrapProvider, StepAction,
-        StepDomain, StrictPowerShellHyperV, StructuredBattlegroupOps, StructuredKubectl,
-        UbuntuSshPrepareRequest, UbuntuSshSetup, VecOperationSink, VmProvider,
-        WorldManifestRequest, DEFAULT_VM_DISK_BYTES,
+        ProxmoxCreateVmRequest, SetMapDisplayNameRequest, SetMapInstancesRequest,
+        SshGuestBootstrapProvider, StepAction, StepDomain, StrictPowerShellHyperV,
+        StructuredBattlegroupOps, StructuredKubectl, UbuntuSshPrepareRequest, UbuntuSshSetup,
+        VecOperationSink, VmProvider, WorldManifestRequest, DEFAULT_VM_DISK_BYTES,
     },
     security::redact_json,
     toolchain::{default_server_package_dir, ManagedTool, Toolchain},
@@ -534,6 +534,45 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
                 "restart": restart,
             }))
         }
+        ["bg", "display-name", "set"] => {
+            let bg = battlegroup_ref(&args)?;
+            let map = InstanceMap::parse(&args.required("--map")?)?;
+            let dimension = i64::try_from(args.required_u64("--dimension")?)
+                .map_err(|_| failure("--dimension is too large"))?;
+            let request =
+                SetMapDisplayNameRequest::set(bg, map, dimension, args.required("--display-name")?);
+            let result =
+                MapInstanceOrchestrator::new(ssh_runner(&args)?).set_display_name(&request)?;
+            let restart = if args.has_flag("--restart") {
+                Some(bg_lifecycle(&args, "restart")?)
+            } else {
+                None
+            };
+            Ok(json!({
+                "ok": true,
+                "result": result,
+                "restart": restart,
+            }))
+        }
+        ["bg", "display-name", "clear"] => {
+            let bg = battlegroup_ref(&args)?;
+            let map = InstanceMap::parse(&args.required("--map")?)?;
+            let dimension = i64::try_from(args.required_u64("--dimension")?)
+                .map_err(|_| failure("--dimension is too large"))?;
+            let request = SetMapDisplayNameRequest::clear(bg, map, dimension);
+            let result =
+                MapInstanceOrchestrator::new(ssh_runner(&args)?).set_display_name(&request)?;
+            let restart = if args.has_flag("--restart") {
+                Some(bg_lifecycle(&args, "restart")?)
+            } else {
+                None
+            };
+            Ok(json!({
+                "ok": true,
+                "result": result,
+                "restart": restart,
+            }))
+        }
         ["bg", "pods"] => {
             let namespace = args.required("--namespace")?;
             to_json(bg_ops(&args)?.list_pods(&namespace)?)
@@ -1017,6 +1056,8 @@ fn usage() -> Vec<&'static str> {
         "dune-manager-cli bg start|stop|restart --ssh PATH --key PATH --host IP --namespace NS --name BG [--director-timeout 60]",
         "dune-manager-cli bg patch-region --ssh PATH --key PATH --host IP --namespace NS --name BG --region \"Europe Test\"",
         "dune-manager-cli bg instances set --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --count N [--pvp-count N] [--restart]",
+        "dune-manager-cli bg display-name set --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --dimension N --display-name NAME [--restart]",
+        "dune-manager-cli bg display-name clear --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --dimension N [--restart]",
         "dune-manager-cli bg pods --ssh PATH --key PATH --host IP --namespace NS",
         "dune-manager-cli bg pod-shell-spec --ssh PATH --key PATH --host IP --namespace NS --pod POD",
         "dune-manager-cli bg export-logs --ssh PATH --key PATH --host IP --namespace NS",

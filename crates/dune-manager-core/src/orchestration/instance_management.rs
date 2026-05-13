@@ -17,6 +17,9 @@ use crate::{
     validation::validate_kube_arg,
 };
 
+const SERVER_DISPLAY_NAME_ARGUMENT_PREFIX: &str =
+    "-ini:engine:[ConsoleVariables]:Bgd.ServerDisplayName=";
+
 /// Supported map family for user-facing instance count operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -146,6 +149,75 @@ pub struct SetMapInstancesResult {
     pub pvp_config_updated: bool,
 }
 
+/// Request for changing one map dimension's player-facing display name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetMapDisplayNameRequest {
+    /// BattleGroup namespace and resource name.
+    pub battlegroup: BattlegroupRef,
+    /// Map family to modify.
+    pub map: InstanceMap,
+    /// Dimension index from the BattleGroup world partition list.
+    pub dimension: i64,
+    /// New display name. `None` clears the per-partition override.
+    pub display_name: Option<String>,
+}
+
+impl SetMapDisplayNameRequest {
+    /// Creates a request that sets a display-name override.
+    pub fn set(
+        battlegroup: BattlegroupRef,
+        map: InstanceMap,
+        dimension: i64,
+        display_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            battlegroup,
+            map,
+            dimension,
+            display_name: Some(display_name.into()),
+        }
+    }
+
+    /// Creates a request that removes a display-name override.
+    pub fn clear(battlegroup: BattlegroupRef, map: InstanceMap, dimension: i64) -> Self {
+        Self {
+            battlegroup,
+            map,
+            dimension,
+            display_name: None,
+        }
+    }
+
+    fn validate(&self) -> CommandResult<()> {
+        self.battlegroup.validate()?;
+        if self.dimension < 0 {
+            return Err(failure("--dimension must be zero or greater"));
+        }
+        if let Some(display_name) = &self.display_name {
+            validate_display_name(display_name)?;
+        }
+        Ok(())
+    }
+}
+
+/// Result of changing a map dimension display name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetMapDisplayNameResult {
+    /// Map name that was modified.
+    pub map: String,
+    /// Dimension index that was modified.
+    pub dimension: i64,
+    /// Backing partition ID used as the per-partition pod spec index.
+    pub partition_id: i64,
+    /// Effective display name override after the operation.
+    pub display_name: Option<String>,
+    /// Whether a BattleGroup restart/reconcile may be required for clients to see the change.
+    pub restart_required: bool,
+    /// Whether the BattleGroup resource was patched.
+    pub battlegroup_patched: bool,
+}
+
 /// Orchestrates durable BattleGroup map instance updates.
 #[derive(Debug, Clone)]
 pub struct MapInstanceOrchestrator<R> {
@@ -208,6 +280,38 @@ where
         })
     }
 
+    /// Sets or clears the display-name override for a single map dimension.
+    pub fn set_display_name(
+        &self,
+        request: &SetMapDisplayNameRequest,
+    ) -> CommandResult<SetMapDisplayNameResult> {
+        request.validate()?;
+
+        let battlegroup = self.battlegroup(&request.battlegroup)?;
+        let update = build_display_name_update(&battlegroup, request)?;
+        if update.patch_required {
+            let patch = serde_json::to_string(&update.patch_operations)
+                .map_err(|err| failure(format!("Failed to serialize display-name patch: {err}")))?;
+            let command = format!(
+                "sudo kubectl patch battlegroup {} -n {} --type=json -p {} -o json",
+                sh_single_quoted(&request.battlegroup.name),
+                sh_single_quoted(&request.battlegroup.namespace),
+                sh_single_quoted(&patch),
+            );
+            self.runner
+                .run_json(&command, "map display-name battlegroup patch")?;
+        }
+
+        Ok(SetMapDisplayNameResult {
+            map: request.map.map_name().to_string(),
+            dimension: request.dimension,
+            partition_id: update.partition_id,
+            display_name: request.display_name.clone(),
+            restart_required: update.patch_required,
+            battlegroup_patched: update.patch_required,
+        })
+    }
+
     fn battlegroup(&self, battlegroup: &BattlegroupRef) -> CommandResult<Value> {
         battlegroup.validate()?;
         let command = format!(
@@ -238,6 +342,13 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorldPartitionUpdate {
     partition_ids: Vec<i64>,
+    patch_required: bool,
+    patch_operations: Vec<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DisplayNameUpdate {
+    partition_id: i64,
     patch_required: bool,
     patch_operations: Vec<Value>,
 }
@@ -330,6 +441,169 @@ fn build_world_partition_update(
         patch_required: !patch_operations.is_empty(),
         patch_operations,
     })
+}
+
+fn build_display_name_update(
+    battlegroup: &Value,
+    request: &SetMapDisplayNameRequest,
+) -> CommandResult<DisplayNameUpdate> {
+    let partition_id = partition_id_for_dimension(battlegroup, request.map, request.dimension)?;
+    let sets_path = ["spec", "serverGroup", "template", "spec", "sets"];
+    let sets = descend(battlegroup, &sets_path)?
+        .as_array()
+        .ok_or_else(|| failure("BattleGroup serverGroup sets is not an array"))?;
+    let map_name = request.map.map_name();
+    let set_index = sets
+        .iter()
+        .position(|item| item["map"].as_str() == Some(map_name))
+        .ok_or_else(|| {
+            failure(format!(
+                "BattleGroup has no serverGroup set entry for {map_name}"
+            ))
+        })?;
+    let set = &sets[set_index];
+    let desired_arg = request
+        .display_name
+        .as_ref()
+        .map(|name| format!("{SERVER_DISPLAY_NAME_ARGUMENT_PREFIX}{name}"));
+    let patch_operations =
+        display_name_patch_operations(set, set_index, partition_id, desired_arg)?;
+
+    Ok(DisplayNameUpdate {
+        partition_id,
+        patch_required: !patch_operations.is_empty(),
+        patch_operations,
+    })
+}
+
+fn partition_id_for_dimension(
+    battlegroup: &Value,
+    map: InstanceMap,
+    dimension: i64,
+) -> CommandResult<i64> {
+    let world_partitions_path = [
+        "spec",
+        "database",
+        "template",
+        "spec",
+        "deployment",
+        "spec",
+        "worldPartitions",
+    ];
+    let world_partitions = descend(battlegroup, &world_partitions_path)?
+        .as_array()
+        .ok_or_else(|| failure("BattleGroup worldPartitions is not an array"))?;
+    let map_name = map.map_name();
+    let entry = world_partitions
+        .iter()
+        .find(|item| item["map"].as_str() == Some(map_name))
+        .ok_or_else(|| {
+            failure(format!(
+                "BattleGroup has no worldPartitions entry for {map_name}"
+            ))
+        })?;
+    let partitions = entry["partitions"]
+        .as_array()
+        .ok_or_else(|| failure(format!("{map_name} partitions is not an array")))?;
+    let partition = partitions
+        .iter()
+        .find(|item| item["dimension"].as_i64() == Some(dimension))
+        .ok_or_else(|| {
+            failure(format!(
+                "{map_name} has no partition for dimension {dimension}"
+            ))
+        })?;
+    partition["id"]
+        .as_i64()
+        .ok_or_else(|| failure(format!("{map_name} dimension {dimension} is missing id")))
+}
+
+fn display_name_patch_operations(
+    set: &Value,
+    set_index: usize,
+    partition_id: i64,
+    desired_arg: Option<String>,
+) -> CommandResult<Vec<Value>> {
+    let pod_specs = set.get("podSpecs");
+    let Some(pod_specs) = pod_specs else {
+        return Ok(desired_arg
+            .map(|arg| {
+                vec![json!({
+                    "op": "add",
+                    "path": format!("/spec/serverGroup/template/spec/sets/{set_index}/podSpecs"),
+                    "value": [{
+                        "index": partition_id,
+                        "arguments": [arg],
+                    }],
+                })]
+            })
+            .unwrap_or_default());
+    };
+    let pod_specs = pod_specs
+        .as_array()
+        .ok_or_else(|| failure("BattleGroup serverGroup podSpecs is not an array"))?;
+    let Some(pod_spec_index) = pod_specs
+        .iter()
+        .position(|item| item["index"].as_i64() == Some(partition_id))
+    else {
+        return Ok(desired_arg
+            .map(|arg| {
+                vec![json!({
+                    "op": "add",
+                    "path": format!("/spec/serverGroup/template/spec/sets/{set_index}/podSpecs/-"),
+                    "value": {
+                        "index": partition_id,
+                        "arguments": [arg],
+                    },
+                })]
+            })
+            .unwrap_or_default());
+    };
+
+    let pod_spec = &pod_specs[pod_spec_index];
+    let arguments = pod_spec.get("arguments");
+    let arguments_path = format!(
+        "/spec/serverGroup/template/spec/sets/{set_index}/podSpecs/{pod_spec_index}/arguments"
+    );
+    let Some(arguments) = arguments else {
+        return Ok(desired_arg
+            .map(|arg| {
+                vec![json!({
+                    "op": "add",
+                    "path": arguments_path,
+                    "value": [arg],
+                })]
+            })
+            .unwrap_or_default());
+    };
+    let arguments = arguments
+        .as_array()
+        .ok_or_else(|| failure("BattleGroup serverGroup podSpec arguments is not an array"))?;
+    let current_index = arguments.iter().position(|item| {
+        item.as_str()
+            .is_some_and(|arg| arg.starts_with(SERVER_DISPLAY_NAME_ARGUMENT_PREFIX))
+    });
+
+    match (desired_arg, current_index) {
+        (Some(desired), Some(arg_index)) if arguments[arg_index].as_str() == Some(&desired) => {
+            Ok(Vec::new())
+        }
+        (Some(desired), Some(arg_index)) => Ok(vec![json!({
+            "op": "replace",
+            "path": format!("{arguments_path}/{arg_index}"),
+            "value": desired,
+        })]),
+        (Some(desired), None) => Ok(vec![json!({
+            "op": "add",
+            "path": format!("{arguments_path}/-"),
+            "value": desired,
+        })]),
+        (None, Some(arg_index)) => Ok(vec![json!({
+            "op": "remove",
+            "path": format!("{arguments_path}/{arg_index}"),
+        })]),
+        (None, None) => Ok(Vec::new()),
+    }
 }
 
 fn append_server_group_set_patch(
@@ -431,6 +705,18 @@ fn next_free_partition_id(existing: &[i64], desired: &[Value]) -> CommandResult<
     let max = used.into_iter().max().unwrap_or(0);
     max.checked_add(1)
         .ok_or_else(|| failure("No free partition ID is available"))
+}
+
+fn validate_display_name(value: &str) -> CommandResult<()> {
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err(failure(
+            "Display name must be a non-empty single-line value",
+        ));
+    }
+    if value.chars().count() > 128 {
+        return Err(failure("Display name must be 128 characters or fewer"));
+    }
+    Ok(())
 }
 
 fn write_pvp_config_script(namespace: &str, pvp_ids: &str) -> String {
@@ -668,5 +954,179 @@ mod tests {
             update.patch_operations[0],
             json!({"op":"add","path":"/spec/serverGroup/template/spec/sets/0/partitions","value":[1]})
         );
+    }
+
+    #[test]
+    fn display_name_adds_per_partition_pod_specs_for_dimension() {
+        let mut bg = sample_battlegroup();
+        bg["spec"]["database"]["template"]["spec"]["deployment"]["spec"]["worldPartitions"][0]
+            ["partitions"] = json!([
+            {"id":1,"dimension":0,"disable":false},
+            {"id":29,"dimension":1,"disable":false}
+        ]);
+        bg["spec"]["serverGroup"]["template"]["spec"]["sets"][0]["partitions"] = json!([1, 29]);
+        bg["spec"]["serverGroup"]["template"]["spec"]["sets"][0]["replicas"] = json!(2);
+        let request = SetMapDisplayNameRequest::set(
+            BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            InstanceMap::Survival1,
+            0,
+            "Bob",
+        );
+
+        let update = build_display_name_update(&bg, &request).unwrap();
+
+        assert_eq!(update.partition_id, 1);
+        assert!(update.patch_required);
+        assert_eq!(
+            update.patch_operations,
+            vec![json!({
+                "op": "add",
+                "path": "/spec/serverGroup/template/spec/sets/0/podSpecs",
+                "value": [{
+                    "index": 1,
+                    "arguments": ["-ini:engine:[ConsoleVariables]:Bgd.ServerDisplayName=Bob"]
+                }]
+            })]
+        );
+    }
+
+    #[test]
+    fn display_name_adds_new_pod_spec_without_touching_other_dimensions() {
+        let mut bg = sample_battlegroup();
+        bg["spec"]["database"]["template"]["spec"]["deployment"]["spec"]["worldPartitions"][0]
+            ["partitions"] = json!([
+            {"id":1,"dimension":0,"disable":false},
+            {"id":29,"dimension":1,"disable":false}
+        ]);
+        bg["spec"]["serverGroup"]["template"]["spec"]["sets"][0]["podSpecs"] =
+            json!([{"index":29,"arguments":["-SomeOtherArg=value"]}]);
+        let request = SetMapDisplayNameRequest::set(
+            BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            InstanceMap::Survival1,
+            0,
+            "Bob",
+        );
+
+        let update = build_display_name_update(&bg, &request).unwrap();
+
+        assert_eq!(
+            update.patch_operations,
+            vec![json!({
+                "op": "add",
+                "path": "/spec/serverGroup/template/spec/sets/0/podSpecs/-",
+                "value": {
+                    "index": 1,
+                    "arguments": ["-ini:engine:[ConsoleVariables]:Bgd.ServerDisplayName=Bob"]
+                }
+            })]
+        );
+    }
+
+    #[test]
+    fn display_name_replaces_existing_override() {
+        let mut bg = sample_battlegroup();
+        bg["spec"]["serverGroup"]["template"]["spec"]["sets"][0]["podSpecs"] = json!([{
+            "index": 1,
+            "arguments": [
+                "-Other=value",
+                "-ini:engine:[ConsoleVariables]:Bgd.ServerDisplayName=Alice"
+            ]
+        }]);
+        let request = SetMapDisplayNameRequest::set(
+            BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            InstanceMap::Survival1,
+            0,
+            "Bob",
+        );
+
+        let update = build_display_name_update(&bg, &request).unwrap();
+
+        assert_eq!(
+            update.patch_operations,
+            vec![json!({
+                "op": "replace",
+                "path": "/spec/serverGroup/template/spec/sets/0/podSpecs/0/arguments/1",
+                "value": "-ini:engine:[ConsoleVariables]:Bgd.ServerDisplayName=Bob"
+            })]
+        );
+    }
+
+    #[test]
+    fn display_name_clear_removes_only_override_argument() {
+        let mut bg = sample_battlegroup();
+        bg["spec"]["serverGroup"]["template"]["spec"]["sets"][0]["podSpecs"] = json!([{
+            "index": 1,
+            "arguments": [
+                "-Other=value",
+                "-ini:engine:[ConsoleVariables]:Bgd.ServerDisplayName=Alice"
+            ]
+        }]);
+        let request = SetMapDisplayNameRequest::clear(
+            BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            InstanceMap::Survival1,
+            0,
+        );
+
+        let update = build_display_name_update(&bg, &request).unwrap();
+
+        assert_eq!(
+            update.patch_operations,
+            vec![json!({
+                "op": "remove",
+                "path": "/spec/serverGroup/template/spec/sets/0/podSpecs/0/arguments/1"
+            })]
+        );
+    }
+
+    #[test]
+    fn display_name_is_noop_when_value_is_current() {
+        let mut bg = sample_battlegroup();
+        bg["spec"]["serverGroup"]["template"]["spec"]["sets"][0]["podSpecs"] = json!([{
+            "index": 1,
+            "arguments": ["-ini:engine:[ConsoleVariables]:Bgd.ServerDisplayName=Bob"]
+        }]);
+        let request = SetMapDisplayNameRequest::set(
+            BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            InstanceMap::Survival1,
+            0,
+            "Bob",
+        );
+
+        let update = build_display_name_update(&bg, &request).unwrap();
+
+        assert!(!update.patch_required);
+        assert!(update.patch_operations.is_empty());
+    }
+
+    #[test]
+    fn display_name_rejects_missing_dimension() {
+        let request = SetMapDisplayNameRequest::set(
+            BattlegroupRef {
+                namespace: "funcom-seabass-sh-host-abcdef".to_string(),
+                name: "sh-host-abcdef".to_string(),
+            },
+            InstanceMap::Survival1,
+            9,
+            "Bob",
+        );
+
+        let err = build_display_name_update(&sample_battlegroup(), &request).unwrap_err();
+
+        assert!(err.message.contains("dimension 9"));
     }
 }
