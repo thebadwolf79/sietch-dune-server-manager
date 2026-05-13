@@ -24,6 +24,9 @@ More management features coming soon.
 
 The app guides you through detecting the host, choosing a server layout, entering your Self-Host Service Token, and starting provisioning.
 
+If you found a bug or are having other issues, please create an issue here:
+https://github.com/adainrivers/dune-dedicated-server-manager/issues
+
 ## Server Setup Guides
 
 - [Remote Ubuntu setup guide](docs/ubuntu-setup-guide.md)
