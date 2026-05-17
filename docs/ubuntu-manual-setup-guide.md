@@ -116,12 +116,15 @@ EOF
 ```sh
 tmp="$(mktemp -t steamcmd.XXXXXX.tar.gz)"
 curl -fsSL 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz' -o "$tmp"
+chmod 644 "$tmp"
 sudo -u dune tar -xzf "$tmp" -C /home/dune/Steam
 rm -f "$tmp"
 
 sudo -u dune ln -sfn /home/dune/Steam /home/dune/.steam/root
 sudo -u dune ln -sfn /home/dune/Steam /home/dune/.steam/steam
 ```
+
+The `chmod 644 "$tmp"` line lets the `dune` user read the archive. Without it, some systems leave the temporary file readable only by the current shell user, and `tar` can fail with `Cannot open: Permission denied`.
 
 Verify it starts:
 
@@ -132,6 +135,8 @@ sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh +quit
 ## 7. Download the Dune server package
 
 The Dune dedicated server Steam app id is `3104830`.
+
+SteamCMD can occasionally fail the first download attempt with `ERROR! Failed to install app '3104830' (Missing configuration)`. If that happens, run the same command a second time.
 
 ```sh
 sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh \
