@@ -2446,6 +2446,7 @@ fn start_server_tunnel_inner(
     let remote_port = match service.as_str() {
         "director" => discover_director_tunnel_port(&target, &request.namespace)?,
         "fileBrowser" => 18888,
+        "database" => discover_database_tunnel_port(&target, &request.namespace)?,
         _ => unreachable!(),
     };
     let local_port = pick_available_local_port()?;
@@ -2491,10 +2492,10 @@ fn start_server_tunnel_inner(
 
     let status = ServerTunnelStatus {
         tunnel_id: tunnel_id.to_string(),
+        url: tunnel_url(&service, local_port),
         service,
         local_port,
         remote_port,
-        url: format!("http://127.0.0.1:{local_port}/"),
     };
     let mut tunnels = registry
         .tunnels
@@ -2612,7 +2613,16 @@ fn normalize_tunnel_service(service: &str) -> Result<String, String> {
     match service.trim() {
         "director" => Ok("director".to_string()),
         "fileBrowser" => Ok("fileBrowser".to_string()),
+        "database" => Ok("database".to_string()),
         other => Err(format!("Unsupported tunnel service: {other}")),
+    }
+}
+
+fn tunnel_url(service: &str, local_port: u16) -> String {
+    if service == "database" {
+        format!("postgresql://127.0.0.1:{local_port}/dune")
+    } else {
+        format!("http://127.0.0.1:{local_port}/")
     }
 }
 
@@ -2650,6 +2660,36 @@ fn discover_director_tunnel_port(target: &OpenSshTarget, namespace: &str) -> Res
         }
     }
     Err("Director service is not currently exposed in Kubernetes.".to_string())
+}
+
+fn discover_database_tunnel_port(target: &OpenSshTarget, namespace: &str) -> Result<u16, String> {
+    const DEFAULT_DATABASE_PORT: u16 = dune_manager_core::database::DEFAULT_DUNE_DATABASE_PORT;
+
+    let namespace = namespace.trim();
+    if namespace.is_empty() {
+        return Err(
+            "BattleGroup namespace is required before starting the database tunnel.".to_string(),
+        );
+    }
+    let runner = OpenSshRunner::new(target.clone());
+    let value = runner
+        .run_json(
+            &format!(
+                "sudo kubectl get databasedeployments -n {} -o json",
+                sh_single_quoted(namespace)
+            ),
+            "database deployment list",
+        )
+        .map_err(command_error_message)?;
+    for deployment in value["items"].as_array().cloned().unwrap_or_default() {
+        if let Some(port) = deployment["spec"]["port"]
+            .as_u64()
+            .and_then(|value| u16::try_from(value).ok())
+        {
+            return Ok(port);
+        }
+    }
+    Ok(DEFAULT_DATABASE_PORT)
 }
 
 fn pick_available_local_port() -> Result<u16, String> {

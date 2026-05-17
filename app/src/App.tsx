@@ -374,7 +374,7 @@ type RemoteComponentLogResult = {
   output: string;
 };
 
-type TunnelService = "director" | "fileBrowser";
+type TunnelService = "director" | "fileBrowser" | "database";
 
 type ServerTunnelStatus = {
   tunnelId: string;
@@ -1202,6 +1202,11 @@ export function App() {
         return;
       }
       setServerTunnels((tunnels) => ({ ...tunnels, [status.tunnelId]: status }));
+      if (status.service === "database") {
+        await copyTextToClipboard(status.url);
+        setSetupRows((rows) => [...rows, log.info("tunnel", `Copied Postgres connection URI ${status.url}`)]);
+        return;
+      }
       await openExternal(status.url);
     } catch (err) {
       setSetupRows((rows) => [...rows, log.error("tunnel", errorMessage(err))]);
@@ -2392,6 +2397,7 @@ function ServerCard({
         vmName={vm.name}
         canStartDirectorTunnel={!!battlegroup && !battlegroup.stop && isDirectorReadyPhase(battlegroup.directorPhase)}
         canStartFileBrowserTunnel={!!battlegroup && !battlegroup.stop}
+        canStartDatabaseTunnel={!!battlegroup && !battlegroup.stop}
         tunnels={tunnels}
         tunnelBusy={tunnelBusy}
         onStartTunnel={onStartTunnel}
@@ -2660,6 +2666,7 @@ function RemoteServerCard({
           keyPath={server.type === "ubuntu" ? server.keyPath : undefined}
           canStartDirectorTunnel={!!liveStatus && !liveStatus.battlegroup.stop && isDirectorReadyPhase(liveStatus.battlegroup.directorPhase)}
           canStartFileBrowserTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
+          canStartDatabaseTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
           tunnels={tunnels}
           tunnelBusy={tunnelBusy}
           onStartTunnel={onStartTunnel}
@@ -2720,6 +2727,7 @@ function ServerTunnelControls({
   keyPath,
   canStartDirectorTunnel,
   canStartFileBrowserTunnel,
+  canStartDatabaseTunnel,
   tunnels,
   tunnelBusy,
   onStartTunnel,
@@ -2735,6 +2743,7 @@ function ServerTunnelControls({
   keyPath?: string;
   canStartDirectorTunnel: boolean;
   canStartFileBrowserTunnel: boolean;
+  canStartDatabaseTunnel: boolean;
   tunnels: Record<string, ServerTunnelStatus>;
   tunnelBusy: Record<string, boolean>;
   onStartTunnel?: (request: ServerTunnelStartRequest) => void;
@@ -2744,6 +2753,7 @@ function ServerTunnelControls({
   const services: Array<{ service: TunnelService; label: string }> = [
     { service: "director", label: "Director UI" },
     { service: "fileBrowser", label: "File Browser" },
+    { service: "database", label: "Postgres" },
   ];
   return (
     <Box className="tunnel-controls" mt="3">
@@ -2752,7 +2762,13 @@ function ServerTunnelControls({
           const tunnelId = serverTunnelKey(serverKey, service);
           const active = tunnels[tunnelId];
           const busy = !!tunnelBusy[tunnelId];
-          const serviceAvailable = service === "director" ? canStartDirectorTunnel : canStartFileBrowserTunnel;
+          const serviceAvailable =
+            service === "director"
+              ? canStartDirectorTunnel
+              : service === "database"
+                ? canStartDatabaseTunnel
+                : canStartFileBrowserTunnel;
+          const openLabel = service === "database" ? "Copy URI" : `Open ${label}`;
           const disabled =
             busy || !onStopTunnel || (!active && (!serviceAvailable || !host.trim() || !namespace.trim() || !onStartTunnel));
           return (
@@ -2781,7 +2797,7 @@ function ServerTunnelControls({
                     variant="surface"
                     onClick={() => onOpenTunnel?.(active)}
                   >
-                    Open {label}
+                    {openLabel}
                   </Button>
                 ) : null}
                 <Button
@@ -4524,7 +4540,13 @@ function serverTunnelKey(serverKey: string, service: TunnelService): string {
 }
 
 function tunnelServiceLabel(service: TunnelService): string {
-  return service === "director" ? "Director UI" : "File Browser";
+  if (service === "director") {
+    return "Director UI";
+  }
+  if (service === "database") {
+    return "Postgres";
+  }
+  return "File Browser";
 }
 
 function isCriticalRestartComponent(component: RemoteServerComponent): boolean {
