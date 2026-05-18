@@ -199,6 +199,7 @@ struct ProxmoxAlpineSetupRequest {
     static_ip: Option<String>,
     gateway: Option<String>,
     dns: Option<String>,
+    temporary_dhcp_ip: Option<String>,
     player_ip: String,
     world_name: String,
     region: String,
@@ -743,7 +744,7 @@ async fn start_proxmox_alpine_setup(
                 if !err.stdout.trim().is_empty() {
                     sink.error("stdout", err.stdout);
                 }
-                Err("Proxmox Alpine setup failed; see setup log for details.".to_string())
+                Err(err.message)
             }
         }
     })
@@ -1897,29 +1898,44 @@ fn run_proxmox_alpine_setup(
         disk_gb: request.disk_gb,
         qemu_guest_agent: request.install_qemu_guest_agent,
     };
-    client.create_alpine_vm(&create_request, &conversion.qcow2_path, sink)?;
+    let vm_exists = client.vm_status(&request.node, request.vmid).is_ok();
+    if !vm_exists {
+        client.create_alpine_vm(&create_request, &conversion.qcow2_path, sink)?;
+    } else {
+        sink.info(
+            "proxmox.vm",
+            format!("VM {} already exists. Resuming setup from existing VM.", request.vmid),
+        );
+        let status = client.vm_status(&request.node, request.vmid)?;
+        if status.status != "running" {
+            sink.info("proxmox.vm", "Starting the existing Proxmox VM.");
+            client.start_vm(&request.node, request.vmid)?;
+        }
+    }
 
     let guest = OpenSshGuestProvider::new(ssh_path.clone(), ssh_key.clone(), "dune");
-    let configured_static_ip = request
-        .static_ip
+    let first_ip = if let Some(temp_ip) = request
+        .temporary_dhcp_ip
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    let first_ip = if let Some(static_ip) = configured_static_ip.as_deref() {
+    {
+        let cleaned_ip = temp_ip.replace(",", ".");
+        if cleaned_ip.parse::<std::net::Ipv4Addr>().is_err() {
+            return Err(dune_manager_core::errors::failure(format!(
+                "The provided temporary IP address '{}' is not a valid IPv4 address.",
+                temp_ip
+            )));
+        }
         sink.info(
             "proxmox.network",
-            format!("Waiting for guest SSH at configured IP {static_ip}."),
+            format!("Using user-provided temporary IP {cleaned_ip} for SSH bootstrap."),
         );
-        static_ip.to_string()
+        cleaned_ip
     } else {
-        sink.info("proxmox.dhcp", "Waiting for the Alpine guest DHCP address.");
-        discover_dhcp_ip_by_mac(
-            &mac_address,
-            request.bridge_cidr.as_deref(),
-            std::time::Duration::from_secs(240),
-            sink,
-        )?
+        return Err(dune_manager_core::errors::failure(
+            "Could not discover a DHCP address automatically. Please provide the temporary IP manually via the Proxmox Console.",
+        ));
     };
     sink.info("ssh", format!("Waiting for guest SSH at {first_ip}."));
     guest.wait_for_ssh(&first_ip, 180)?;

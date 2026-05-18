@@ -182,6 +182,7 @@ const defaultForm: SetupForm = {
   proxmoxBridge: "",
   proxmoxBridgeCidr: "",
   proxmoxVmid: "",
+  proxmoxTemporaryDhcpIp: "",
   proxmoxInstallQemuGuestAgent: true,
   saveLocalServer: true,
   saveRemoteServer: true,
@@ -696,6 +697,56 @@ function RemoveRemoteServerDialog({
   );
 }
 
+function ProxmoxIpPromptDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (ip: string) => void;
+}) {
+  const [ip, setIp] = useState("");
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Content maxWidth="460px">
+        <Dialog.Title>Proxmox IP Discovery Timeout</Dialog.Title>
+        <Dialog.Description size="2" mb="3">
+          The VM shell was successfully created and started on Proxmox, but auto-detecting the temporary IP address timed out.
+          <br /><br />
+          Please open your <strong>Proxmox Web Console</strong> for this VM, copy the temporary DHCP IP address displayed on the boot screen (or from your router leases), and enter it below to finish bootstrapping the guest.
+        </Dialog.Description>
+        <Box mb="4">
+          <Text as="div" size="2" weight="medium" mb="2">
+            Temporary IP address (DHCP)
+          </Text>
+          <TextField.Root
+            placeholder="e.g. 192.168.1.150"
+            value={ip}
+            onChange={(e) => setIp(e.target.value)}
+          />
+        </Box>
+        <Flex gap="3" justify="end" mt="4">
+          <Dialog.Close>
+            <Button variant="soft" color="gray">
+              Cancel
+            </Button>
+          </Dialog.Close>
+          <Button
+            disabled={!ip.trim()}
+            onClick={() => {
+              onSubmit(ip.trim());
+              onOpenChange(false);
+            }}
+          >
+            Resume Setup
+          </Button>
+        </Flex>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
 function UpdateDialog({
   open,
   update,
@@ -758,6 +809,7 @@ export function App() {
   const [logPanelCollapsed, setLogPanelCollapsed] = useState(false);
   const [rollbackOpen, setRollbackOpen] = useState(false);
   const [rollbackRunning, setRollbackRunning] = useState(false);
+  const [proxmoxIpPromptOpen, setProxmoxIpPromptOpen] = useState(false);
   const [failedRollbackRequest, setFailedRollbackRequest] = useState<RollbackRequest | null>(null);
   const [pendingServerUpdate, setPendingServerUpdate] = useState<PendingServerUpdate | null>(null);
   const [localAttachOpen, setLocalAttachOpen] = useState(false);
@@ -1737,7 +1789,7 @@ export function App() {
     [logLevelFilter, logRows],
   );
 
-  const startSetup = async () => {
+  const startSetup = async (overrideTemporaryDhcpIp?: string) => {
     const setupMemoryGb =
       form.setupTarget === "proxmox"
         ? effectiveProxmoxVmMemoryGb(form, calculatedMemory, proxmoxDetection)
@@ -1768,8 +1820,13 @@ export function App() {
         if (pendingRecord) {
           setRemoteServers((servers) => persistRemoteServers(upsertRemoteServer(servers, pendingRecord)));
         }
+        const manualIp = typeof overrideTemporaryDhcpIp === "string" ? overrideTemporaryDhcpIp.trim() : undefined;
+        const runRequest = {
+          ...proxmoxSetupRunRequest(form, setupMemoryGb),
+          temporaryDhcpIp: manualIp || form.proxmoxTemporaryDhcpIp.trim() || undefined,
+        };
         const result = await invoke<{ host: string; user: string; keyPath: string; namespace: string; battlegroupName: string; worldUniqueName: string; node: string; vmid: number; vmName: string }>("start_proxmox_alpine_setup", {
-          request: proxmoxSetupRunRequest(form, setupMemoryGb),
+          request: runRequest,
         });
         setSetupRows((rows) => [
           ...rows,
@@ -1801,12 +1858,16 @@ export function App() {
       }
     } catch (err) {
       console.error(err);
-      appendSetupRow(log.error("setup", errorMessage(err)));
+      const errorMsg = errorMessage(err);
+      appendSetupRow(log.error("setup", errorMsg));
       if ((form.setupTarget === "ubuntu" || form.setupTarget === "proxmox") && form.saveRemoteServer) {
         const pending = form.setupTarget === "proxmox" ? proxmoxServerDraftFromForm(form) : remoteServerDraftFromForm(form);
         setRemoteServers((servers) =>
           persistRemoteServers(upsertRemoteServer(servers, { ...pending, phase: "Setup failed" })),
         );
+      }
+      if (form.setupTarget === "proxmox" && (errorMsg.includes("discover a DHCP address") || errorMsg.includes("MAC") || errorMsg.includes("ARP"))) {
+        setProxmoxIpPromptOpen(true);
       }
       if (form.setupTarget === "hyperv") {
         setFailedRollbackRequest(rollbackRequestFromSetup(request));
@@ -1976,6 +2037,17 @@ export function App() {
           rollbackRunning={rollbackRunning}
           onOpenChange={setRollbackOpen}
           onRollback={rollback}
+        />
+        <ProxmoxIpPromptDialog
+          open={proxmoxIpPromptOpen}
+          onOpenChange={setProxmoxIpPromptOpen}
+          onSubmit={(ip) => {
+            setForm((current) => ({
+              ...current,
+              proxmoxTemporaryDhcpIp: ip,
+            }));
+            void startSetup(ip);
+          }}
         />
         <UpdateDialog
           open={updateDialogOpen}

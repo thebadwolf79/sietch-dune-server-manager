@@ -186,6 +186,20 @@ export function NetworkStep({
           <FormRow label="Guest network mode">
             <TextField.Root value="DHCP First Static Internal IP" readOnly />
           </FormRow>
+          <Box className="setup-guide" mb="3">
+            <Flex direction="column" gap="1">
+              <Box style={{ fontSize: "13px", color: "var(--gray-11)" }}>
+                The VM boots using DHCP first. The app will auto-discover its IP to connect and bootstrap over SSH. If auto-discovery fails or your Proxmox bridge lacks a DHCP server, you can manually enter the temporary IP below.
+              </Box>
+            </Flex>
+          </Box>
+          <FormRow label="Temporary IP (DHCP)">
+            <TextField.Root
+              placeholder="Leave blank for auto-discovery (requires L2 local network)"
+              value={form.proxmoxTemporaryDhcpIp}
+              onChange={(event) => update("proxmoxTemporaryDhcpIp", event.target.value)}
+            />
+          </FormRow>
           <Grid columns="3" my="2" gap="3">
             <FormRow label="Static IP">
               <TextField.Root

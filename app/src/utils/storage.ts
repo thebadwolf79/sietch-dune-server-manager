@@ -505,6 +505,7 @@ export function proxmoxSetupRunRequest(form: SetupForm, memoryGb: number) {
     staticIp: form.staticIp.trim(),
     gateway: form.gateway.trim(),
     dns: form.dns.trim(),
+    temporaryDhcpIp: form.proxmoxTemporaryDhcpIp.trim() || undefined,
     playerIp: form.playerIp.trim(),
     worldName: form.worldName,
     region: form.region,
