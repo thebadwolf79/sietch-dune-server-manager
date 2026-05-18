@@ -393,7 +393,7 @@ STEAMCMD_URL={steamcmd_url}
 FORCE_STEAMCMD={force_steamcmd}
 
 if [ "$(id -u)" -ne 0 ] && ! sudo -n true >/dev/null 2>&1; then
-  echo "This setup phase requires root or passwordless sudo." >&2
+  echo "This setup phase needs root or a sudo user that can run sudo without a password prompt." >&2
   exit 1
 fi
 SUDO=""
@@ -516,7 +516,7 @@ swap_size_gib={swap_size_gib}
 swap_bytes=$((swap_size_gib * 1024 * 1024 * 1024))
 
 if [ "$(id -u)" -ne 0 ] && ! sudo -n true >/dev/null 2>&1; then
-  echo "This setup phase requires root or passwordless sudo." >&2
+  echo "This setup phase needs root or a sudo user that can run sudo without a password prompt." >&2
   exit 1
 fi
 SUDO=""
@@ -931,7 +931,7 @@ PY
 const K3S_INSTALL_SCRIPT: &str = r#"
 set -eu
 if [ "$(id -u)" -ne 0 ] && ! sudo -n true >/dev/null 2>&1; then
-  echo "This setup phase requires root or passwordless sudo." >&2
+  echo "This setup phase needs root or a sudo user that can run sudo without a password prompt." >&2
   exit 1
 fi
 SUDO=""

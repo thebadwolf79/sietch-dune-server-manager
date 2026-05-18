@@ -1819,7 +1819,7 @@ fn run_remote_ubuntu_setup(
     let preflight = ubuntu.preflight()?;
     if !preflight.passwordless_sudo && preflight.uid != 0 {
         return Err(dune_manager_core::errors::failure(
-            "Remote setup requires root login or passwordless sudo.",
+            "Remote setup needs root or a sudo user that can run sudo without a password prompt. Add a NOPASSWD sudoers rule for this setup user, then run detection again.",
         ));
     }
 

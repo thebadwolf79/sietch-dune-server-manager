@@ -195,7 +195,7 @@ export function remoteSetupBlockingIssues(
   if (form.enableSwap && !preflight) issues.push("Run remote detection before enabling Ubuntu swap.");
   if (preflight && preflight.osId !== "ubuntu") issues.push("Remote host must be Ubuntu.");
   if (preflight && preflight.uid !== 0 && !preflight.passwordlessSudo) {
-    issues.push("Remote setup requires root login or passwordless sudo.");
+    issues.push("Remote setup needs root or a sudo user that can run sudo without a password prompt.");
   }
   if (preflight && !preflight.systemdAvailable) issues.push("Remote host must support systemd.");
   if (!requirements.memoryOk) {

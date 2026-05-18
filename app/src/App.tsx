@@ -1181,12 +1181,20 @@ export function App() {
       });
       setRemotePreflight(preflight);
       setRemotePreflightStatus("ready");
+      const accessMessage = preflight.uid === 0
+        ? `Remote access: ${preflight.user} is root.`
+        : preflight.passwordlessSudo
+          ? `Remote access: ${preflight.user} can run passwordless sudo.`
+          : `Remote access: ${preflight.user} needs a sudo password; setup requires root or passwordless sudo.`;
       setSetupRows((rows) => [
         ...rows,
         log.info(
           "ubuntu.preflight",
           `Remote resources: ${formatGiB(preflight.availableMemoryBytes)} available memory, ${preflight.logicalProcessorCount} logical CPUs, ${formatGiB(preflight.rootDiskAvailableBytes)} disk free.`,
         ),
+        preflight.uid === 0 || preflight.passwordlessSudo
+          ? log.info("ubuntu.preflight", accessMessage)
+          : log.error("ubuntu.preflight", accessMessage),
       ]);
       const publicIp = preflight.publicIp;
       if (publicIp && form.playerIpMode === "external" && form.playerIp !== publicIp) {

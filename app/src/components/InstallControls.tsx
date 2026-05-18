@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   Card,
   Flex,
@@ -43,6 +43,10 @@ import { TargetStep } from "./install/TargetStep";
 import { LayoutStep } from "./install/LayoutStep";
 import { NetworkStep } from "./install/NetworkStep";
 import { ReviewStep } from "./install/ReviewStep";
+
+type SetupStep = "target" | "config" | "network" | "review";
+
+const setupSteps: SetupStep[] = ["target", "config", "network", "review"];
 
 export function InstallControls({
   form,
@@ -95,7 +99,15 @@ export function InstallControls({
   onUpdateServerPackage: () => void;
   onStart: () => void;
 }) {
-  const [setupStep, setSetupStep] = useState<"target" | "config" | "network" | "review">("target");
+  const [setupStep, setSetupStep] = useState<SetupStep>("target");
+  const setupScrollRef = useRef<HTMLDivElement | null>(null);
+  const currentSetupStepRef = useRef<SetupStep>(setupStep);
+  const setupStepScrollPositions = useRef<Record<SetupStep, number>>({
+    target: 0,
+    config: 0,
+    network: 0,
+    review: 0,
+  });
   
   const vmMemoryGb =
     form.setupTarget === "proxmox"
@@ -168,6 +180,34 @@ export function InstallControls({
         ? proxmoxDetectionReady
         : hypervDetectionReady;
 
+  const rememberSetupScroll = () => {
+    const scroller = setupScrollRef.current;
+    if (!scroller) return;
+    setupStepScrollPositions.current[currentSetupStepRef.current] = scroller.scrollTop;
+  };
+
+  const showSetupStep = (nextStep: SetupStep) => {
+    if (nextStep !== "target" && !flowDetectionReady) {
+      return;
+    }
+    rememberSetupScroll();
+    setSetupStep(nextStep);
+  };
+
+  useLayoutEffect(() => {
+    currentSetupStepRef.current = setupStep;
+    const savedTop = setupStepScrollPositions.current[setupStep] ?? 0;
+    if (setupScrollRef.current) {
+      setupScrollRef.current.scrollTop = savedTop;
+    }
+    const animationFrame = window.requestAnimationFrame(() => {
+      if (setupScrollRef.current) {
+        setupScrollRef.current.scrollTop = savedTop;
+      }
+    });
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [setupStep]);
+
   return (
     <Card size="3" variant="surface" className="pane setup-pane">
       <Flex direction="column" gap="4" height="100%" minHeight="0">
@@ -184,11 +224,7 @@ export function InstallControls({
         <SegmentedControl.Root
           value={setupStep}
           onValueChange={(value) => {
-            const nextStep = value as any;
-            if (nextStep !== "target" && !flowDetectionReady) {
-              return;
-            }
-            setSetupStep(nextStep);
+            showSetupStep(value as SetupStep);
           }}
           size="2"
           variant="surface"
@@ -200,7 +236,14 @@ export function InstallControls({
           <SegmentedControl.Item value="review" style={{ opacity: flowDetectionReady ? 1 : 0.6, cursor: flowDetectionReady ? "pointer" : "not-allowed" }}>4. Review & Deploy</SegmentedControl.Item>
         </SegmentedControl.Root>
 
-        <Box className="setup-scroll" style={{ flexGrow: 1, overflowY: "auto", paddingRight: "4px" }}>
+        <Box
+          ref={setupScrollRef}
+          className="setup-scroll"
+          style={{ flexGrow: 1, overflowY: "auto", paddingRight: "4px" }}
+          onScroll={(event) => {
+            setupStepScrollPositions.current[currentSetupStepRef.current] = event.currentTarget.scrollTop;
+          }}
+        >
           <Flex direction="column" gap="5" className={setupRunning ? "setup-controls is-disabled" : "setup-controls"}>
             
             {/* STEP 1: Platform & Detection */}
@@ -301,9 +344,8 @@ export function InstallControls({
                 variant="surface"
                 color="gray"
                 onClick={() => {
-                  const steps: Array<"target" | "config" | "network" | "review"> = ["target", "config", "network", "review"];
-                  const prevIndex = steps.indexOf(setupStep) - 1;
-                  setSetupStep(steps[prevIndex]);
+                  const prevIndex = setupSteps.indexOf(setupStep) - 1;
+                  showSetupStep(setupSteps[prevIndex]);
                 }}
               >
                 Back
@@ -318,9 +360,8 @@ export function InstallControls({
                 color="bronze"
                 disabled={setupStep === "target" && !flowDetectionReady}
                 onClick={() => {
-                  const steps: Array<"target" | "config" | "network" | "review"> = ["target", "config", "network", "review"];
-                  const nextIndex = steps.indexOf(setupStep) + 1;
-                  setSetupStep(steps[nextIndex]);
+                  const nextIndex = setupSteps.indexOf(setupStep) + 1;
+                  showSetupStep(setupSteps[nextIndex]);
                 }}
               >
                 Next Step
