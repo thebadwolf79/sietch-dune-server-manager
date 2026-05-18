@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     net::{TcpListener, TcpStream},
     path::PathBuf,
     process::{Child, Command, Stdio},
@@ -10,15 +10,14 @@ use dune_manager_core::environment::{detect_setup_environment, SetupEnvironment}
 use dune_manager_core::models::{CommandFailure, CommandResult};
 use dune_manager_core::orchestration::{
     classify_dune_vm, convert_vhdx_to_cached_qcow2, detect_player_address_candidates,
-    find_vendor_vhdx, is_started_state, openssh_base_args, parse_dhcp_ip_from_arp,
-    wait_for_vm_ipv4, BattlegroupManagementOrchestrator, BattlegroupRef,
-    BattlegroupUpdateOrchestrator, CreatedWorld, DuneVmCandidate, DuneVmConfidence,
-    ExperimentalSwapOrchestrator, ExperimentalSwapRequest, GuestBootstrapOrchestrator,
-    GuestBootstrapPlan, GuestBootstrapProvider, GuestNetworkConfig, GuestNetworkPlan,
-    GuestProvider, HyperVVmLifecycleOrchestrator, HyperVVmSetupOrchestrator, HyperVVmSetupRequest,
-    InstanceMap, KubernetesProvider, LowMemoryBattlegroupProfileRequest, MapInstanceOrchestrator,
-    MemoryProfile, OpenSshGuestProvider, OpenSshRunner, OpenSshTarget, OperationSink,
-    OrchestrationEvent, ProxmoxClient, ProxmoxClientConfig, ProxmoxCreateVmRequest,
+    find_vendor_vhdx, is_started_state, openssh_base_args, wait_for_vm_ipv4,
+    BattlegroupManagementOrchestrator, BattlegroupRef, BattlegroupUpdateOrchestrator, CreatedWorld,
+    DuneVmCandidate, DuneVmConfidence, ExperimentalSwapOrchestrator, ExperimentalSwapRequest,
+    GuestBootstrapOrchestrator, GuestBootstrapPlan, GuestBootstrapProvider, GuestNetworkConfig,
+    GuestNetworkPlan, GuestProvider, HyperVVmLifecycleOrchestrator, HyperVVmSetupOrchestrator,
+    HyperVVmSetupRequest, InstanceMap, KubernetesProvider, LowMemoryBattlegroupProfileRequest,
+    MapInstanceOrchestrator, MemoryProfile, OpenSshGuestProvider, OpenSshRunner, OpenSshTarget,
+    OperationSink, OrchestrationEvent, ProxmoxClient, ProxmoxClientConfig, ProxmoxCreateVmRequest,
     ProxmoxDetection, ProxmoxVmStatus, RemoteCommandRunner, SetMapInstancesRequest,
     SshGuestBootstrapProvider, StrictPowerShellHyperV, StructuredKubectl, UbuntuSshPreflight,
     UbuntuSshPrepareRequest, UbuntuSshSetup, UbuntuSwapRequest, VmProvider, WorldManifestRequest,
@@ -200,6 +199,7 @@ struct ProxmoxAlpineSetupRequest {
     gateway: Option<String>,
     dns: Option<String>,
     temporary_dhcp_ip: Option<String>,
+    ssh_key_path: String,
     player_ip: String,
     world_name: String,
     region: String,
@@ -225,6 +225,25 @@ struct ProxmoxAlpineSetupResult {
     node: String,
     vmid: u64,
     vm_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProxmoxGuestNetworkProbeRequest {
+    temporary_dhcp_ip: String,
+    ssh_key_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProxmoxGuestNetworkProbeResult {
+    temporary_ip: String,
+    interface: Option<String>,
+    address_cidr: Option<String>,
+    static_ip: Option<String>,
+    prefix_length: Option<u8>,
+    gateway: Option<String>,
+    dns: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -666,6 +685,91 @@ async fn trust_proxmox_certificate(
     })
     .await
     .map_err(|err| format!("Proxmox trust worker failed: {err}"))?
+}
+
+#[tauri::command]
+async fn probe_proxmox_guest_network(
+    request: ProxmoxGuestNetworkProbeRequest,
+) -> Result<ProxmoxGuestNetworkProbeResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let temporary_ip = request.temporary_dhcp_ip.trim().replace(",", ".");
+        if temporary_ip.is_empty() {
+            return Err("Temporary Proxmox DHCP IP is required.".to_string());
+        }
+        if temporary_ip.parse::<std::net::Ipv4Addr>().is_err() {
+            return Err(format!(
+                "The provided temporary IP address '{}' is not a valid IPv4 address.",
+                request.temporary_dhcp_ip.trim()
+            ));
+        }
+
+        let toolchain = Toolchain::from_default_root().map_err(|err| err.message)?;
+        toolchain
+            .install(ManagedTool::OpenSsh, false, None)
+            .map_err(|err| err.message)?;
+        let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
+        let server_package_dir = default_server_package_dir().map_err(|err| err.message)?;
+        let ssh_key_path = validate_guest_ssh_key_path(&request.ssh_key_path)?;
+        ensure_generated_guest_key_installed(
+            &server_package_dir,
+            &ssh_path,
+            &ssh_key_path,
+            &temporary_ip,
+            None,
+        )
+        .map_err(command_error_message)?;
+        let runner = OpenSshRunner::new(OpenSshTarget::new(
+            ssh_path,
+            ssh_key_path,
+            "dune",
+            temporary_ip.clone(),
+        ));
+        let output = runner
+            .run_script(
+                r#"
+set -eu
+iface="$(ip route show default 2>/dev/null | awk 'NR==1 { for (i=1;i<=NF;i++) if ($i=="dev") { print $(i+1); exit } }')"
+gateway="$(ip route show default 2>/dev/null | awk 'NR==1 { for (i=1;i<=NF;i++) if ($i=="via") { print $(i+1); exit } }')"
+if [ -n "$iface" ]; then
+  address_cidr="$(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk 'NR==1 { print $4; exit }')"
+else
+  address_cidr="$(ip -4 -o addr show scope global 2>/dev/null | awk 'NR==1 { print $4; exit }')"
+fi
+static_ip="${address_cidr%%/*}"
+prefix_length=""
+if [ "$static_ip" != "$address_cidr" ]; then
+  prefix_length="${address_cidr#*/}"
+fi
+dns="$(awk '/^nameserver[[:space:]]+[0-9.]+/ { print $2; exit }' /etc/resolv.conf 2>/dev/null || true)"
+printf 'interface=%s\n' "$iface"
+printf 'addressCidr=%s\n' "$address_cidr"
+printf 'staticIp=%s\n' "$static_ip"
+printf 'prefixLength=%s\n' "$prefix_length"
+printf 'gateway=%s\n' "$gateway"
+printf 'dns=%s\n' "$dns"
+"#,
+            )
+            .map_err(command_error_message)?;
+        let values = parse_key_value_lines(&output);
+        let clean = |key: &str| {
+            values
+                .get(key)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        let prefix_length = clean("prefixLength").and_then(|value| value.parse::<u8>().ok());
+        Ok(ProxmoxGuestNetworkProbeResult {
+            temporary_ip,
+            interface: clean("interface"),
+            address_cidr: clean("addressCidr"),
+            static_ip: clean("staticIp"),
+            prefix_length,
+            gateway: clean("gateway"),
+            dns: clean("dns"),
+        })
+    })
+    .await
+    .map_err(|err| format!("Proxmox guest network probe worker failed: {err}"))?
 }
 
 #[tauri::command]
@@ -1317,22 +1421,31 @@ fn install_alpine_qemu_guest_agent(
 ) -> CommandResult<()> {
     sink.info(
         "guest.qemu-agent",
-        "Installing and starting QEMU guest agent.",
+        "Installing or validating QEMU guest agent.",
     );
-    runner.run_script(
+    let output = runner.run_script(
         r#"
 set -eu
-if ! command -v apk >/dev/null 2>&1; then
-  echo "apk was not found; qemu-guest-agent install requires Alpine Linux" >&2
-  exit 1
+if command -v apk >/dev/null 2>&1; then
+  sudo apk update >/dev/null
+  sudo apk add --no-cache qemu-guest-agent >/dev/null
+  sudo modprobe virtio_console >/dev/null 2>&1 || true
+  sudo rc-update add qemu-guest-agent default >/dev/null
+  sudo rc-service qemu-guest-agent restart >/dev/null 2>&1 || sudo rc-service qemu-guest-agent start >/dev/null
+  echo "installed=apk"
+elif command -v qemu-ga >/dev/null 2>&1 || command -v qemu-guest-agent >/dev/null 2>&1; then
+  echo "installed=present"
+else
+  echo "skipped=no_supported_package_manager"
 fi
-sudo apk update >/dev/null
-sudo apk add --no-cache qemu-guest-agent >/dev/null
-sudo modprobe virtio_console >/dev/null 2>&1 || true
-sudo rc-update add qemu-guest-agent default >/dev/null
-sudo rc-service qemu-guest-agent restart >/dev/null 2>&1 || sudo rc-service qemu-guest-agent start >/dev/null
 "#,
     )?;
+    if output.contains("skipped=no_supported_package_manager") {
+        sink.warn(
+            "guest.qemu-agent",
+            "QEMU guest agent could not be installed automatically because the guest does not expose a supported package manager; continuing without it.",
+        );
+    }
     Ok(())
 }
 
@@ -1864,9 +1977,9 @@ fn run_proxmox_alpine_setup(
 
     sink.info("steam", "Installing or validating the server package.");
     toolchain.install_server_package(&server_package_dir)?;
-    sink.info("ssh", "Preparing the vendor VM SSH key.");
-    let ssh_key = prepare_vendor_ssh_key(&server_package_dir)?;
     let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
+    let ssh_key = validate_guest_ssh_key_path(&request.ssh_key_path)
+        .map_err(dune_manager_core::errors::failure)?;
 
     sink.info(
         "proxmox.image",
@@ -1904,8 +2017,12 @@ fn run_proxmox_alpine_setup(
     } else {
         sink.info(
             "proxmox.vm",
-            format!("VM {} already exists. Resuming setup from existing VM.", request.vmid),
+            format!(
+                "VM {} already exists. Resuming setup from existing VM.",
+                request.vmid
+            ),
         );
+        validate_and_reconcile_existing_proxmox_vm(&client, &create_request, &mac_address, sink)?;
         let status = client.vm_status(&request.node, request.vmid)?;
         if status.status != "running" {
             sink.info("proxmox.vm", "Starting the existing Proxmox VM.");
@@ -1913,7 +2030,6 @@ fn run_proxmox_alpine_setup(
         }
     }
 
-    let guest = OpenSshGuestProvider::new(ssh_path.clone(), ssh_key.clone(), "dune");
     let first_ip = if let Some(temp_ip) = request
         .temporary_dhcp_ip
         .as_deref()
@@ -1934,11 +2050,23 @@ fn run_proxmox_alpine_setup(
         cleaned_ip
     } else {
         return Err(dune_manager_core::errors::failure(
-            "Could not discover a DHCP address automatically. Please provide the temporary IP manually via the Proxmox Console.",
+            "Temporary Proxmox DHCP IP is required. Please provide the temporary IP from the Proxmox Console or router leases.",
         ));
     };
-    sink.info("ssh", format!("Waiting for guest SSH at {first_ip}."));
-    guest.wait_for_ssh(&first_ip, 180)?;
+    sink.info(
+        "ssh",
+        format!("Installing and validating generated guest SSH key at {first_ip}."),
+    );
+    wait_for_generated_guest_key(
+        &server_package_dir,
+        &ssh_path,
+        &ssh_key,
+        &first_ip,
+        180,
+        sink,
+    )?;
+
+    let guest = OpenSshGuestProvider::new(ssh_path.clone(), ssh_key.clone(), "dune");
 
     let mut bootstrap_ip = first_ip.clone();
     if let Some(static_ip) = request
@@ -2069,6 +2197,87 @@ fn run_proxmox_alpine_setup(
     })
 }
 
+fn validate_and_reconcile_existing_proxmox_vm(
+    client: &ProxmoxClient,
+    request: &ProxmoxCreateVmRequest,
+    mac_address: &str,
+    sink: &TauriOperationSink,
+) -> CommandResult<()> {
+    let config = client.vm_config(&request.node, request.vmid)?;
+    let actual_name = config.name.as_deref().unwrap_or_default().trim();
+    if actual_name != request.vm_name.trim() {
+        return Err(dune_manager_core::errors::failure(format!(
+            "Proxmox VMID {} already exists as '{}', expected '{}'. Choose a different VMID or remove the existing VM before setup.",
+            request.vmid,
+            actual_name,
+            request.vm_name.trim()
+        )));
+    }
+
+    let net0 = config.net0.as_deref().unwrap_or_default();
+    let net0_lower = net0.to_ascii_lowercase();
+    if !net0_lower.contains(&mac_address.to_ascii_lowercase()) {
+        return Err(dune_manager_core::errors::failure(format!(
+            "Proxmox VMID {} has an unexpected network adapter. Expected MAC {} in net0.",
+            request.vmid, mac_address
+        )));
+    }
+    let expected_bridge = format!("bridge={}", request.bridge.trim()).to_ascii_lowercase();
+    if !net0_lower.contains(&expected_bridge) {
+        return Err(dune_manager_core::errors::failure(format!(
+            "Proxmox VMID {} is attached to an unexpected bridge. Expected {}.",
+            request.vmid,
+            request.bridge.trim()
+        )));
+    }
+
+    if !config
+        .boot
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .contains("scsi0")
+    {
+        return Err(dune_manager_core::errors::failure(format!(
+            "Proxmox VMID {} does not boot from scsi0; refusing to resume setup.",
+            request.vmid
+        )));
+    }
+    if config
+        .scsi0
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
+        return Err(dune_manager_core::errors::failure(format!(
+            "Proxmox VMID {} is missing scsi0; refusing to resume setup.",
+            request.vmid
+        )));
+    }
+
+    if request.qemu_guest_agent
+        && !config
+            .agent
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .contains("enabled=1")
+    {
+        sink.info(
+            "proxmox.vm",
+            "Enabling Proxmox QEMU guest agent integration on the existing VM.",
+        );
+        client.update_vm_config(
+            &request.node,
+            request.vmid,
+            &BTreeMap::from([("agent".to_string(), "enabled=1".to_string())]),
+        )?;
+    }
+
+    Ok(())
+}
+
 fn wait_for_database_ready<R: RemoteCommandRunner>(
     runner: &R,
     namespace: &str,
@@ -2182,15 +2391,16 @@ fn remote_record_from_battlegroup(
 }
 
 fn remote_record_id(server_type: &str, host: &str, key_path: Option<&str>) -> String {
-    if is_alpine_remote_kind(server_type) {
-        format!("alpine:{}", host.trim().to_lowercase())
-    } else {
-        format!(
-            "ubuntu:{}:{}",
-            host.trim().to_lowercase(),
-            key_path.unwrap_or_default().trim().to_lowercase()
-        )
-    }
+    format!(
+        "{}:{}:{}",
+        if is_alpine_remote_kind(server_type) {
+            "alpine"
+        } else {
+            "ubuntu"
+        },
+        host.trim().to_lowercase(),
+        key_path.unwrap_or_default().trim().to_lowercase()
+    )
 }
 
 fn ensure_remote_world<R>(
@@ -2307,72 +2517,126 @@ fn generated_proxmox_mac(vmid: u64) -> String {
     )
 }
 
-fn discover_dhcp_ip_by_mac(
-    mac_address: &str,
-    bridge_cidr: Option<&str>,
-    timeout: std::time::Duration,
-    sink: &TauriOperationSink,
-) -> CommandResult<String> {
-    let started = std::time::Instant::now();
-    let mut warmed = false;
-    while started.elapsed() < timeout {
-        if !warmed {
-            warmed = true;
-            if let Some(cidr) = bridge_cidr.and_then(cidr_ipv4_prefix) {
-                let _ = warm_local_arp_cache(&cidr);
-            }
-        }
-        let output = run_powershell("arp -a")?;
-        if let Some(ip) = parse_dhcp_ip_from_arp(mac_address, &output) {
-            sink.info(
-                "proxmox.dhcp",
-                format!("Discovered guest DHCP address {ip}."),
-            );
-            return Ok(ip);
-        }
-        std::thread::sleep(std::time::Duration::from_secs(5));
-    }
-    Err(dune_manager_core::errors::failure(format!(
-        "Could not discover a DHCP address for VM MAC {mac_address} within {} seconds.",
-        timeout.as_secs()
-    )))
-}
-
-fn warm_local_arp_cache(prefix: &str) -> CommandResult<()> {
-    let Some(base) = prefix.rsplit_once('.').map(|(base, _)| base.to_string()) else {
-        return Ok(());
-    };
-    let script = format!(
-        r#"
-$ErrorActionPreference = 'SilentlyContinue'
-$base = {base}
-1..254 | ForEach-Object {{
-  $ip = "$base.$_"
-  Start-Process -WindowStyle Hidden -FilePath ping.exe -ArgumentList @('-n','1','-w','120',$ip) | Out-Null
-}}
-"#,
-        base = ps_single_quoted(&base)
-    );
-    let _ = run_powershell(&script)?;
-    Ok(())
-}
-
-fn cidr_ipv4_prefix(value: &str) -> Option<String> {
-    let (ip, prefix) = value.trim().split_once('/')?;
-    if prefix != "24" {
-        return None;
-    }
-    let parts = ip.split('.').collect::<Vec<_>>();
-    (parts.len() == 4 && parts.iter().all(|part| part.parse::<u8>().is_ok()))
-        .then(|| ip.to_string())
-}
-
 fn cidr_prefix(value: &str) -> Option<u8> {
     value
         .trim()
         .split_once('/')
         .and_then(|(_, prefix)| prefix.parse::<u8>().ok())
         .filter(|prefix| *prefix <= 32)
+}
+
+fn parse_key_value_lines(output: &str) -> HashMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            Some((key.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
+fn validate_guest_ssh_key_path(value: &str) -> Result<PathBuf, String> {
+    let key_path = PathBuf::from(value.trim());
+    if key_path.as_os_str().is_empty() {
+        return Err("Proxmox guest SSH private key is required.".to_string());
+    }
+    if !key_path.is_file() {
+        return Err(format!(
+            "Proxmox guest SSH private key was not found: {}",
+            key_path.display()
+        ));
+    }
+    Ok(key_path)
+}
+
+fn wait_for_generated_guest_key(
+    server_package_dir: &std::path::Path,
+    ssh_path: &std::path::Path,
+    generated_key_path: &std::path::Path,
+    host: &str,
+    timeout_seconds: u64,
+    sink: &mut TauriOperationSink,
+) -> CommandResult<()> {
+    let started = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_seconds);
+    let mut last_error = None;
+    while started.elapsed() <= timeout {
+        match ensure_generated_guest_key_installed(
+            server_package_dir,
+            ssh_path,
+            generated_key_path,
+            host,
+            Some(&mut *sink),
+        ) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                last_error = Some(err.message);
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    }
+    Err(dune_manager_core::errors::failure(format!(
+        "Generated SSH key did not authenticate to the Proxmox guest within {timeout_seconds} seconds. Last error: {}",
+        last_error.unwrap_or_else(|| "no SSH attempt completed".to_string())
+    )))
+}
+
+fn ensure_generated_guest_key_installed(
+    server_package_dir: &std::path::Path,
+    ssh_path: &std::path::Path,
+    generated_key_path: &std::path::Path,
+    host: &str,
+    sink: Option<&mut TauriOperationSink>,
+) -> CommandResult<()> {
+    let generated_runner = OpenSshRunner::new(OpenSshTarget::new(
+        ssh_path.to_path_buf(),
+        generated_key_path.to_path_buf(),
+        "dune",
+        host.to_string(),
+    ));
+    if generated_runner.run("true").is_ok() {
+        return Ok(());
+    }
+
+    if let Some(sink) = sink {
+        sink.info(
+            "ssh",
+            "Installing generated SSH public key into the guest for future access.",
+        );
+    }
+    let public_key_path = PathBuf::from(format!("{}.pub", generated_key_path.to_string_lossy()));
+    let public_key = std::fs::read_to_string(&public_key_path).map_err(|err| {
+        dune_manager_core::errors::failure(format!(
+            "Failed to read Proxmox guest SSH public key {}: {err}",
+            public_key_path.display()
+        ))
+    })?;
+    let bootstrap_key = prepare_vendor_ssh_key(server_package_dir)?;
+    let bootstrap_runner = OpenSshRunner::new(OpenSshTarget::new(
+        ssh_path.to_path_buf(),
+        bootstrap_key,
+        "dune",
+        host.to_string(),
+    ));
+    let script = format!(
+        r#"
+set -eu
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+printf '%s\n' {public_key} > "$HOME/.ssh/authorized_keys.new"
+chmod 600 "$HOME/.ssh/authorized_keys.new"
+mv "$HOME/.ssh/authorized_keys.new" "$HOME/.ssh/authorized_keys"
+echo GENERATED_KEY_INSTALLED
+"#,
+        public_key = sh_single_quoted(public_key.trim()),
+    );
+    let output = bootstrap_runner.run_script(&script)?;
+    if !output.contains("GENERATED_KEY_INSTALLED") {
+        return Err(dune_manager_core::errors::failure(
+            "Generated SSH key installation did not complete.",
+        ));
+    }
+    generated_runner.run("true").map(|_| ())
 }
 
 fn remote_runner(host: String, user: String, key_path: String) -> Result<OpenSshRunner, String> {
@@ -2413,32 +2677,16 @@ fn vendor_guest_runner(ssh_path: PathBuf, host: String) -> Result<OpenSshRunner,
 }
 
 fn runner_for_remote_kind(
-    server_type: Option<&str>,
+    _server_type: Option<&str>,
     host: String,
     user: String,
     key_path: Option<String>,
 ) -> Result<OpenSshRunner, String> {
-    if is_alpine_remote_kind(server_type.unwrap_or_default()) {
-        return alpine_guest_runner(host);
-    }
     let key_path = key_path
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "SSH private key is required for remote Ubuntu servers.".to_string())?;
+        .ok_or_else(|| "SSH private key is required for remote servers.".to_string())?;
     remote_runner(host, user, key_path)
-}
-
-fn alpine_guest_runner(host: String) -> Result<OpenSshRunner, String> {
-    let host = host.trim().to_string();
-    if host.is_empty() {
-        return Err("Remote Alpine guest IP is required.".to_string());
-    }
-    let toolchain = Toolchain::from_default_root().map_err(|err| err.message)?;
-    toolchain
-        .install(ManagedTool::OpenSsh, false, None)
-        .map_err(|err| err.message)?;
-    let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
-    vendor_guest_runner(ssh_path, host)
 }
 
 fn is_alpine_remote_kind(server_type: &str) -> bool {
@@ -2589,7 +2837,25 @@ fn tunnel_target(request: &ServerTunnelStartRequest) -> Result<OpenSshTarget, St
             request.user.as_deref().unwrap_or("root").trim().to_string(),
             request.host.trim().to_string(),
         )),
-        "alpine" | "remoteHyperv" => {
+        "alpine" => {
+            let host = request.host.trim().to_string();
+            if host.is_empty() {
+                return Err("Remote Alpine guest IP is required.".to_string());
+            }
+            let key_path = request
+                .key_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "Remote Alpine guest SSH private key is required.".to_string())?;
+            Ok(OpenSshTarget::new(
+                ssh_path,
+                PathBuf::from(key_path),
+                request.user.as_deref().unwrap_or("dune").trim().to_string(),
+                host,
+            ))
+        }
+        "remoteHyperv" => {
             let host = request.host.trim().to_string();
             if host.is_empty() {
                 return Err("Remote Alpine guest IP is required.".to_string());
@@ -3614,6 +3880,7 @@ pub fn run() {
             detect_remote_alpine_servers,
             detect_proxmox,
             trust_proxmox_certificate,
+            probe_proxmox_guest_network,
             start_proxmox_alpine_setup,
             proxmox_vm_status,
             start_proxmox_vm,

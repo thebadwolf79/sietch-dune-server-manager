@@ -150,6 +150,27 @@ impl ProxmoxClient {
         )
     }
 
+    /// Reads the current VM configuration.
+    pub fn vm_config(&self, node: &str, vmid: u64) -> CommandResult<ProxmoxVmConfig> {
+        self.get(
+            &format!("/nodes/{}/qemu/{vmid}/config", encode_path(node)),
+            &[],
+        )
+    }
+
+    /// Updates selected VM configuration keys.
+    pub fn update_vm_config(
+        &self,
+        node: &str,
+        vmid: u64,
+        params: &BTreeMap<String, String>,
+    ) -> CommandResult<Value> {
+        self.put_value(
+            &format!("/nodes/{}/qemu/{vmid}/config", encode_path(node)),
+            params,
+        )
+    }
+
     /// Starts a VM.
     pub fn start_vm(&self, node: &str, vmid: u64) -> CommandResult<Value> {
         self.post_value(
@@ -351,7 +372,9 @@ impl ProxmoxClient {
                 };
             }
             if started.elapsed() >= timeout {
-                return Err(failure(format!("Timed out waiting for Proxmox task: {upid}")));
+                return Err(failure(format!(
+                    "Timed out waiting for Proxmox task: {upid}"
+                )));
             }
             std::thread::sleep(Duration::from_secs(2));
         }
@@ -521,6 +544,26 @@ pub struct ProxmoxVmStatus {
     /// CPU count.
     #[serde(default)]
     pub cpus: u64,
+}
+
+/// Selected Proxmox VM configuration fields used for resume validation.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ProxmoxVmConfig {
+    /// VM display name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// First network adapter configuration.
+    #[serde(default)]
+    pub net0: Option<String>,
+    /// Boot order configuration.
+    #[serde(default)]
+    pub boot: Option<String>,
+    /// First SCSI disk configuration.
+    #[serde(default)]
+    pub scsi0: Option<String>,
+    /// QEMU guest agent setting.
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 /// Request for creating a Dune Alpine VM on Proxmox.

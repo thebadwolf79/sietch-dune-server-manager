@@ -66,6 +66,16 @@ export function ReviewStep({
             {form.playerIp || "Not configured"} ({form.playerIpMode === "external" ? "External Public" : "Local LAN"})
           </Text>
         </Box>
+        {form.setupTarget === "proxmox" ? (
+          <Box>
+            <Text size="1" color="gray" weight="medium">PROXMOX GUEST NETWORK</Text>
+            <Text size="2" weight="bold" as="div" mt="1">
+              {form.staticIp
+                ? `DHCP ${form.proxmoxTemporaryDhcpIp || "pending"} to static ${form.staticIp}`
+                : "Collected during deploy after temporary IP check"}
+            </Text>
+          </Box>
+        ) : null}
       </Grid>
     </SetupSection>
   );

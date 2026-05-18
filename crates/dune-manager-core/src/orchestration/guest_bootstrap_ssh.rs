@@ -318,6 +318,30 @@ sudo rc-update add k3s >/dev/null
 const CONTAINER_IMAGE_HELPERS: &str = r#"
 set -eu
 DOWNLOAD_PATH=/home/dune/.dune/download
+wait_k3s_until_ready() {
+  local elapsed=0
+  while [ ! -S /run/k3s/containerd/containerd.sock ]; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    if [ "$elapsed" -ge 180 ]; then echo "k3s containerd socket did not become ready in 180s" >&2; return 1; fi
+  done
+  elapsed=0
+  until sudo ctr -n k8s.io version >/dev/null 2>&1; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    if [ "$elapsed" -ge 180 ]; then echo "k3s containerd did not accept commands in 180s" >&2; return 1; fi
+  done
+  elapsed=0
+  until sudo kubectl get nodes >/dev/null 2>&1; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    if [ "$elapsed" -ge 180 ]; then echo "k3s API did not become ready in 180s" >&2; return 1; fi
+  done
+}
+restart_k3s_and_wait_until_ready() {
+  sudo rc-service k3s restart >&2
+  wait_k3s_until_ready
+}
 load_image_from_file() {
   local file_name="$1"
   if [ ! -f "$DOWNLOAD_PATH/$file_name" ]; then
@@ -325,20 +349,21 @@ load_image_from_file() {
     exit 1
   fi
   local attempt=1
-  while [ "$attempt" -le 3 ]; do
+  while [ "$attempt" -le 8 ]; do
+    wait_k3s_until_ready
     if sudo ctr -n k8s.io images import "$DOWNLOAD_PATH/$file_name" >&2; then
       return 0
     fi
-    echo "Import of $file_name failed (attempt $attempt/3)." >&2
+    echo "Import of $file_name failed (attempt $attempt/8)." >&2
     if ! sudo ctr -n k8s.io version >/dev/null 2>&1; then
       echo "k3s/containerd is not responding; restarting k3s." >&2
       restart_k3s_and_wait_until_ready
     else
-      sleep 5
+      sleep 10
     fi
     attempt=$((attempt + 1))
   done
-  echo "Failed to import $file_name after 3 attempts" >&2
+  echo "Failed to import $file_name after 8 attempts" >&2
   exit 1
 }
 "#;

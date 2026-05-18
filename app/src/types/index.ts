@@ -431,6 +431,7 @@ export type SetupForm = {
   proxmoxBridgeCidr: string;
   proxmoxVmid: string;
   proxmoxTemporaryDhcpIp: string;
+  proxmoxSshKeyPath: string;
   proxmoxInstallQemuGuestAgent: boolean;
   saveLocalServer: boolean;
   saveRemoteServer: boolean;

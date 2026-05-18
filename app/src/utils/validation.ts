@@ -285,13 +285,22 @@ export function proxmoxSetupBlockingIssues(
   if (!form.proxmoxBridge.trim()) issues.push("Proxmox bridge is required.");
   if (parsePositiveInt(form.proxmoxVmid) <= 0) issues.push("Proxmox VMID is required.");
   if (!form.vmName.trim()) issues.push("VM name is required.");
-  if (!form.staticIp.trim()) issues.push("Static guest IP is required for Proxmox setup.");
-  if (!form.gateway.trim()) issues.push("Static guest gateway is required for Proxmox setup.");
-  if (!form.dns.trim()) issues.push("Static guest DNS is required for Proxmox setup.");
+  if (!form.proxmoxSshKeyPath.trim()) issues.push("Proxmox guest SSH private key is required.");
+  if (form.proxmoxTemporaryDhcpIp.trim() && !isIpv4Address(form.proxmoxTemporaryDhcpIp.replace(/,/g, ".").trim())) {
+    issues.push("Temporary Proxmox DHCP IP must be a valid IPv4 address.");
+  }
+  if (form.staticIp.trim() && !isIpv4Address(form.staticIp.replace(/,/g, ".").trim())) {
+    issues.push("Static guest IP must be a valid IPv4 address.");
+  }
+  if (form.gateway.trim() && !isIpv4Address(form.gateway.replace(/,/g, ".").trim())) {
+    issues.push("Static guest gateway must be a valid IPv4 address.");
+  }
   if (!requirements.memoryOk) issues.push(`Memory: ${requirements.memoryRequired}; ${requirements.memoryAvailable}.`);
   if (!requirements.processorOk) issues.push(`CPU Cores: ${requirements.processorRequired}.`);
   if (!requirements.diskOk) issues.push(`Disk: ${requirements.diskRequired}.`);
-  if (!form.playerIp.trim()) issues.push("Player-facing IP is required.");
+  if (form.playerIpMode === "external" && !form.playerIp.trim()) {
+    issues.push("Player-facing IP is required.");
+  }
   if (parsePositiveInt(form.deepDesertWarmServers) > 0) {
     issues.push("Warm Deep Desert Instances are not supported yet; set them to 0 for this build.");
   }
@@ -300,6 +309,15 @@ export function proxmoxSetupBlockingIssues(
   }
   if (!hasServiceToken) issues.push("Self-Host Service Token is required.");
   return issues;
+}
+
+function isIpv4Address(value: string): boolean {
+  const parts = value.split(".");
+  return parts.length === 4 && parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const number = Number(part);
+    return number >= 0 && number <= 255;
+  });
 }
 
 export function setupIssueSummary(

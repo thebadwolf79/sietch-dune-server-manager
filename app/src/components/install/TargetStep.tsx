@@ -37,6 +37,7 @@ export function TargetStep({
   onLocalDetection,
   onRemotePreflight,
   onProxmoxDetection,
+  onGenerateProxmoxSshKey,
   onUpdateServerPackage,
 }: {
   form: SetupForm;
@@ -57,6 +58,7 @@ export function TargetStep({
   onLocalDetection: () => void;
   onRemotePreflight: () => void;
   onProxmoxDetection: () => void;
+  onGenerateProxmoxSshKey: () => void;
   onUpdateServerPackage: () => void;
 }) {
   const hypervDetectionReady = networkDetection === "ready" && environmentGate.canContinue;
@@ -112,7 +114,6 @@ export function TargetStep({
             <Select.Content>
               <Select.Item value="hyperv">Local Windows Hyper-V</Select.Item>
               <Select.Item value="ubuntu">Remote Ubuntu over SSH</Select.Item>
-              <Select.Item value="proxmox">Proxmox VE Cluster</Select.Item>
             </Select.Content>
           </Select.Root>
         </Grid>
@@ -130,11 +131,12 @@ export function TargetStep({
         ) : form.setupTarget === "proxmox" ? (
           <Box className="destructive-warning" mt="3">
             <Text as="div" size="2" weight="medium">
-              Proxmox setup creates a new VM and uploads a converted vendor disk image.
+              Proxmox setup is in progress and hidden from normal setup choices.
             </Text>
             <Text as="p" size="2" color="gray">
-              Use a dedicated VMID and storage target. The guest boots with DHCP first, then optional static
-              networking is applied after SSH is reachable.
+              This flow is still available only for active development/testing sessions. It creates a new VM,
+              uploads a converted vendor disk image, boots with DHCP first, and then applies static networking
+              after SSH is reachable.
             </Text>
           </Box>
         ) : null}
@@ -400,6 +402,34 @@ export function TargetStep({
                       ))}
                     </Select.Content>
                   </Select.Root>
+                </FormRow>
+                <FormRow label="Guest SSH Key">
+                  <Grid columns="1fr auto auto" gap="2">
+                    <TextField.Root
+                      placeholder="Choose or generate SSH private key"
+                      value={form.proxmoxSshKeyPath}
+                      onChange={(event) => update("proxmoxSshKeyPath", event.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      variant="surface"
+                      onClick={async () => {
+                        const selected = await open({
+                          directory: false,
+                          multiple: false,
+                          title: "Choose Proxmox guest SSH private key",
+                        });
+                        if (typeof selected === "string") {
+                          update("proxmoxSshKeyPath", selected);
+                        }
+                      }}
+                    >
+                      Choose
+                    </Button>
+                    <Button type="button" variant="soft" onClick={onGenerateProxmoxSshKey}>
+                      Generate
+                    </Button>
+                  </Grid>
                 </FormRow>
                 <FormRow label="Save Server">
                   <Flex align="center" gap="3" className="checkbox-copy-row">

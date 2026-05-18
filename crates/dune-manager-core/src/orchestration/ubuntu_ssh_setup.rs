@@ -566,11 +566,25 @@ EOF
 fi
 if [ ! -f /etc/rancher/k3s/config.yaml ]; then
   printf 'kubelet-arg:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | $SUDO tee /etc/rancher/k3s/config.yaml >/dev/null
-elif grep -q 'kubelet-arg:' /etc/rancher/k3s/config.yaml && ! grep -q 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml; then
-  echo "k3s config already has kubelet-arg entries; cannot safely add swap config automatically" >&2
-  exit 1
 elif ! grep -q 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml; then
-  printf '\nkubelet-arg:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | $SUDO tee -a /etc/rancher/k3s/config.yaml >/dev/null
+  tmp_config="$(mktemp)"
+  awk '
+    BEGIN {{ added = 0 }}
+    {{ print }}
+    /^[[:space:]]*kubelet-arg:[[:space:]]*$/ && added == 0 {{
+      print "- config=/etc/rancher/k3s/kubelet-config.yaml"
+      added = 1
+    }}
+    END {{
+      if (added == 0) {{
+        print ""
+        print "kubelet-arg:"
+        print "- config=/etc/rancher/k3s/kubelet-config.yaml"
+      }}
+    }}
+  ' /etc/rancher/k3s/config.yaml > "$tmp_config"
+  $SUDO cp /etc/rancher/k3s/config.yaml /etc/rancher/k3s/config.yaml.dune-swap.bak 2>/dev/null || true
+  $SUDO mv "$tmp_config" /etc/rancher/k3s/config.yaml
 fi
 
 if systemctl is-active --quiet k3s 2>/dev/null; then

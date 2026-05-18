@@ -66,6 +66,7 @@ export function InstallControls({
   onLocalDetection,
   onRemotePreflight,
   onProxmoxDetection,
+  onGenerateProxmoxSshKey,
   onUpdateServerPackage,
   onStart,
 }: {
@@ -90,6 +91,7 @@ export function InstallControls({
   onLocalDetection: () => void;
   onRemotePreflight: () => void;
   onProxmoxDetection: () => void;
+  onGenerateProxmoxSshKey: () => void;
   onUpdateServerPackage: () => void;
   onStart: () => void;
 }) {
@@ -222,6 +224,7 @@ export function InstallControls({
                 onLocalDetection={onLocalDetection}
                 onRemotePreflight={onRemotePreflight}
                 onProxmoxDetection={onProxmoxDetection}
+                onGenerateProxmoxSshKey={onGenerateProxmoxSshKey}
                 onUpdateServerPackage={onUpdateServerPackage}
               />
             )}

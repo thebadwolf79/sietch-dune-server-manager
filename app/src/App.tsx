@@ -145,6 +145,30 @@ const defaultHyperVSwitchName = "DuneAwakeningServerSwitch";
 const maxStoredLogRows = 2500;
 const maxRenderedLogRows = 1200;
 
+type ProxmoxSetupOverrides = {
+  temporaryDhcpIp?: string;
+  staticIp?: string;
+  gateway?: string;
+  dns?: string;
+};
+
+type ProxmoxNetworkProbeResult = {
+  temporaryIp: string;
+  interface?: string | null;
+  addressCidr?: string | null;
+  staticIp?: string | null;
+  prefixLength?: number | null;
+  gateway?: string | null;
+  dns?: string | null;
+};
+
+type ProxmoxNetworkPromptValues = {
+  temporaryDhcpIp: string;
+  staticIp: string;
+  gateway: string;
+  dns: string;
+};
+
 const defaultForm: SetupForm = {
   setupTarget: "hyperv",
   vmDestination: "",
@@ -183,6 +207,7 @@ const defaultForm: SetupForm = {
   proxmoxBridgeCidr: "",
   proxmoxVmid: "",
   proxmoxTemporaryDhcpIp: "",
+  proxmoxSshKeyPath: "",
   proxmoxInstallQemuGuestAgent: true,
   saveLocalServer: true,
   saveRemoteServer: true,
@@ -516,7 +541,7 @@ function RemoteAttachDialog({
 }) {
   const canAttach =
     form.host.trim().length > 0 &&
-    (form.type === "alpine" || form.keyPath.trim().length > 0) &&
+    form.keyPath.trim().length > 0 &&
     !running;
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -547,36 +572,27 @@ function RemoteAttachDialog({
               onChange={(event) => onChange({ ...form, host: event.target.value })}
             />
           </Field>
-          {form.type === "ubuntu" ? (
-            <Field label="Private Key">
-              <Grid columns="1fr auto" gap="2">
-                <TextField.Root
-                  placeholder="Choose SSH private key"
-                  value={form.keyPath}
-                  disabled={running}
-                  onChange={(event) => onChange({ ...form, keyPath: event.target.value })}
-                />
-                <Button
-                  type="button"
-                  variant="surface"
-                  disabled={running}
-                  onClick={async () => {
-                    const selected = await openFileDialog("Choose SSH private key");
-                    if (selected) onChange({ ...form, keyPath: selected });
-                  }}
-                >
-                  Choose
-                </Button>
-              </Grid>
-            </Field>
-          ) : (
-            <Box className="setup-guide">
-              <Text size="2">
-                Alpine Dune guests use the active VM SSH key from this Windows profile, with the
-                packaged bootstrap key as fallback, so only the guest IP is needed.
-              </Text>
-            </Box>
-          )}
+          <Field label="Private Key">
+            <Grid columns="1fr auto" gap="2">
+              <TextField.Root
+                placeholder="Choose SSH private key"
+                value={form.keyPath}
+                disabled={running}
+                onChange={(event) => onChange({ ...form, keyPath: event.target.value })}
+              />
+              <Button
+                type="button"
+                variant="surface"
+                disabled={running}
+                onClick={async () => {
+                  const selected = await openFileDialog("Choose SSH private key");
+                  if (selected) onChange({ ...form, keyPath: selected });
+                }}
+              >
+                Choose
+              </Button>
+            </Grid>
+          </Field>
         </Flex>
         <Flex gap="3" justify="end" mt="5">
           <Dialog.Close>
@@ -700,32 +716,157 @@ function RemoveRemoteServerDialog({
 function ProxmoxIpPromptDialog({
   open,
   onOpenChange,
+  currentTemporaryIp,
+  currentStaticIp,
+  currentGateway,
+  currentDns,
+  onCheck,
   onSubmit,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (ip: string) => void;
+  currentTemporaryIp: string;
+  currentStaticIp: string;
+  currentGateway: string;
+  currentDns: string;
+  onCheck: (ip: string) => Promise<ProxmoxNetworkProbeResult>;
+  onSubmit: (values: ProxmoxNetworkPromptValues) => void;
 }) {
-  const [ip, setIp] = useState("");
+  const [ip, setIp] = useState(currentTemporaryIp);
+  const [staticIp, setStaticIp] = useState(currentStaticIp);
+  const [gateway, setGateway] = useState(currentGateway);
+  const [dns, setDns] = useState(currentDns || "1.1.1.1");
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [probe, setProbe] = useState<ProxmoxNetworkProbeResult | null>(null);
+  const [showNetworkControls, setShowNetworkControls] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setIp(currentTemporaryIp);
+    setStaticIp(currentStaticIp);
+    setGateway(currentGateway);
+    setDns(currentDns || "1.1.1.1");
+    setChecking(false);
+    setCheckError(null);
+    setProbe(null);
+    setShowNetworkControls(false);
+  }, [open, currentTemporaryIp, currentStaticIp, currentGateway, currentDns]);
+
+  const cleanedIp = ip.trim().replace(/,/g, ".");
+  const canCheck = isDialogIpv4(cleanedIp) && !checking;
+  const canSubmit =
+    showNetworkControls &&
+    isDialogIpv4(cleanedIp) &&
+    isDialogIpv4(staticIp.trim().replace(/,/g, ".")) &&
+    isDialogIpv4(gateway.trim().replace(/,/g, ".")) &&
+    !!dns.trim() &&
+    !checking;
+
+  const runCheck = async () => {
+    const candidateIp = cleanedIp;
+    if (!isDialogIpv4(candidateIp)) {
+      setCheckError("Enter a valid temporary IPv4 address first.");
+      setShowNetworkControls(false);
+      return;
+    }
+    setChecking(true);
+    setCheckError(null);
+    setProbe(null);
+    try {
+      const result = await onCheck(candidateIp);
+      setProbe(result);
+      setIp(result.temporaryIp || candidateIp);
+      setStaticIp((value) => value.trim() || result.staticIp || candidateIp);
+      setGateway((value) => value.trim() || result.gateway || "");
+      setDns((value) => value.trim() || result.dns || "1.1.1.1");
+      setShowNetworkControls(true);
+    } catch (err) {
+      setCheckError(errorMessage(err));
+      setShowNetworkControls(false);
+    } finally {
+      setChecking(false);
+    }
+  };
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Content maxWidth="460px">
-        <Dialog.Title>Proxmox IP Discovery Timeout</Dialog.Title>
+      <Dialog.Content maxWidth="560px">
+        <Dialog.Title>Proxmox Temporary IP Required</Dialog.Title>
         <Dialog.Description size="2" mb="3">
-          The VM shell was successfully created and started on Proxmox, but auto-detecting the temporary IP address timed out.
+          The VM shell was created and started on Proxmox, but setup needs the temporary DHCP address before it can bootstrap the guest over SSH.
           <br /><br />
-          Please open your <strong>Proxmox Web Console</strong> for this VM, copy the temporary DHCP IP address displayed on the boot screen (or from your router leases), and enter it below to finish bootstrapping the guest.
+          Open the <strong>Proxmox Web Console</strong> for this VM, copy the temporary DHCP IP address displayed on the boot screen or from your router leases, then check it here. Once SSH works, the static network fields appear with the guest route details pre-filled where available.
         </Dialog.Description>
         <Box mb="4">
           <Text as="div" size="2" weight="medium" mb="2">
             Temporary IP address (DHCP)
           </Text>
-          <TextField.Root
-            placeholder="e.g. 192.168.1.150"
-            value={ip}
-            onChange={(e) => setIp(e.target.value)}
-          />
+          <Grid columns="1fr auto" gap="2">
+            <TextField.Root
+              placeholder="e.g. 192.168.1.150"
+              value={ip}
+              onChange={(e) => {
+                setIp(e.target.value);
+                setCheckError(null);
+                setProbe(null);
+                setShowNetworkControls(false);
+              }}
+            />
+            <Button variant="soft" disabled={!canCheck} onClick={() => void runCheck()}>
+              {checking ? "Checking..." : "Check"}
+            </Button>
+          </Grid>
+          {checkError ? (
+            <Text as="p" size="2" color="red" mt="2">
+              {checkError}
+            </Text>
+          ) : null}
+          {probe ? (
+            <Text as="p" size="2" color="green" mt="2">
+              SSH connected{probe.addressCidr ? `, guest address ${probe.addressCidr}` : ""}{probe.gateway ? `, gateway ${probe.gateway}` : ""}.
+            </Text>
+          ) : null}
         </Box>
+        {showNetworkControls ? (
+          <Box className="info-card" mb="4">
+            <Text as="div" size="2" weight="medium" mb="3">
+              Static guest network
+            </Text>
+            <Grid columns="3" gap="3">
+              <Box>
+                <Text as="div" size="1" color="gray" mb="1">
+                  Static IP
+                </Text>
+                <TextField.Root
+                  placeholder="Guest static IP"
+                  value={staticIp}
+                  onChange={(event) => setStaticIp(event.target.value)}
+                />
+              </Box>
+              <Box>
+                <Text as="div" size="1" color="gray" mb="1">
+                  Gateway
+                </Text>
+                <TextField.Root
+                  placeholder="Gateway"
+                  value={gateway}
+                  onChange={(event) => setGateway(event.target.value)}
+                />
+              </Box>
+              <Box>
+                <Text as="div" size="1" color="gray" mb="1">
+                  DNS
+                </Text>
+                <TextField.Root
+                  placeholder="DNS"
+                  value={dns}
+                  onChange={(event) => setDns(event.target.value)}
+                />
+              </Box>
+            </Grid>
+          </Box>
+        ) : null}
         <Flex gap="3" justify="end" mt="4">
           <Dialog.Close>
             <Button variant="soft" color="gray">
@@ -733,9 +874,14 @@ function ProxmoxIpPromptDialog({
             </Button>
           </Dialog.Close>
           <Button
-            disabled={!ip.trim()}
+            disabled={!canSubmit}
             onClick={() => {
-              onSubmit(ip.trim());
+              onSubmit({
+                temporaryDhcpIp: cleanedIp,
+                staticIp: staticIp.trim().replace(/,/g, "."),
+                gateway: gateway.trim().replace(/,/g, "."),
+                dns: dns.trim(),
+              });
               onOpenChange(false);
             }}
           >
@@ -745,6 +891,15 @@ function ProxmoxIpPromptDialog({
       </Dialog.Content>
     </Dialog.Root>
   );
+}
+
+function isDialogIpv4(value: string): boolean {
+  const parts = value.split(".");
+  return parts.length === 4 && parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const number = Number(part);
+    return number >= 0 && number <= 255;
+  });
 }
 
 function UpdateDialog({
@@ -1114,6 +1269,32 @@ export function App() {
     }
   };
 
+  const generateProxmoxSshKey = async () => {
+    setSshKeyGenerationRunning(true);
+    setSetupRows((rows) => [...rows, log.info("ssh-key", "Generating a Proxmox guest SSH key pair.")]);
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose where to create the Proxmox guest SSH key pair",
+      });
+      if (typeof selected !== "string") return;
+      const result = await invoke<GenerateSshKeyResult>("generate_ubuntu_ssh_key", {
+        request: {
+          directory: selected,
+          fileName: "dune_proxmox_guest_ed25519",
+        },
+      });
+      setGeneratedSshKey(result);
+      update("proxmoxSshKeyPath", result.privateKeyPath);
+      setSetupRows((rows) => [...rows, log.info("ssh-key", `Generated Proxmox guest SSH key pair at ${result.privateKeyPath}.`)]);
+    } catch (err) {
+      setSetupRows((rows) => [...rows, log.error("ssh-key", errorMessage(err))]);
+    } finally {
+      setSshKeyGenerationRunning(false);
+    }
+  };
+
   const attachRemoteServer = async () => {
     setRemoteAttachRunning(true);
     setSetupRows((rows) => [...rows, log.info("remote.attach", "Adding remote server profile.")]);
@@ -1253,7 +1434,7 @@ export function App() {
     const detected = await invoke<RemoteServerRecord[]>(command, {
       request:
         server.type === "alpine"
-          ? { host: server.host, serverType: "alpine", user: "dune" }
+          ? { host: server.host, keyPath: server.keyPath, serverType: "alpine", user: "dune" }
           : { host: server.host, keyPath: server.keyPath, serverType: "ubuntu", user: "root" },
     });
     if (detected.length === 0) {
@@ -1265,7 +1446,7 @@ export function App() {
   };
 
   const refreshRemoteServerStatus = async (server: RemoteServerRecord) => {
-    if (!server.host || (server.type === "ubuntu" && !server.keyPath)) return;
+    if (!server.host || !server.keyPath) return;
     setRemoteServerBusy((busy) => ({ ...busy, [server.id]: "Retrieving server information" }));
     setRemoteServerStatuses((statuses) => omitKey(statuses, server.id));
     setRemoteServerComponents((components) => omitKey(components, server.id));
@@ -1652,7 +1833,7 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     for (const server of remoteServers) {
-      if (!server.host || (server.type === "ubuntu" && !server.keyPath) || remoteServerBusy[server.id]) continue;
+      if (!server.host || !server.keyPath || remoteServerBusy[server.id]) continue;
       void refreshRemoteServerStatus(server);
     }
     return () => {
@@ -1789,41 +1970,58 @@ export function App() {
     [logLevelFilter, logRows],
   );
 
-  const startSetup = async (overrideTemporaryDhcpIp?: string) => {
+  const startSetup = async (proxmoxOverrides?: ProxmoxSetupOverrides) => {
+    const formForRun: SetupForm =
+      form.setupTarget === "proxmox" && proxmoxOverrides
+        ? {
+            ...form,
+            proxmoxTemporaryDhcpIp: proxmoxOverrides.temporaryDhcpIp ?? form.proxmoxTemporaryDhcpIp,
+            staticIp: proxmoxOverrides.staticIp ?? form.staticIp,
+            gateway: proxmoxOverrides.gateway ?? form.gateway,
+            dns: proxmoxOverrides.dns ?? form.dns,
+            playerIp:
+              form.playerIpMode === "local" && proxmoxOverrides.staticIp
+                ? proxmoxOverrides.staticIp
+                : form.playerIp,
+          }
+        : form;
     const setupMemoryGb =
-      form.setupTarget === "proxmox"
-        ? effectiveProxmoxVmMemoryGb(form, calculatedMemory, proxmoxDetection)
-        : effectiveVmMemoryGb(form, calculatedMemory);
-    const request = setupRunRequest(form, setupMemoryGb);
+      formForRun.setupTarget === "proxmox"
+        ? effectiveProxmoxVmMemoryGb(formForRun, calculatedMemory, proxmoxDetection)
+        : effectiveVmMemoryGb(formForRun, calculatedMemory);
+    const request = setupRunRequest(formForRun, setupMemoryGb);
     setStarted(true);
     setSetupRunning(true);
     setFailedRollbackRequest(null);
     try {
-      if (form.setupTarget === "ubuntu") {
-        const pendingRecord = form.saveRemoteServer ? remoteServerDraftFromForm(form) : null;
+      if (formForRun.setupTarget === "ubuntu") {
+        const pendingRecord = formForRun.saveRemoteServer ? remoteServerDraftFromForm(formForRun) : null;
         if (pendingRecord) {
           setRemoteServers((servers) => persistRemoteServers(upsertRemoteServer(servers, pendingRecord)));
         }
         const result = await invoke<{ namespace: string; battlegroupName: string; worldUniqueName: string }>("start_remote_ubuntu_setup", {
-          request: remoteSetupRunRequest(form),
+          request: remoteSetupRunRequest(formForRun),
         });
         setSetupRows((rows) => [
           ...rows,
           log.info("ubuntu", "Server provisioning completed. It can take some time before the server appears in-game."),
         ]);
-        if (form.saveRemoteServer) {
-          const record = remoteServerRecordFromSetup(form, result, pendingRecord?.id);
+        if (formForRun.saveRemoteServer) {
+          const record = remoteServerRecordFromSetup(formForRun, result, pendingRecord?.id);
           setRemoteServers((servers) => persistRemoteServers(upsertRemoteServer(servers, record)));
         }
-      } else if (form.setupTarget === "proxmox") {
-        const pendingRecord = form.saveRemoteServer ? proxmoxServerDraftFromForm(form) : null;
+      } else if (formForRun.setupTarget === "proxmox") {
+        const pendingRecord =
+          formForRun.saveRemoteServer &&
+          (formForRun.staticIp.trim() || formForRun.proxmoxTemporaryDhcpIp.trim())
+            ? proxmoxServerDraftFromForm(formForRun)
+            : null;
         if (pendingRecord) {
           setRemoteServers((servers) => persistRemoteServers(upsertRemoteServer(servers, pendingRecord)));
         }
-        const manualIp = typeof overrideTemporaryDhcpIp === "string" ? overrideTemporaryDhcpIp.trim() : undefined;
         const runRequest = {
-          ...proxmoxSetupRunRequest(form, setupMemoryGb),
-          temporaryDhcpIp: manualIp || form.proxmoxTemporaryDhcpIp.trim() || undefined,
+          ...proxmoxSetupRunRequest(formForRun, setupMemoryGb),
+          temporaryDhcpIp: formForRun.proxmoxTemporaryDhcpIp.trim() || undefined,
         };
         const result = await invoke<{ host: string; user: string; keyPath: string; namespace: string; battlegroupName: string; worldUniqueName: string; node: string; vmid: number; vmName: string }>("start_proxmox_alpine_setup", {
           request: runRequest,
@@ -1832,12 +2030,12 @@ export function App() {
           ...rows,
           log.info("proxmox", "Proxmox Alpine provisioning completed. The server is starting through the guest bootstrap flow."),
         ]);
-        if (form.saveRemoteServer) {
-          const record = proxmoxServerRecordFromSetup(form, result, pendingRecord?.id);
+        if (formForRun.saveRemoteServer) {
+          const record = proxmoxServerRecordFromSetup(formForRun, result, pendingRecord?.id);
           setRemoteServers((servers) => persistRemoteServers(upsertRemoteServer(servers, record)));
         }
       } else {
-        if (form.saveLocalServer) {
+        if (formForRun.saveLocalServer) {
           const pending = localServerPlaceholder(request.vmName, request.staticIp);
           setDuneVms((servers) => persistLocalServers(upsertLocalServer(servers, pending)));
           setLocalHyperVRuntimeErrors((errors) => omitKey(errors, localServerKey(pending)));
@@ -1845,7 +2043,7 @@ export function App() {
         const result = await invoke<{ vmName: string; namespace: string; battlegroupName: string; worldUniqueName: string; directorNodePort: number | null }>("start_full_setup", {
           request,
         });
-        if (form.saveLocalServer) {
+        if (formForRun.saveLocalServer) {
           try {
             const candidate = await invoke<DuneVmCandidate>("register_local_hyperv_server", {
               request: { vmName: result.vmName || request.vmName },
@@ -1860,16 +2058,29 @@ export function App() {
       console.error(err);
       const errorMsg = errorMessage(err);
       appendSetupRow(log.error("setup", errorMsg));
-      if ((form.setupTarget === "ubuntu" || form.setupTarget === "proxmox") && form.saveRemoteServer) {
-        const pending = form.setupTarget === "proxmox" ? proxmoxServerDraftFromForm(form) : remoteServerDraftFromForm(form);
-        setRemoteServers((servers) =>
-          persistRemoteServers(upsertRemoteServer(servers, { ...pending, phase: "Setup failed" })),
-        );
+      if ((formForRun.setupTarget === "ubuntu" || formForRun.setupTarget === "proxmox") && formForRun.saveRemoteServer) {
+        const pending =
+          formForRun.setupTarget === "proxmox"
+            ? formForRun.staticIp.trim() || formForRun.proxmoxTemporaryDhcpIp.trim()
+              ? proxmoxServerDraftFromForm(formForRun)
+              : null
+            : remoteServerDraftFromForm(formForRun);
+        if (pending) {
+          setRemoteServers((servers) =>
+            persistRemoteServers(upsertRemoteServer(servers, { ...pending, phase: "Setup failed" })),
+          );
+        }
       }
-      if (form.setupTarget === "proxmox" && (errorMsg.includes("discover a DHCP address") || errorMsg.includes("MAC") || errorMsg.includes("ARP"))) {
+      if (
+        formForRun.setupTarget === "proxmox" &&
+        (errorMsg.includes("Temporary Proxmox DHCP IP") ||
+          errorMsg.includes("temporary IP") ||
+          errorMsg.includes("MAC") ||
+          errorMsg.includes("ARP"))
+      ) {
         setProxmoxIpPromptOpen(true);
       }
-      if (form.setupTarget === "hyperv") {
+      if (formForRun.setupTarget === "hyperv") {
         setFailedRollbackRequest(rollbackRequestFromSetup(request));
         setRollbackOpen(true);
       }
@@ -2012,6 +2223,7 @@ export function App() {
                 onLocalDetection={() => void runLocalDetection()}
                 onRemotePreflight={() => void runRemotePreflight()}
                 onProxmoxDetection={() => void runProxmoxDetection()}
+                onGenerateProxmoxSshKey={() => void generateProxmoxSshKey()}
                 onStart={startSetup}
               />
             ) : null}
@@ -2041,12 +2253,25 @@ export function App() {
         <ProxmoxIpPromptDialog
           open={proxmoxIpPromptOpen}
           onOpenChange={setProxmoxIpPromptOpen}
-          onSubmit={(ip) => {
+          currentTemporaryIp={form.proxmoxTemporaryDhcpIp}
+          currentStaticIp={form.staticIp}
+          currentGateway={form.gateway}
+          currentDns={form.dns}
+          onCheck={(ip) =>
+            invoke<ProxmoxNetworkProbeResult>("probe_proxmox_guest_network", {
+              request: { temporaryDhcpIp: ip, sshKeyPath: form.proxmoxSshKeyPath },
+            })
+          }
+          onSubmit={(values) => {
             setForm((current) => ({
               ...current,
-              proxmoxTemporaryDhcpIp: ip,
+              proxmoxTemporaryDhcpIp: values.temporaryDhcpIp,
+              staticIp: values.staticIp,
+              gateway: values.gateway,
+              dns: values.dns,
+              playerIp: current.playerIpMode === "local" ? values.staticIp : current.playerIp,
             }));
-            void startSetup(ip);
+            void startSetup(values);
           }}
         />
         <UpdateDialog

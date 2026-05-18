@@ -232,7 +232,7 @@ export function RemoteServerCard({
           host={server.host}
           serverKind={server.type}
           user={server.user || remoteServerDefaultUser(server.type)}
-          keyPath={server.type === "ubuntu" ? server.keyPath : undefined}
+          keyPath={server.keyPath}
           canStartDirectorTunnel={!!liveStatus && !liveStatus.battlegroup.stop && isDirectorReadyPhase(liveStatus.battlegroup.directorPhase)}
           canStartFileBrowserTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
           canStartDatabaseTunnel={!!liveStatus && !liveStatus.battlegroup.stop}

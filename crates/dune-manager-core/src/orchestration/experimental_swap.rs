@@ -222,8 +222,7 @@ where
                 sh_single_quoted(&request.namespace),
                 sh_single_quoted(&patch),
             );
-            self.runner
-                .run_json(&command, "experimental swap battlegroup patch")?;
+            self.run_json_with_retry(&command, "experimental swap battlegroup patch")?;
         }
 
         Ok(operation_count)
@@ -235,9 +234,34 @@ where
             sh_single_quoted(battlegroup_name),
             sh_single_quoted(namespace),
         );
-        self.runner
-            .run_json(&command, "experimental swap battlegroup")
+        self.run_json_with_retry(&command, "experimental swap battlegroup")
     }
+
+    fn run_json_with_retry(&self, command: &str, label: &str) -> CommandResult<Value> {
+        let mut last_error = None;
+        for attempt in 1..=12 {
+            match self.runner.run_json(command, label) {
+                Ok(value) => return Ok(value),
+                Err(err) if is_transient_kubectl_error(&err) && attempt < 12 => {
+                    last_error = Some(err);
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| failure(format!("{label} did not complete"))))
+    }
+}
+
+fn is_transient_kubectl_error(err: &crate::models::CommandFailure) -> bool {
+    let text = format!("{}\n{}\n{}", err.message, err.stdout, err.stderr).to_ascii_lowercase();
+    text.contains("http2: server sent goaway")
+        || text.contains("connection refused")
+        || text.contains("unable to connect to the server")
+        || text.contains("the connection to the server")
+        || text.contains("error reading from server: eof")
+        || text.contains("tls handshake timeout")
+        || text.contains("i/o timeout")
 }
 
 const EXPERIMENTAL_SWAP_STATUS_SCRIPT: &str = r#"
@@ -303,11 +327,25 @@ if [ ! -f /etc/rancher/k3s/kubelet-config.yaml ] || ! grep -Eq '^[[:space:]]*fai
 fi
 if [ ! -f /etc/rancher/k3s/config.yaml ]; then
   printf 'kubelet-arg:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | sudo tee /etc/rancher/k3s/config.yaml >/dev/null
-elif grep -q 'kubelet-arg:' /etc/rancher/k3s/config.yaml && ! grep -q 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml; then
-  echo "k3s config already has kubelet-arg entries; cannot safely add swap config automatically" >&2
-  exit 1
 elif ! grep -q 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml; then
-  printf '\nkubelet-arg:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | sudo tee -a /etc/rancher/k3s/config.yaml >/dev/null
+  tmp_config="$(mktemp)"
+  awk '
+    BEGIN {{ added = 0 }}
+    {{ print }}
+    /^[[:space:]]*kubelet-arg:[[:space:]]*$/ && added == 0 {{
+      print "- config=/etc/rancher/k3s/kubelet-config.yaml"
+      added = 1
+    }}
+    END {{
+      if (added == 0) {{
+        print ""
+        print "kubelet-arg:"
+        print "- config=/etc/rancher/k3s/kubelet-config.yaml"
+      }}
+    }}
+  ' /etc/rancher/k3s/config.yaml > "$tmp_config"
+  sudo cp /etc/rancher/k3s/config.yaml /etc/rancher/k3s/config.yaml.dune-swap.bak 2>/dev/null || true
+  sudo mv "$tmp_config" /etc/rancher/k3s/config.yaml
 fi
 
 if [ "$restart_k3s" = "true" ]; then
@@ -667,5 +705,19 @@ mod tests {
             .events
             .iter()
             .any(|event| event.step_id == "bg-swap.patch-memory"));
+    }
+
+    #[test]
+    fn recognizes_kubectl_goaway_as_transient() {
+        let err = crate::models::CommandFailure {
+            message: "ssh exited with an error".to_string(),
+            stdout: String::new(),
+            stderr:
+                "Unable to connect to the server: http2: server sent GOAWAY and closed the connection"
+                    .to_string(),
+            code: Some(1),
+        };
+
+        assert!(is_transient_kubectl_error(&err));
     }
 }

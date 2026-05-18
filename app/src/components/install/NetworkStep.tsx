@@ -189,40 +189,10 @@ export function NetworkStep({
           <Box className="setup-guide" mb="3">
             <Flex direction="column" gap="1">
               <Box style={{ fontSize: "13px", color: "var(--gray-11)" }}>
-                The VM boots using DHCP first. The app will auto-discover its IP to connect and bootstrap over SSH. If auto-discovery fails or your Proxmox bridge lacks a DHCP server, you can manually enter the temporary IP below.
+                The VM boots with DHCP first. After the VM shell is created, setup asks for the temporary address, checks SSH, then fills the static network settings from the guest route where it can.
               </Box>
             </Flex>
           </Box>
-          <FormRow label="Temporary IP (DHCP)">
-            <TextField.Root
-              placeholder="Leave blank for auto-discovery (requires L2 local network)"
-              value={form.proxmoxTemporaryDhcpIp}
-              onChange={(event) => update("proxmoxTemporaryDhcpIp", event.target.value)}
-            />
-          </FormRow>
-          <Grid columns="3" my="2" gap="3">
-            <FormRow label="Static IP">
-              <TextField.Root
-                placeholder="Required"
-                value={form.staticIp}
-                onChange={(event) => update("staticIp", event.target.value)}
-              />
-            </FormRow>
-            <FormRow label="Gateway">
-              <TextField.Root
-                placeholder="Required"
-                value={form.gateway}
-                onChange={(event) => update("gateway", event.target.value)}
-              />
-            </FormRow>
-            <FormRow label="DNS">
-              <TextField.Root
-                placeholder="Required"
-                value={form.dns}
-                onChange={(event) => update("dns", event.target.value)}
-              />
-            </FormRow>
-          </Grid>
           <FormRow label="Player-facing IP">
             <Grid columns="160px 1fr" gap="3">
               <Select.Root

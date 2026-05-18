@@ -111,8 +111,7 @@ export function uniqueBy<T>(values: T[], keyOf: (value: T) => string): T[] {
 
 export function remoteServerId(type: string, host: string, keyPath = ""): string {
   const normalizedHost = host.trim().toLowerCase();
-  if (type === "alpine") return `alpine:${normalizedHost}`;
-  return `ubuntu:${normalizedHost}:${keyPath.trim().toLowerCase()}`;
+  return `${type === "alpine" ? "alpine" : "ubuntu"}:${normalizedHost}:${keyPath.trim().toLowerCase()}`;
 }
 
 export function remoteServerDefaultUser(type: string): string {
@@ -161,7 +160,7 @@ export function remoteServerProfileFromStored(value: unknown): RemoteServerProfi
   const record = value as Partial<RemoteServerProfile & RemoteServerRecord>;
   if (typeof record.host !== "string") return null;
   const type = record.type === "alpine" ? "alpine" : "ubuntu";
-  if (type === "ubuntu" && typeof record.keyPath !== "string") return null;
+  if (typeof record.keyPath !== "string") return null;
   return {
     type,
     host: record.host,
@@ -190,11 +189,11 @@ export function readRemoteServers(): RemoteServerRecord[] {
 export function persistRemoteServers(servers: RemoteServerRecord[]): RemoteServerRecord[] {
   const profiles = uniqueBy(
     servers
-      .filter((server) => server.host.trim() && (server.type === "alpine" || server.keyPath.trim()))
+      .filter((server) => server.host.trim() && server.keyPath.trim())
       .map((server): RemoteServerProfile => ({
         type: server.type,
         host: server.host,
-        keyPath: server.type === "ubuntu" ? server.keyPath : undefined,
+        keyPath: server.keyPath,
         createdAt: server.createdAt || new Date().toISOString(),
         provisioner: server.provisioner,
       })),
@@ -396,10 +395,11 @@ export function proxmoxProvisionerFromForm(form: SetupForm, result?: Partial<Pro
 }
 
 export function proxmoxServerDraftFromForm(form: SetupForm): RemoteServerRecord {
-  const host = form.staticIp.trim() || form.proxmoxHostUrl.trim();
+  const host = form.staticIp.trim() || form.proxmoxTemporaryDhcpIp.trim();
   return remoteServerPlaceholder({
     type: "alpine",
     host,
+    keyPath: form.proxmoxSshKeyPath.trim(),
     createdAt: new Date().toISOString(),
     provisioner: proxmoxProvisionerFromForm(form),
   }, form.worldName.trim() || undefined, "Setup running");
@@ -413,6 +413,7 @@ export function proxmoxServerRecordFromSetup(
   const profile = remoteServerPlaceholder({
     type: "alpine",
     host: result.host,
+    keyPath: form.proxmoxSshKeyPath.trim() || result.keyPath,
     createdAt: new Date().toISOString(),
     provisioner: proxmoxProvisionerFromForm(form, result),
   });
@@ -422,7 +423,7 @@ export function proxmoxServerRecordFromSetup(
     name: form.worldName.trim() || result.battlegroupName,
     host: result.host,
     user: result.user || "dune",
-    keyPath: "",
+    keyPath: form.proxmoxSshKeyPath.trim() || result.keyPath,
     namespace: result.namespace,
     battlegroupName: result.battlegroupName,
     worldUniqueName: result.worldUniqueName,
@@ -458,7 +459,7 @@ export function remoteServerActionRequest(server: RemoteServerRecord) {
     serverType: server.type,
     host: server.host,
     user: server.user || remoteServerDefaultUser(server.type),
-    keyPath: server.type === "ubuntu" ? server.keyPath : undefined,
+    keyPath: server.keyPath || undefined,
     namespace: server.namespace,
     battlegroupName: server.battlegroupName,
   };
@@ -506,6 +507,7 @@ export function proxmoxSetupRunRequest(form: SetupForm, memoryGb: number) {
     gateway: form.gateway.trim(),
     dns: form.dns.trim(),
     temporaryDhcpIp: form.proxmoxTemporaryDhcpIp.trim() || undefined,
+    sshKeyPath: form.proxmoxSshKeyPath.trim(),
     playerIp: form.playerIp.trim(),
     worldName: form.worldName,
     region: form.region,
