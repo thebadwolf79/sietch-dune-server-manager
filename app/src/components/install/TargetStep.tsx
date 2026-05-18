@@ -301,22 +301,20 @@ export function TargetStep({
       ) : (
         <SetupSection icon={DesktopIcon} title="Proxmox Connection" className="setup-order-remote-host">
           <Flex direction="column" gap="2">
-            <Grid columns="2" gap="3">
-              <FormRow label="Host URL">
-                <TextField.Root
-                  placeholder="https://proxmox.example.local:8006"
-                  value={form.proxmoxHostUrl}
-                  onChange={(event) => update("proxmoxHostUrl", event.target.value)}
-                />
-              </FormRow>
-              <FormRow label="API Token ID">
-                <TextField.Root
-                  placeholder="root@pam!dune-manager"
-                  value={form.proxmoxTokenId}
-                  onChange={(event) => update("proxmoxTokenId", event.target.value)}
-                />
-              </FormRow>
-            </Grid>
+            <FormRow label="Host URL">
+              <TextField.Root
+                placeholder="https://proxmox.example.local:8006"
+                value={form.proxmoxHostUrl}
+                onChange={(event) => update("proxmoxHostUrl", event.target.value)}
+              />
+            </FormRow>
+            <FormRow label="API Token ID">
+              <TextField.Root
+                placeholder="root@pam!dune-manager"
+                value={form.proxmoxTokenId}
+                onChange={(event) => update("proxmoxTokenId", event.target.value)}
+              />
+            </FormRow>
             <FormRow label="API Token Secret">
               <TextField.Root
                 type="password"
