@@ -451,11 +451,25 @@ fn install_payload_script(request: &UbuntuSshPrepareRequest) -> String {
 set -eu
 LINUX_USER={linux_user}
 SERVER_ROOT={server_root}
+STEAMCMD_URL={steamcmd_url}
 DOWNLOAD_PATH="$SERVER_ROOT/download"
 USER_HOME=$(getent passwd "$LINUX_USER" | cut -d: -f6)
 STEAMCMD="$USER_HOME/Steam/steamcmd.sh"
+STEAM_HOME="$USER_HOME/Steam"
 if [ ! -x "$STEAMCMD" ]; then
-  echo "SteamCMD is not installed at $STEAMCMD." >&2
+  echo "SteamCMD is missing at $STEAMCMD; reinstalling it." >&2
+  mkdir -p "$STEAM_HOME" "$USER_HOME/.steam"
+  chown -R "$LINUX_USER:$LINUX_USER" "$STEAM_HOME" "$USER_HOME/.steam"
+  tmp="$(mktemp -t dune-steamcmd.XXXXXX.tar.gz)"
+  curl -fsSL "$STEAMCMD_URL" -o "$tmp"
+  chmod 0644 "$tmp"
+  sudo -u "$LINUX_USER" tar -xzf "$tmp" -C "$STEAM_HOME"
+  rm -f "$tmp"
+  sudo -u "$LINUX_USER" ln -sfn "$STEAM_HOME" "$USER_HOME/.steam/root"
+  sudo -u "$LINUX_USER" ln -sfn "$STEAM_HOME" "$USER_HOME/.steam/steam"
+fi
+if [ ! -x "$STEAMCMD" ]; then
+  echo "SteamCMD install did not produce an executable at $STEAMCMD." >&2
   exit 1
 fi
 mkdir -p "$DOWNLOAD_PATH"
@@ -507,6 +521,7 @@ printf '{{"downloadPath":%s,"setupScriptPresent":%s,"battlegroupScriptPresent":%
 "#,
         linux_user = sh_single_quoted(&request.linux_user),
         server_root = sh_single_quoted(&request.server_root),
+        steamcmd_url = sh_single_quoted(&request.steamcmd_url),
         app_id = SERVER_APP_ID,
         legacy_app_id = LEGACY_SERVER_APP_ID,
     )
@@ -1245,6 +1260,16 @@ mod tests {
         assert!(script.contains("appmanifest_4754530.acf"));
         assert!(script.contains("find \"$DOWNLOAD_PATH\" -mindepth 1 -maxdepth 1 -exec rm -rf"));
         assert!(script.contains("+app_update 4754530 validate"));
+    }
+
+    #[test]
+    fn payload_install_repairs_missing_steamcmd() {
+        let script = install_payload_script(&UbuntuSshPrepareRequest::default());
+
+        assert!(script.contains("SteamCMD is missing at $STEAMCMD; reinstalling it."));
+        assert!(script.contains("curl -fsSL \"$STEAMCMD_URL\" -o \"$tmp\""));
+        assert!(script.contains("tar -xzf \"$tmp\" -C \"$STEAM_HOME\""));
+        assert!(script.contains("SteamCMD install did not produce an executable"));
     }
 
     #[test]
