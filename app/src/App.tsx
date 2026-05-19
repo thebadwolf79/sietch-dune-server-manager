@@ -64,7 +64,8 @@ import {
   type RemoteServerKind,
   type EnvironmentGate,
   type EnvironmentDetection,
-  type RemoteComponentLogResult
+  type RemoteComponentLogResult,
+  type AppLogEntry
 } from "./types";
 
 import {
@@ -344,6 +345,7 @@ function LogWindow({
   collapsed,
   onLevelChange,
   onClear,
+  onOpenLogFile,
   onToggleCollapsed,
 }: {
   rows: LogRow[];
@@ -351,6 +353,7 @@ function LogWindow({
   collapsed: boolean;
   onLevelChange: (level: LogLevelFilter) => void;
   onClear: () => void;
+  onOpenLogFile: () => void;
   onToggleCollapsed: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -390,6 +393,9 @@ function LogWindow({
                 </Select.Root>
                 <Button type="button" size="1" variant="surface" disabled={rows.length === 0} onClick={onClear}>
                   Clear
+                </Button>
+                <Button type="button" size="1" variant="surface" onClick={onOpenLogFile}>
+                  Open file
                 </Button>
               </>
             )}
@@ -1013,6 +1019,7 @@ export function App() {
   );
   const layoutPreview = useMemo(() => setupLayoutPreview(form), [form]);
   const updateCheckInFlight = useRef(false);
+  const lastPersistedLogRowId = useRef(0);
   const update = <K extends keyof SetupForm>(key: K, value: SetupForm[K]) => {
     setForm((current) => normalizeSetupForm({ ...current, [key]: value }));
   };
@@ -1185,7 +1192,7 @@ export function App() {
         ? `Remote access: ${preflight.user} is root.`
         : preflight.passwordlessSudo
           ? `Remote access: ${preflight.user} can run passwordless sudo.`
-          : `Remote access: ${preflight.user} needs a sudo password; setup requires root or passwordless sudo.`;
+          : `Remote access: ${preflight.user} needs a sudo password; setup requires root or passwordless sudo. ${preflight.sudoCheck}`;
       setSetupRows((rows) => [
         ...rows,
         log.info(
@@ -1978,6 +1985,27 @@ export function App() {
     [logLevelFilter, logRows],
   );
 
+  useEffect(() => {
+    const entries: AppLogEntry[] = logRows.filter((row) => row.id > lastPersistedLogRowId.current);
+    if (entries.length === 0) return;
+    lastPersistedLogRowId.current = entries.reduce(
+      (highest, row) => Math.max(highest, row.id),
+      lastPersistedLogRowId.current,
+    );
+    invoke<string>("append_app_log_entries", { entries }).catch((err) => {
+      console.error("Failed to append app log entries", err);
+    });
+  }, [logRows]);
+
+  const openAppLogFile = async () => {
+    try {
+      const path = await invoke<string>("open_app_log_file");
+      appendInitRow(log.info("logs", `Opened app log file at ${path}.`));
+    } catch (err) {
+      appendSetupRow(log.error("logs", errorMessage(err)));
+    }
+  };
+
   const startSetup = async (proxmoxOverrides?: ProxmoxSetupOverrides) => {
     const formForRun: SetupForm =
       form.setupTarget === "proxmox" && proxmoxOverrides
@@ -2248,6 +2276,7 @@ export function App() {
               collapsed={logPanelCollapsed}
               onLevelChange={setLogLevelFilter}
               onClear={clearLogRows}
+              onOpenLogFile={() => void openAppLogFile()}
               onToggleCollapsed={() => setLogPanelCollapsed((collapsed) => !collapsed)}
             />
           </AppErrorBoundary>

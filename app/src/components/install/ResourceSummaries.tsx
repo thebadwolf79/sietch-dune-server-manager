@@ -103,7 +103,7 @@ export function RemotePreflightSummary({ preflight }: { preflight: UbuntuSshPref
     ["Swap", preflight.swapTotalBytes > 0 ? `${formatGiB(preflight.swapTotalBytes)} configured` : "None configured", preflight.swapTotalBytes > 0 ? "amber" : "green"],
     ["Disk", `${formatGiB(preflight.rootDiskAvailableBytes)} free of ${formatGiB(preflight.rootDiskTotalBytes)} on /`, "green"],
     ["CPU", `${preflight.logicalProcessorCount} logical processors`, "green"],
-    ["Access", preflight.uid === 0 ? "root" : preflight.passwordlessSudo ? "passwordless sudo" : "sudo password required", preflight.uid === 0 || preflight.passwordlessSudo ? "green" : "red"],
+    ["Access", preflight.uid === 0 ? "root" : preflight.passwordlessSudo ? "passwordless sudo" : preflight.sudoCheck || "sudo password required", preflight.uid === 0 || preflight.passwordlessSudo ? "green" : "red"],
     ["Existing tools", `SteamCMD ${preflight.steamcmdInstalled ? "present" : "missing"}, k3s ${preflight.k3sInstalled ? "present" : "missing"}`, preflight.k3sInstalled ? "amber" : "green"],
   ];
   return (

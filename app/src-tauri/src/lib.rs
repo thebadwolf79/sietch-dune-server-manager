@@ -1,9 +1,16 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fs::{self, OpenOptions},
+    io::Write,
     net::{TcpListener, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread,
+    time::{Duration, Instant},
 };
 
 use dune_manager_core::environment::{detect_setup_environment, SetupEnvironment};
@@ -26,8 +33,8 @@ use dune_manager_core::security::redact_text;
 use dune_manager_core::shell::{ps_single_quoted, run_powershell};
 use dune_manager_core::toolchain::{
     default_server_package_dir, default_vm_destination, prepare_vendor_ssh_key,
-    prepare_vendor_ssh_key_candidates, rotate_vendor_guest_ssh_key, ManagedTool,
-    ServerPackageStatus, Toolchain,
+    prepare_vendor_ssh_key_candidates, prepare_vendor_ssh_key_candidates_for_vm,
+    rotate_vendor_guest_ssh_key_for_vm, ManagedTool, ServerPackageStatus, Toolchain,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -439,6 +446,15 @@ struct SetupLogPayload {
     message: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppLogEntry {
+    timestamp: String,
+    level: String,
+    scope: String,
+    message: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SetupRunResult {
@@ -492,6 +508,15 @@ struct RollbackResult {
 
 struct TauriOperationSink {
     app: tauri::AppHandle,
+    heartbeat: Arc<Mutex<OperationHeartbeat>>,
+    heartbeat_running: Arc<AtomicBool>,
+}
+
+struct OperationHeartbeat {
+    scope: String,
+    message: String,
+    updated_at: Instant,
+    emitted_at: Instant,
 }
 
 #[derive(Default, Clone)]
@@ -517,13 +542,61 @@ impl TunnelRegistry {
 }
 
 impl TauriOperationSink {
+    fn new(app: tauri::AppHandle) -> Self {
+        let heartbeat = Arc::new(Mutex::new(OperationHeartbeat {
+            scope: "setup".to_string(),
+            message: "Waiting for the next setup step.".to_string(),
+            updated_at: Instant::now(),
+            emitted_at: Instant::now(),
+        }));
+        let heartbeat_running = Arc::new(AtomicBool::new(true));
+        let thread_app = app.clone();
+        let thread_heartbeat = Arc::clone(&heartbeat);
+        let thread_running = Arc::clone(&heartbeat_running);
+        thread::spawn(move || {
+            while thread_running.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_secs(5));
+                let Ok(mut state) = thread_heartbeat.lock() else {
+                    continue;
+                };
+                if state.updated_at.elapsed() < Duration::from_secs(30)
+                    || state.emitted_at.elapsed() < Duration::from_secs(30)
+                {
+                    continue;
+                }
+                state.emitted_at = Instant::now();
+                let _ = thread_app.emit(
+                    "setup-log",
+                    SetupLogPayload {
+                        level: "info",
+                        scope: state.scope.clone(),
+                        message: format!("Still working: {}", state.message),
+                    },
+                );
+            }
+        });
+        Self {
+            app,
+            heartbeat,
+            heartbeat_running,
+        }
+    }
+
     fn info(&self, scope: impl Into<String>, message: impl Into<String>) {
+        let scope = scope.into();
+        let message = message.into();
+        if let Ok(mut state) = self.heartbeat.lock() {
+            state.scope = scope.clone();
+            state.message = message.clone();
+            state.updated_at = Instant::now();
+            state.emitted_at = Instant::now();
+        }
         let _ = self.app.emit(
             "setup-log",
             SetupLogPayload {
                 level: "info",
-                scope: scope.into(),
-                message: message.into(),
+                scope,
+                message,
             },
         );
     }
@@ -551,10 +624,101 @@ impl TauriOperationSink {
     }
 }
 
+impl Drop for TauriOperationSink {
+    fn drop(&mut self) {
+        self.heartbeat_running.store(false, Ordering::Relaxed);
+    }
+}
+
 impl OperationSink for TauriOperationSink {
     fn emit(&mut self, event: OrchestrationEvent) {
         self.info(event.step_id, event.message);
     }
+}
+
+#[tauri::command]
+async fn append_app_log_entries(entries: Vec<AppLogEntry>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = app_log_file_path().map_err(command_error_message)?;
+        append_app_log_entries_inner(&path, &entries).map_err(command_error_message)?;
+        Ok(path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|err| format!("Log writer worker failed: {err}"))?
+}
+
+#[tauri::command]
+async fn open_app_log_file() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = app_log_file_path().map_err(command_error_message)?;
+        if !path.is_file() {
+            append_app_log_entries_inner(&path, &[]).map_err(command_error_message)?;
+        }
+        Command::new("notepad.exe")
+            .arg(&path)
+            .spawn()
+            .map_err(|err| format!("Failed to open app log file: {err}"))?;
+        Ok(path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|err| format!("Log open worker failed: {err}"))?
+}
+
+fn app_log_file_path() -> CommandResult<PathBuf> {
+    let root = if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        PathBuf::from(local_app_data).join("DuneDedicatedServerManager")
+    } else {
+        std::env::current_dir()
+            .map_err(|err| {
+                dune_manager_core::errors::failure(format!(
+                    "Failed to resolve current directory: {err}"
+                ))
+            })?
+            .join(".dune-manager")
+    };
+    Ok(root.join("logs").join("dune-manager.log"))
+}
+
+fn append_app_log_entries_inner(path: &Path, entries: &[AppLogEntry]) -> CommandResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            dune_manager_core::errors::failure(format!(
+                "Failed to create app log directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|err| {
+            dune_manager_core::errors::failure(format!(
+                "Failed to open app log file {}: {err}",
+                path.display()
+            ))
+        })?;
+    for entry in entries {
+        let timestamp = one_line_log_field(&entry.timestamp);
+        let level = one_line_log_field(&entry.level).to_ascii_uppercase();
+        let scope = one_line_log_field(&entry.scope);
+        let message = redact_text(&one_line_log_field(&entry.message));
+        writeln!(file, "[{timestamp}] {level:<5} {scope}: {message}").map_err(|err| {
+            dune_manager_core::errors::failure(format!(
+                "Failed to write app log file {}: {err}",
+                path.display()
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn one_line_log_field(value: &str) -> String {
+    value
+        .replace('\r', " ")
+        .replace('\n', " ")
+        .trim()
+        .to_string()
 }
 
 #[tauri::command]
@@ -574,7 +738,7 @@ async fn server_package_status() -> Result<ServerPackageStatus, String> {
 async fn update_server_package(app: tauri::AppHandle) -> Result<ServerPackageStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let sink = TauriOperationSink { app: worker_app };
+        let sink = TauriOperationSink::new(worker_app);
         sink.info("server-package", "Installing or validating SteamCMD.");
         let toolchain = Toolchain::from_default_root().map_err(command_error_message)?;
         toolchain
@@ -610,7 +774,7 @@ async fn start_full_setup(
 ) -> Result<SetupRunResult, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app: worker_app };
+        let mut sink = TauriOperationSink::new(worker_app);
         sink.info("setup", "Starting full setup workflow.");
         match run_full_setup(request, &mut sink) {
             Ok(result) => {
@@ -830,7 +994,7 @@ async fn start_proxmox_alpine_setup(
 ) -> Result<ProxmoxAlpineSetupResult, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app: worker_app };
+        let mut sink = TauriOperationSink::new(worker_app);
         sink.warn(
             "proxmox",
             "Proxmox setup creates a VM, uploads an imported disk image, and bootstraps the Alpine guest over SSH.",
@@ -1149,7 +1313,7 @@ async fn update_local_hyperv_battlegroup(
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app: worker_app };
+        let mut sink = TauriOperationSink::new(worker_app);
         sink.info("bg.update", "Checking local Hyper-V battlegroup update.");
         let runner = local_hyperv_runner(&request.vm_name, request.host.as_deref())?;
         run_battlegroup_update_with_runner(
@@ -1171,7 +1335,7 @@ async fn update_remote_battlegroup(
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app: worker_app };
+        let mut sink = TauriOperationSink::new(worker_app);
         sink.info("bg.update", "Checking remote battlegroup update.");
         let runner = runner_for_remote_kind(
             request.server_type.as_deref(),
@@ -1198,7 +1362,7 @@ async fn run_local_hyperv_action(
     action: &'static str,
 ) -> Result<DuneVmCandidate, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app };
+        let mut sink = TauriOperationSink::new(app);
         let provider = StrictPowerShellHyperV::new();
         let lifecycle = HyperVVmLifecycleOrchestrator::new(&provider);
         match action {
@@ -1223,7 +1387,7 @@ async fn run_local_hyperv_battlegroup_action(
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app: worker_app };
+        let mut sink = TauriOperationSink::new(worker_app);
         sink.info("bg.check", "Checking local Hyper-V battlegroup state.");
         let runner = local_hyperv_runner(&request.vm_name, request.host.as_deref())?;
         run_battlegroup_action_with_runner(
@@ -1245,7 +1409,7 @@ async fn run_remote_battlegroup_action(
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app: worker_app };
+        let mut sink = TauriOperationSink::new(worker_app);
         sink.info("bg.check", "Checking remote battlegroup state.");
         let runner = runner_for_remote_kind(
             request.server_type.as_deref(),
@@ -1511,7 +1675,7 @@ async fn start_remote_ubuntu_setup(
 ) -> Result<RemoteSetupRunResult, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app: worker_app };
+        let mut sink = TauriOperationSink::new(worker_app);
         sink.warn(
             "ubuntu",
             "Remote Ubuntu setup can modify packages, users, k3s, firewall state, and server files on the target host.",
@@ -1544,7 +1708,7 @@ async fn rollback_setup(
 ) -> Result<RollbackResult, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let sink = TauriOperationSink { app: worker_app };
+        let sink = TauriOperationSink::new(worker_app);
         sink.warn("rollback", "Rolling back setup artifacts.");
         rollback_setup_inner(request, &sink).map_err(|err| {
             sink.error("rollback", err.message.clone());
@@ -1708,8 +1872,13 @@ fn run_full_setup(
         "ssh.rotate-key",
         "Generating and installing a fresh VM SSH key.",
     );
-    let rotation =
-        rotate_vendor_guest_ssh_key(&server_package_dir, &ssh_path, &ssh_key, &first_ip)?;
+    let rotation = rotate_vendor_guest_ssh_key_for_vm(
+        &server_package_dir,
+        &ssh_path,
+        &ssh_key,
+        &first_ip,
+        &vm.vm_name,
+    )?;
     if rotation.rotated {
         sink.info("ssh.rotate-key", rotation.message.clone());
         guest = OpenSshGuestProvider::new(ssh_path.clone(), rotation.key_path.clone(), "dune");
@@ -1872,6 +2041,11 @@ fn run_remote_ubuntu_setup(
         world_unique_name: plan.world_unique_name(),
         self_host_token: plan.self_host_token.clone(),
     };
+    sink.info(
+        "ubuntu.webhooks",
+        "Reconciling operator webhook certificates.",
+    );
+    provider.scale_operator_deployments()?;
     let created = ensure_remote_world(&provider, &runner, &world_request, sink)?;
     sink.info("ubuntu.helper.install", "Installing battlegroup helper.");
     provider.install_battlegroup_helper()?;
@@ -2286,41 +2460,115 @@ fn wait_for_database_ready<R: RemoteCommandRunner>(
 ) -> CommandResult<()> {
     sink.info(
         "database.wait",
-        "Waiting for database schema initialization to complete.",
+        format!(
+            "Waiting for database schema initialization to complete. Timeout is {} minutes.",
+            timeout_seconds / 60
+        ),
     );
+    let started = std::time::Instant::now();
+    let mut last_summary = String::new();
+    let mut last_log_at = 0;
+    while started.elapsed().as_secs() <= timeout_seconds {
+        let status = database_wait_status(runner, namespace)?;
+        let elapsed = started.elapsed().as_secs();
+        if status.ready {
+            sink.info(
+                "database.wait",
+                format!(
+                    "Database schema initialization completed: {}",
+                    status.summary
+                ),
+            );
+            return Ok(());
+        }
+        if status.summary != last_summary || elapsed.saturating_sub(last_log_at) >= 30 {
+            sink.info(
+                "database.wait",
+                format!(
+                    "Still waiting for database schema initialization ({elapsed}s): {}",
+                    status.summary
+                ),
+            );
+            last_summary = status.summary;
+            last_log_at = elapsed;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+    let diagnostics =
+        database_wait_diagnostics(runner, namespace).unwrap_or_else(|err| err.message);
+    Err(dune_manager_core::errors::failure(format!(
+        "Database schema initialization did not complete within {timeout_seconds} seconds.\n{diagnostics}"
+    )))
+}
+
+struct DatabaseWaitStatus {
+    ready: bool,
+    summary: String,
+}
+
+fn database_wait_status<R: RemoteCommandRunner>(
+    runner: &R,
+    namespace: &str,
+) -> CommandResult<DatabaseWaitStatus> {
     let script = format!(
         r#"
 set -eu
 ns={ns}
-timeout={timeout}
-elapsed=0
-last_phase=""
-while [ "$elapsed" -le "$timeout" ]; do
-  phases=$(sudo kubectl get databasedeployments -n "$ns" -o jsonpath='{{range .items[*]}}{{.status.phase}}{{"\n"}}{{end}}' 2>/dev/null || true)
-  if [ -n "$phases" ]; then
-    last_phase=$(printf '%s' "$phases" | tr '\n' ',' | sed 's/,$//')
-    if printf '%s\n' "$phases" | grep -Eq '^(Ready|Healthy|Running|Succeeded)$' &&
-       ! printf '%s\n' "$phases" | grep -Eq '^(|Pending|Failed|Error)$'; then
-      echo "Database ready: $last_phase"
-      exit 0
-    fi
-  fi
-  sleep 5
-  elapsed=$((elapsed + 5))
-done
-echo "Database did not become ready within $timeout seconds. Last phase: ${{last_phase:-unknown}}" >&2
-failed_pod=$(sudo kubectl get pods -n "$ns" --no-headers 2>/dev/null | awk '/db.*util/ && ($3 == "Error" || $3 == "Failed" || $3 == "CrashLoopBackOff") {{print $1; exit}}' || true)
-if [ -n "$failed_pod" ]; then
-  echo "Last failed database schema utility pod: $failed_pod" >&2
-  sudo kubectl logs -n "$ns" "$failed_pod" --tail=120 2>&1 |
-    sed -E 's/(password|token|secret|auth|key)([^[:space:]]*)[=:][^[:space:]]+/\1\2=<redacted>/Ig' >&2 || true
+rows=$(sudo kubectl get databasedeployments -n "$ns" --no-headers -o custom-columns=NAME:.metadata.name,PHASE:.status.phase 2>/dev/null || true)
+if [ -z "$rows" ]; then
+  echo "waiting|No DatabaseDeployment resources yet"
+  exit 0
 fi
-exit 1
+summary=$(printf '%s\n' "$rows" | awk '{{name=$1; phase=$2; if (phase == "") phase="Pending"; printf "%s=%s", name, phase; if (NR > 0) printf ", "}}' | sed 's/, $//')
+phases=$(printf '%s\n' "$rows" | awk '{{print $2}}')
+if printf '%s\n' "$phases" | grep -Eq '^(Ready|Healthy|Running|Succeeded)$' &&
+   ! printf '%s\n' "$phases" | grep -Eq '^(|Pending|Failed|Error)$'; then
+  printf 'ready|%s\n' "$summary"
+else
+  printf 'waiting|%s\n' "$summary"
+fi
 "#,
         ns = sh_single_quoted(namespace),
-        timeout = timeout_seconds
     );
-    runner.run_script(&script).map(|_| ())
+    let output = runner.run_script(&script)?;
+    let (state, summary) = output
+        .split_once('|')
+        .map(|(state, summary)| (state.trim(), summary.trim()))
+        .unwrap_or(("waiting", output.trim()));
+    Ok(DatabaseWaitStatus {
+        ready: state == "ready",
+        summary: if summary.is_empty() {
+            "status unavailable".to_string()
+        } else {
+            summary.to_string()
+        },
+    })
+}
+
+fn database_wait_diagnostics<R: RemoteCommandRunner>(
+    runner: &R,
+    namespace: &str,
+) -> CommandResult<String> {
+    let script = format!(
+        r#"
+set -eu
+ns={ns}
+echo "DatabaseDeployment status:"
+sudo kubectl get databasedeployments -n "$ns" -o wide 2>&1 || true
+echo
+echo "Database-related pods:"
+sudo kubectl get pods -n "$ns" --no-headers 2>&1 | awk '/db|postgres|schema|util/ {{print}}' || true
+failed_pod=$(sudo kubectl get pods -n "$ns" --no-headers 2>/dev/null | awk '/db.*util/ && ($3 == "Error" || $3 == "Failed" || $3 == "CrashLoopBackOff") {{print $1; exit}}' || true)
+if [ -n "$failed_pod" ]; then
+  echo
+  echo "Last failed database schema utility pod: $failed_pod"
+  sudo kubectl logs -n "$ns" "$failed_pod" --tail=120 2>&1 |
+    sed -E 's/(password|token|secret|auth|key)([^[:space:]]*)[=:][^[:space:]]+/\1\2=<redacted>/Ig' || true
+fi
+"#,
+        ns = sh_single_quoted(namespace)
+    );
+    runner.run_script(&script)
 }
 
 fn remote_records_from_battlegroups(
@@ -2653,6 +2901,29 @@ fn remote_runner(host: String, user: String, key_path: String) -> Result<OpenSsh
     )))
 }
 
+fn vendor_guest_target_for_vm(
+    ssh_path: PathBuf,
+    vm_name: &str,
+    host: String,
+) -> Result<OpenSshTarget, String> {
+    let server_package_dir = default_server_package_dir().map_err(|err| err.message)?;
+    let candidates = prepare_vendor_ssh_key_candidates_for_vm(&server_package_dir, vm_name)
+        .map_err(command_error_message)?;
+    let mut last_error = None;
+    for key_path in candidates {
+        let target = OpenSshTarget::new(ssh_path.clone(), key_path, "dune", host.clone());
+        let runner = OpenSshRunner::new(target.clone());
+        match runner.run("true") {
+            Ok(_) => return Ok(target),
+            Err(err) => last_error = Some(command_error_message(err)),
+        }
+    }
+    let detail = last_error.unwrap_or_else(|| "no vendor SSH key candidates were available".into());
+    Err(format!(
+        "Could not authenticate to the Dune guest. Tried the VM-specific key, vendor active SSH key, and packaged bootstrap key. Last error: {detail}"
+    ))
+}
+
 fn vendor_guest_target(ssh_path: PathBuf, host: String) -> Result<OpenSshTarget, String> {
     let server_package_dir = default_server_package_dir().map_err(|err| err.message)?;
     let candidates =
@@ -2672,8 +2943,14 @@ fn vendor_guest_target(ssh_path: PathBuf, host: String) -> Result<OpenSshTarget,
     ))
 }
 
-fn vendor_guest_runner(ssh_path: PathBuf, host: String) -> Result<OpenSshRunner, String> {
-    Ok(OpenSshRunner::new(vendor_guest_target(ssh_path, host)?))
+fn vendor_guest_runner_for_vm(
+    ssh_path: PathBuf,
+    vm_name: &str,
+    host: String,
+) -> Result<OpenSshRunner, String> {
+    Ok(OpenSshRunner::new(vendor_guest_target_for_vm(
+        ssh_path, vm_name, host,
+    )?))
 }
 
 fn runner_for_remote_kind(
@@ -2887,7 +3164,7 @@ fn tunnel_target(request: &ServerTunnelStartRequest) -> Result<OpenSshTarget, St
                     candidate.vm.name
                 ));
             }
-            vendor_guest_target(ssh_path, host)
+            vendor_guest_target_for_vm(ssh_path, &candidate.vm.name, host)
         }
         other => Err(format!("Unsupported tunnel server kind: {other}")),
     }
@@ -3064,7 +3341,7 @@ fn local_hyperv_runner(
         .install(ManagedTool::OpenSsh, false, None)
         .map_err(|err| err.message)?;
     let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
-    vendor_guest_runner(ssh_path, ip)
+    vendor_guest_runner_for_vm(ssh_path, &candidate.vm.name, ip)
 }
 
 fn generate_ubuntu_ssh_key_inner(
@@ -3873,6 +4150,8 @@ pub fn run() {
             stop_local_hyperv_battlegroup,
             update_local_hyperv_battlegroup,
             update_remote_battlegroup,
+            append_app_log_entries,
+            open_app_log_file,
             register_local_hyperv_server,
             start_local_hyperv_server,
             stop_local_hyperv_server,

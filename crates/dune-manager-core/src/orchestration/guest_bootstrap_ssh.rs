@@ -87,6 +87,7 @@ where
 
     fn scale_operator_deployments(&self) -> CommandResult<()> {
         self.run_phase(&format!("{}\n{}", KUBECTL_HELPERS, SCALE_OPERATOR_SCRIPT))?;
+        self.repair_operator_webhooks()?;
         Ok(())
     }
 
@@ -129,6 +130,7 @@ where
             return Err(failure("Battlegroup image version file was empty"));
         }
 
+        self.repair_operator_webhooks()?;
         self.sync_existing_postgres_superuser_password(namespace, battlegroup_name)?;
 
         let command = format!(
@@ -174,6 +176,14 @@ impl<R> SshGuestBootstrapProvider<R>
 where
     R: RemoteCommandRunner,
 {
+    fn repair_operator_webhooks(&self) -> CommandResult<()> {
+        self.run_phase(&format!(
+            "{}\n{}",
+            KUBECTL_HELPERS, REPAIR_OPERATOR_WEBHOOKS_SCRIPT
+        ))?;
+        Ok(())
+    }
+
     fn sync_existing_postgres_superuser_password(
         &self,
         namespace: &str,
@@ -491,6 +501,91 @@ scale_deployment funcom-operators battlegroupoperator-controller-manager 1
 scale_deployment funcom-operators databaseoperator-controller-manager 1
 scale_deployment funcom-operators serveroperator-controller-manager 1
 scale_deployment funcom-operators utilitiesoperator-controller-manager 1
+"#;
+
+const REPAIR_OPERATOR_WEBHOOKS_SCRIPT: &str = r#"
+operator_webhook_needs_cert() {
+  local secret="$1" svc="$2" crt="$3"
+  if ! sudo kubectl get secret "$secret" -n funcom-operators >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! sudo kubectl get secret "$secret" -n funcom-operators -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d > "$crt" 2>/dev/null; then
+    return 0
+  fi
+  if ! openssl x509 -in "$crt" -noout -ext subjectAltName 2>/dev/null | grep -q "DNS:${svc}.funcom-operators.svc"; then
+    return 0
+  fi
+  return 1
+}
+
+repair_operator_webhook() {
+  local op="$1"
+  local secret="${op}-webhook-server-cert"
+  local svc="${op}-webhook-svc"
+  local deploy="${op}-controller-manager"
+  local tmp="/tmp/dune-${op}-webhook"
+  local crt="${tmp}.crt"
+  local key="${tmp}.key"
+  local conf="${tmp}.conf"
+  local changed=0
+
+  if operator_webhook_needs_cert "$secret" "$svc" "$crt"; then
+    cat > "$conf" <<EOF
+[req]
+distinguished_name=req_distinguished_name
+x509_extensions=v3_req
+prompt=no
+[req_distinguished_name]
+CN=${svc}.funcom-operators.svc
+[v3_req]
+subjectAltName=@alt_names
+[alt_names]
+DNS.1=${svc}
+DNS.2=${svc}.funcom-operators
+DNS.3=${svc}.funcom-operators.svc
+EOF
+    sudo openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+      -keyout "$key" -out "$crt" -config "$conf" >/dev/null 2>&1
+    sudo kubectl delete secret "$secret" -n funcom-operators --ignore-not-found >/dev/null 2>&1
+    sudo kubectl create secret tls "$secret" -n funcom-operators \
+      --cert="$crt" --key="$key" >/dev/null
+    changed=1
+  fi
+
+  if ! sudo kubectl get secret "$secret" -n funcom-operators -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d > "$crt" 2>/dev/null; then
+    echo "Unable to read operator webhook certificate secret $secret" >&2
+    return 1
+  fi
+  local ca_bundle
+  ca_bundle=$(base64 "$crt" | tr -d '\n')
+
+  for resource in $(sudo kubectl get mutatingwebhookconfigurations,validatingwebhookconfigurations -o name 2>/dev/null || true); do
+    i=0
+    while [ "$i" -lt 20 ]; do
+      service_name=$(sudo kubectl get "$resource" -o "jsonpath={.webhooks[$i].clientConfig.service.name}" 2>/dev/null || true)
+      if [ -z "$service_name" ]; then
+        break
+      fi
+      service_namespace=$(sudo kubectl get "$resource" -o "jsonpath={.webhooks[$i].clientConfig.service.namespace}" 2>/dev/null || true)
+      if [ "$service_name" = "$svc" ] && [ "$service_namespace" = "funcom-operators" ]; then
+        patch="[{\"op\":\"add\",\"path\":\"/webhooks/$i/clientConfig/caBundle\",\"value\":\"$ca_bundle\"}]"
+        kubectl_retry patch "$resource" --type=json -p="$patch" >/dev/null
+      fi
+      i=$((i + 1))
+    done
+  done
+
+  if [ "$changed" = "1" ] && sudo kubectl get deployment "$deploy" -n funcom-operators >/dev/null 2>&1; then
+    kubectl_retry rollout -n funcom-operators restart "deployment/$deploy"
+    kubectl_retry rollout -n funcom-operators status "deployment/$deploy" --timeout=180s
+  fi
+
+  sudo rm -f "$crt" "$key" "$conf"
+}
+
+for op in battlegroupoperator databaseoperator serveroperator utilitiesoperator; do
+  repair_operator_webhook "$op"
+done
 "#;
 
 const INSTALL_HELPER_SCRIPT: &str = r#"
@@ -905,6 +1000,7 @@ mod tests {
         let remote = MockRemote::with_outputs([
             "1952287-0-shipping",
             "",
+            "",
             r#"{
               "metadata":{"name":"sh-host-abcdef"},
               "spec":{
@@ -925,13 +1021,16 @@ mod tests {
 
         let scripts = scripts.borrow();
         assert!(scripts[0].contains("version.txt"));
-        assert!(scripts[1].contains("ALTER ROLE"));
-        assert!(scripts[1].contains("superPassword"));
-        assert!(scripts[2].contains("kubectl get battlegroup"));
-        assert!(scripts[3].contains("kubectl patch battlegroup"));
-        assert!(scripts[3].contains("--type=json"));
-        assert!(scripts[3].contains("1952287-0-shipping"));
-        assert!(scripts[3].contains("seabass-server-gateway"));
+        assert!(scripts[1].contains("repair_operator_webhook"));
+        assert!(scripts[1].contains("subjectAltName"));
+        assert!(scripts[1].contains("caBundle"));
+        assert!(scripts[2].contains("ALTER ROLE"));
+        assert!(scripts[2].contains("superPassword"));
+        assert!(scripts[3].contains("kubectl get battlegroup"));
+        assert!(scripts[4].contains("kubectl patch battlegroup"));
+        assert!(scripts[4].contains("--type=json"));
+        assert!(scripts[4].contains("1952287-0-shipping"));
+        assert!(scripts[4].contains("seabass-server-gateway"));
         assert!(!scripts.join("\n").contains("jq"));
     }
 

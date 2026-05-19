@@ -113,6 +113,8 @@ export type SetupLogPayload = {
   message: string;
 };
 
+export type AppLogEntry = LogRow;
+
 export type ServerPackageStatus = {
   packageDir: string;
   appId: string;
@@ -373,6 +375,7 @@ export type UbuntuSshPreflight = {
   user: string;
   uid: number;
   passwordlessSudo: boolean;
+  sudoCheck: string;
   systemdAvailable: boolean;
   logicalProcessorCount: number;
   totalMemoryBytes: number;

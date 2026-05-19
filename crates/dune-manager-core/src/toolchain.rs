@@ -591,8 +591,32 @@ pub fn prepare_vendor_ssh_key(server_package_dir: impl AsRef<Path>) -> CommandRe
 pub fn prepare_vendor_ssh_key_candidates(
     server_package_dir: impl AsRef<Path>,
 ) -> CommandResult<Vec<PathBuf>> {
+    prepare_vendor_ssh_key_candidates_inner(server_package_dir.as_ref(), None)
+}
+
+/// Copies usable vendor SSH key candidates for a specific Hyper-V VM.
+///
+/// The manager stores generated keys per VM so one local server cannot overwrite
+/// the active key needed by another local server.
+pub fn prepare_vendor_ssh_key_candidates_for_vm(
+    server_package_dir: impl AsRef<Path>,
+    vm_name: &str,
+) -> CommandResult<Vec<PathBuf>> {
+    prepare_vendor_ssh_key_candidates_inner(server_package_dir.as_ref(), Some(vm_name))
+}
+
+fn prepare_vendor_ssh_key_candidates_inner(
+    server_package_dir: &Path,
+    vm_name: Option<&str>,
+) -> CommandResult<Vec<PathBuf>> {
     let layout = detect_server_package_layout(server_package_dir)?;
     let mut sources = Vec::new();
+    if let Some(vm_key) = vm_name
+        .and_then(manager_vm_ssh_key_path)
+        .filter(|path| path.is_file())
+    {
+        sources.push(vm_key);
+    }
     if layout.layout == ServerPackageLayout::BattlegroupManagement {
         if let Some(active_key) = vendor_active_ssh_key_path().filter(|path| path.is_file()) {
             sources.push(active_key);
@@ -618,6 +642,33 @@ pub fn rotate_vendor_guest_ssh_key(
     ssh_path: impl AsRef<Path>,
     bootstrap_key_path: impl AsRef<Path>,
     host: &str,
+) -> CommandResult<VendorSshKeyRotationResult> {
+    rotate_vendor_guest_ssh_key_inner(server_package_dir, ssh_path, bootstrap_key_path, host, None)
+}
+
+/// Generates a fresh host-local SSH key for one Hyper-V VM and installs it into the guest.
+pub fn rotate_vendor_guest_ssh_key_for_vm(
+    server_package_dir: impl AsRef<Path>,
+    ssh_path: impl AsRef<Path>,
+    bootstrap_key_path: impl AsRef<Path>,
+    host: &str,
+    vm_name: &str,
+) -> CommandResult<VendorSshKeyRotationResult> {
+    rotate_vendor_guest_ssh_key_inner(
+        server_package_dir,
+        ssh_path,
+        bootstrap_key_path,
+        host,
+        Some(vm_name),
+    )
+}
+
+fn rotate_vendor_guest_ssh_key_inner(
+    server_package_dir: impl AsRef<Path>,
+    ssh_path: impl AsRef<Path>,
+    bootstrap_key_path: impl AsRef<Path>,
+    host: &str,
+    vm_name: Option<&str>,
 ) -> CommandResult<VendorSshKeyRotationResult> {
     let layout = detect_server_package_layout(server_package_dir)?;
     let bootstrap_key_path = bootstrap_key_path.as_ref();
@@ -712,9 +763,17 @@ pub fn rotate_vendor_guest_ssh_key(
     }
 
     store_active_vendor_ssh_key(&temp_stem, &temp_public, &active_key, &active_public)?;
+    let (key_path, public_key_path) =
+        if let Some(vm_private) = vm_name.and_then(manager_vm_ssh_key_path) {
+            let vm_public = PathBuf::from(format!("{}.pub", vm_private.to_string_lossy()));
+            copy_vendor_ssh_key_pair(&active_key, &active_public, &vm_private, &vm_public)?;
+            (vm_private, vm_public)
+        } else {
+            (active_key, active_public)
+        };
     Ok(VendorSshKeyRotationResult {
-        key_path: active_key,
-        public_key_path: Some(active_public),
+        key_path,
+        public_key_path: Some(public_key_path),
         rotated: true,
         message: "Generated and installed a fresh VM SSH key.".to_string(),
     })
@@ -727,6 +786,37 @@ fn vendor_active_ssh_key_path() -> Option<PathBuf> {
             .join("DuneAwakeningServer")
             .join("sshKey"),
     )
+}
+
+fn manager_vm_ssh_key_path(vm_name: &str) -> Option<PathBuf> {
+    let local_app_data = env::var_os("LOCALAPPDATA")?;
+    Some(
+        PathBuf::from(local_app_data)
+            .join("DuneDedicatedServerManager")
+            .join("vm-keys")
+            .join(sanitize_key_path_segment(vm_name))
+            .join("sshKey"),
+    )
+}
+
+fn sanitize_key_path_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if sanitized.is_empty() {
+        "vm".to_string()
+    } else {
+        sanitized
+    }
 }
 
 fn prepare_restricted_ssh_key_copy(source: &Path) -> CommandResult<PathBuf> {
@@ -859,6 +949,34 @@ foreach ($path in @($privateDestination, $publicDestination)) {{
 }}
 Move-Item -LiteralPath $privateSource -Destination $privateDestination -Force
 Move-Item -LiteralPath $publicSource -Destination $publicDestination -Force
+icacls $privateDestination /inheritance:r | Out-Null
+icacls $privateDestination /grant:r "$($env:USERNAME):(R)" | Out-Null
+"#,
+        private_source = ps_single_quoted(&private_source.to_string_lossy()),
+        public_source = ps_single_quoted(&public_source.to_string_lossy()),
+        private_destination = ps_single_quoted(&private_destination.to_string_lossy()),
+        public_destination = ps_single_quoted(&public_destination.to_string_lossy()),
+    );
+    run_powershell(&script).map(|_| ())
+}
+
+fn copy_vendor_ssh_key_pair(
+    private_source: &Path,
+    public_source: &Path,
+    private_destination: &Path,
+    public_destination: &Path,
+) -> CommandResult<()> {
+    let script = format!(
+        r#"
+$ErrorActionPreference = 'Stop'
+$privateSource = {private_source}
+$publicSource = {public_source}
+$privateDestination = {private_destination}
+$publicDestination = {public_destination}
+$keyDir = Split-Path -Parent $privateDestination
+New-Item -ItemType Directory -Force -Path $keyDir | Out-Null
+Copy-Item -LiteralPath $privateSource -Destination $privateDestination -Force
+Copy-Item -LiteralPath $publicSource -Destination $publicDestination -Force
 icacls $privateDestination /inheritance:r | Out-Null
 icacls $privateDestination /grant:r "$($env:USERNAME):(R)" | Out-Null
 "#,

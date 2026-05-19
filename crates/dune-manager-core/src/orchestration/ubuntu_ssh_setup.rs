@@ -38,6 +38,8 @@ pub struct UbuntuSshPreflight {
     pub uid: u32,
     /// Whether the session can run privileged commands without a password.
     pub passwordless_sudo: bool,
+    /// Result summary from the noninteractive sudo probe.
+    pub sudo_check: String,
     /// Whether `systemctl` is available.
     pub systemd_available: bool,
     /// Logical CPU count.
@@ -868,6 +870,15 @@ def os_release():
 def command_ok(*args):
     return subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
+def command_check(*args):
+    try:
+        result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        message = detail[-1] if detail else ""
+        return result.returncode == 0, result.returncode, message
+    except OSError as exc:
+        return False, -1, str(exc)
+
 def meminfo_value(name):
     try:
         with open("/proc/meminfo", "r", encoding="utf-8") as handle:
@@ -896,6 +907,7 @@ def public_ip():
 
 release = os_release()
 stat = os.statvfs("/")
+sudo_ok, sudo_code, sudo_message = (True, 0, "running as root") if os.geteuid() == 0 else command_check("sudo", "-n", "true")
 ip_result = subprocess.run(
     ["sh", "-c", "ip -o -4 addr show scope global | awk '{print $4}'"],
     stdout=subprocess.PIPE,
@@ -911,7 +923,8 @@ print(json.dumps({
     "kernelRelease": platform.release(),
     "user": os.environ.get("USER") or subprocess.run(["id", "-un"], stdout=subprocess.PIPE, text=True).stdout.strip(),
     "uid": os.geteuid(),
-    "passwordlessSudo": os.geteuid() == 0 or command_ok("sudo", "-n", "true"),
+    "passwordlessSudo": sudo_ok,
+    "sudoCheck": "ok" if sudo_ok else "sudo -n true failed with exit code %s%s" % (sudo_code, (": " + sudo_message) if sudo_message else ""),
     "systemdAvailable": shutil.which("systemctl") is not None,
     "logicalProcessorCount": os.cpu_count() or 0,
     "totalMemoryBytes": meminfo_value("MemTotal"),
