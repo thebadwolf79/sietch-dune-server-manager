@@ -238,7 +238,7 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
                 args.required("--player-ip")?,
                 args.required("--world-name")?,
                 args.optional("--region")
-                    .unwrap_or_else(|| "Europe Test".to_string()),
+                    .unwrap_or_else(|| "Europe".to_string()),
                 token,
             )?;
             let runner = ssh_runner(&args)?;
@@ -302,7 +302,7 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
                 args.required("--player-ip")?,
                 args.required("--world-name")?,
                 args.optional("--region")
-                    .unwrap_or_else(|| "Europe Test".to_string()),
+                    .unwrap_or_else(|| "Europe".to_string()),
                 token,
             )?;
             Ok(json!({
@@ -364,7 +364,7 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
                 args.required("--player-ip")?,
                 args.required("--world-name")?,
                 args.optional("--region")
-                    .unwrap_or_else(|| "Europe Test".to_string()),
+                    .unwrap_or_else(|| "Europe".to_string()),
                 token,
             )?;
             plan.validate()?;
@@ -933,18 +933,18 @@ fn usage() -> Vec<&'static str> {
         "dune-manager-cli ubuntu install-k3s --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
         "dune-manager-cli ubuntu bootstrap-kubernetes --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
         "dune-manager-cli ubuntu install-payload --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
-        "dune-manager-cli ubuntu create-world --ssh PATH --key PATH --host HOST (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region \"Europe Test\"] [--user root]",
-        "dune-manager-cli token plan (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region \"Europe Test\"]",
+        "dune-manager-cli ubuntu create-world --ssh PATH --key PATH --host HOST (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region Europe] [--user root]",
+        "dune-manager-cli token plan (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region Europe]",
         "dune-manager-cli guest player-candidates --ssh PATH --key PATH --host IP [--user dune]",
         "dune-manager-cli guest write-player-settings --ssh PATH --key PATH --host IP --player-ip IP [--user dune]",
         "dune-manager-cli guest apply-static-network --ssh PATH --key PATH --host IP --address-cidr IP/PREFIX --gateway IP --dns IP [--interface eth0] [--user dune]",
-        "dune-manager-cli guest bootstrap --ssh PATH --key PATH --host IP (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region \"Europe Test\"] [--enable-experimental-swap] [--experimental-swap-size-gib 30] [--experimental-swap-no-restart-k3s] [--user dune]",
+        "dune-manager-cli guest bootstrap --ssh PATH --key PATH --host IP (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region Europe] [--enable-experimental-swap] [--experimental-swap-size-gib 30] [--experimental-swap-no-restart-k3s] [--user dune]",
         "dune-manager-cli guest experimental-swap status --ssh PATH --key PATH --host IP [--namespace NS --name BG] [--user dune]",
         "dune-manager-cli guest experimental-swap enable --ssh PATH --key PATH --host IP --namespace NS --name BG [--swap-size-gib 30] [--no-restart-k3s] [--user dune]",
         "dune-manager-cli bg list --ssh PATH --key PATH --host IP [--user dune]",
         "dune-manager-cli bg status --ssh PATH --key PATH --host IP --namespace NS --name BG [--user dune]",
         "dune-manager-cli bg start|stop|restart --ssh PATH --key PATH --host IP --namespace NS --name BG [--director-timeout 60]",
-        "dune-manager-cli bg patch-region --ssh PATH --key PATH --host IP --namespace NS --name BG --region \"Europe Test\"",
+        "dune-manager-cli bg patch-region --ssh PATH --key PATH --host IP --namespace NS --name BG --region Europe",
         "dune-manager-cli bg instances set --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --count N [--pvp-count N] [--restart]",
         "dune-manager-cli bg display-name set --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --dimension N --display-name NAME [--restart]",
         "dune-manager-cli bg display-name clear --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --dimension N [--restart]",

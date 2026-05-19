@@ -14,7 +14,8 @@ const DEFAULT_SERVER_ROOT: &str = "/home/dune/.dune";
 const DEFAULT_LINUX_USER: &str = "dune";
 const DEFAULT_STEAMCMD_URL: &str =
     "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz";
-const SERVER_APP_ID: &str = "3104830";
+const SERVER_APP_ID: &str = "4754530";
+const LEGACY_SERVER_APP_ID: &str = "3104830";
 
 /// Read-only inventory of a remote Ubuntu host before setup begins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -459,6 +460,13 @@ if [ ! -x "$STEAMCMD" ]; then
 fi
 mkdir -p "$DOWNLOAD_PATH"
 chown -R "$LINUX_USER:$LINUX_USER" "$SERVER_ROOT"
+if [ -f "$DOWNLOAD_PATH/steamapps/appmanifest_{legacy_app_id}.acf" ] && [ ! -f "$DOWNLOAD_PATH/steamapps/appmanifest_{app_id}.acf" ]; then
+  find "$DOWNLOAD_PATH" -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +
+  mkdir -p "$DOWNLOAD_PATH"
+  chown -R "$LINUX_USER:$LINUX_USER" "$DOWNLOAD_PATH"
+elif [ -f "$DOWNLOAD_PATH/steamapps/appmanifest_{legacy_app_id}.acf" ]; then
+  rm -f "$DOWNLOAD_PATH/steamapps/appmanifest_{legacy_app_id}.acf"
+fi
 
 steamcmd_update_once() {{
   sudo -u "$LINUX_USER" env HOME="$USER_HOME" "$STEAMCMD" \
@@ -500,6 +508,7 @@ printf '{{"downloadPath":%s,"setupScriptPresent":%s,"battlegroupScriptPresent":%
         linux_user = sh_single_quoted(&request.linux_user),
         server_root = sh_single_quoted(&request.server_root),
         app_id = SERVER_APP_ID,
+        legacy_app_id = LEGACY_SERVER_APP_ID,
     )
     .replacen(
         "set -eu\n",
@@ -564,17 +573,38 @@ systemReserved:
   memory: "2Gi"
 EOF
 fi
-if [ ! -f /etc/rancher/k3s/config.yaml ]; then
-  printf 'kubelet-arg:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | $SUDO tee /etc/rancher/k3s/config.yaml >/dev/null
-elif grep -q 'kubelet-arg:' /etc/rancher/k3s/config.yaml && ! grep -q 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml; then
-  echo "k3s config already has kubelet-arg entries; cannot safely add swap config automatically" >&2
-  exit 1
-elif ! grep -q 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml; then
-  printf '\nkubelet-arg:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | $SUDO tee -a /etc/rancher/k3s/config.yaml >/dev/null
+if ! grep -Eq 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml /etc/rancher/k3s/config.yaml.d/*.yaml 2>/dev/null; then
+  $SUDO mkdir -p /etc/rancher/k3s/config.yaml.d
+  printf 'kubelet-arg+:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | $SUDO tee /etc/rancher/k3s/config.yaml.d/99-dune-manager-swap.yaml >/dev/null
 fi
 
+restarted_k3s=false
 if systemctl is-active --quiet k3s 2>/dev/null; then
   $SUDO systemctl restart k3s
+  restarted_k3s=true
+fi
+
+if [ "$restarted_k3s" = true ]; then
+  elapsed=0
+  while [ ! -S /run/k3s/containerd/containerd.sock ]; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    if [ "$elapsed" -ge 180 ]; then echo "k3s containerd did not return after enabling swap" >&2; exit 1; fi
+  done
+  elapsed=0
+  consecutive_successes=0
+  while [ "$consecutive_successes" -lt 2 ]; do
+    if $SUDO kubectl get nodes >/dev/null 2>&1; then
+      consecutive_successes=$((consecutive_successes + 1))
+      sleep 2
+    else
+      consecutive_successes=0
+      sleep 2
+    fi
+    elapsed=$((elapsed + 2))
+    if [ "$elapsed" -ge 240 ]; then echo "k3s API did not return after enabling swap" >&2; exit 1; fi
+  done
+  $SUDO kubectl wait --for=condition=Ready node --all --timeout=180s >/dev/null || true
 fi
 
 swap_file_exists=false
@@ -596,7 +626,7 @@ if grep -Eq '^[[:space:]]*/swapfile[[:space:]]' /etc/fstab 2>/dev/null; then
 fi
 if grep -Eq '^[[:space:]]*kind:[[:space:]]*KubeletConfiguration[[:space:]]*$' /etc/rancher/k3s/kubelet-config.yaml 2>/dev/null \
   && grep -Eq '^[[:space:]]*failSwapOn:[[:space:]]*false[[:space:]]*$' /etc/rancher/k3s/kubelet-config.yaml 2>/dev/null \
-  && grep -q 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml 2>/dev/null; then
+  && grep -Eq 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml /etc/rancher/k3s/config.yaml.d/*.yaml 2>/dev/null; then
   kubelet_swap_configured=true
 fi
 
@@ -1205,6 +1235,27 @@ mod tests {
             ..UbuntuSshPrepareRequest::default()
         };
         assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn payload_install_migrates_old_playtest_manifest_to_release_app() {
+        let script = install_payload_script(&UbuntuSshPrepareRequest::default());
+
+        assert!(script.contains("appmanifest_3104830.acf"));
+        assert!(script.contains("appmanifest_4754530.acf"));
+        assert!(script.contains("find \"$DOWNLOAD_PATH\" -mindepth 1 -maxdepth 1 -exec rm -rf"));
+        assert!(script.contains("+app_update 4754530 validate"));
+    }
+
+    #[test]
+    fn ubuntu_swap_uses_k3s_drop_in_without_overwriting_config() {
+        let script = ubuntu_swap_script(30);
+
+        assert!(script.contains("/etc/rancher/k3s/config.yaml.d"));
+        assert!(script.contains("kubelet-arg+:"));
+        assert!(!script.contains("tee /etc/rancher/k3s/config.yaml >/dev/null"));
+        assert!(script.contains("consecutive_successes"));
+        assert!(script.contains("k3s API did not return after enabling swap"));
     }
 
     #[test]

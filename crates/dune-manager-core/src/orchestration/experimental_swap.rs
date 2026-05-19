@@ -301,13 +301,9 @@ sudo mkdir -p /etc/rancher/k3s
 if [ ! -f /etc/rancher/k3s/kubelet-config.yaml ] || ! grep -Eq '^[[:space:]]*failSwapOn:[[:space:]]*false[[:space:]]*$' /etc/rancher/k3s/kubelet-config.yaml; then
   printf 'failSwapOn: false\nmemorySwap:\n  swapBehavior: LimitedSwap\n' | sudo tee /etc/rancher/k3s/kubelet-config.yaml >/dev/null
 fi
-if [ ! -f /etc/rancher/k3s/config.yaml ]; then
-  printf 'kubelet-arg:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | sudo tee /etc/rancher/k3s/config.yaml >/dev/null
-elif grep -q 'kubelet-arg:' /etc/rancher/k3s/config.yaml && ! grep -q 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml; then
-  echo "k3s config already has kubelet-arg entries; cannot safely add swap config automatically" >&2
-  exit 1
-elif ! grep -q 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml; then
-  printf '\nkubelet-arg:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | sudo tee -a /etc/rancher/k3s/config.yaml >/dev/null
+if ! grep -Eq 'config=/etc/rancher/k3s/kubelet-config.yaml' /etc/rancher/k3s/config.yaml /etc/rancher/k3s/config.yaml.d/*.yaml 2>/dev/null; then
+  sudo mkdir -p /etc/rancher/k3s/config.yaml.d
+  printf 'kubelet-arg+:\n- config=/etc/rancher/k3s/kubelet-config.yaml\n' | sudo tee /etc/rancher/k3s/config.yaml.d/99-dune-manager-swap.yaml >/dev/null
 fi
 
 if [ "$restart_k3s" = "true" ]; then

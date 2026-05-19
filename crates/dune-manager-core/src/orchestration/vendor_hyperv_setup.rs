@@ -1,8 +1,7 @@
 //! Stdio driver for the unmodified vendor Hyper-V setup script.
 
 use std::{
-    env,
-    fs,
+    env, fs,
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -158,18 +157,16 @@ impl VendorHyperVSetupRunner {
         let mut stderr_line = String::new();
         loop {
             match rx.recv_timeout(Duration::from_millis(150)) {
-                Ok(StreamChunk { kind, text }) => {
-                    match kind {
-                        StreamKind::Stdout => {
-                            stdout_text.push_str(&text);
-                            emit_lines(sink, "vendor.stdout", &mut stdout_line, &text);
-                        }
-                        StreamKind::Stderr => {
-                            stderr_text.push_str(&text);
-                            emit_lines(sink, "vendor.stderr", &mut stderr_line, &text);
-                        }
+                Ok(StreamChunk { kind, text }) => match kind {
+                    StreamKind::Stdout => {
+                        stdout_text.push_str(&text);
+                        emit_lines(sink, "vendor.stdout", &mut stdout_line, &text);
                     }
-                }
+                    StreamKind::Stderr => {
+                        stderr_text.push_str(&text);
+                        emit_lines(sink, "vendor.stderr", &mut stderr_line, &text);
+                    }
+                },
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if let Some(status) = child
                         .try_wait()
@@ -191,9 +188,9 @@ impl VendorHyperVSetupRunner {
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    let status = child
-                        .wait()
-                        .map_err(|err| failure(format!("Failed to wait for vendor setup: {err}")))?;
+                    let status = child.wait().map_err(|err| {
+                        failure(format!("Failed to wait for vendor setup: {err}"))
+                    })?;
                     flush_line(sink, "vendor.stdout", &mut stdout_line);
                     flush_line(sink, "vendor.stderr", &mut stderr_line);
                     let _ = fs::remove_file(&wrapper_path);
@@ -266,16 +263,38 @@ $script:__managerEnableSwap = {enable_swap}
 $script:__managerRemoteSetupInputB64 = {remote_setup_input_b64}
 $script:__managerRemoteSetupScriptB64 = {remote_setup_script_b64}
 $script:__managerChoice12Count = 0
+$script:__managerAskPass = Join-Path $env:TEMP ("dune-manager-askpass-" + ([guid]::NewGuid().ToString('N')) + ".cmd")
+$script:__managerPasswordBytes = New-Object byte[] 18
+$script:__managerRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$script:__managerRng.GetBytes($script:__managerPasswordBytes)
+$script:__managerRng.Dispose()
+$script:__managerNewVmPassword = "Dune-" + ([Convert]::ToBase64String($script:__managerPasswordBytes).TrimEnd('=').Replace('+','A').Replace('/','B')) + "!7"
+Set-Content -LiteralPath $script:__managerAskPass -Encoding ASCII -Value "@echo off`r`necho dune"
+$env:SSH_ASKPASS = $script:__managerAskPass
+$env:SSH_ASKPASS_REQUIRE = 'force'
+$env:DISPLAY = 'dune-manager'
+function Invoke-ManagerSsh {{
+    param([object[]]$SshArgs)
+    $oldErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {{
+        & ssh.exe @SshArgs
+    }} finally {{
+        $script:__managerSshExitCode = $LASTEXITCODE
+        $ErrorActionPreference = $oldErrorActionPreference
+        $global:LASTEXITCODE = $script:__managerSshExitCode
+    }}
+}}
 function ssh {{
     $sshArgs = @($args)
     if ($sshArgs.Count -gt 0 -and $sshArgs[$sshArgs.Count - 1] -eq '/home/dune/.dune/bin/setup') {{
         $forwardArgs = @()
         if ($sshArgs.Count -gt 1) {{ $forwardArgs = $sshArgs[0..($sshArgs.Count - 2)] }}
         $remoteCommand = "SETUP_INPUT_B64='$script:__managerRemoteSetupInputB64' sh -c 'echo $script:__managerRemoteSetupScriptB64 | base64 -d | sh'"
-        & ssh.exe @forwardArgs $remoteCommand
+        Invoke-ManagerSsh -SshArgs ($forwardArgs + @($remoteCommand))
         return
     }}
-    & ssh.exe @sshArgs
+    Invoke-ManagerSsh -SshArgs $sshArgs
 }}
 function Read-Host {{
     param(
@@ -320,6 +339,10 @@ function Read-Host {{
         $answer = $script:__managerMemoryGb
     }} elseif ($Prompt.StartsWith('Would you like to change the default password')) {{
         $answer = 'N'
+    }} elseif ($Prompt.StartsWith('Enter new password')) {{
+        $answer = $script:__managerNewVmPassword
+    }} elseif ($Prompt.StartsWith('Confirm new password')) {{
+        $answer = $script:__managerNewVmPassword
     }} elseif ($Prompt.StartsWith('Choice [1/2]')) {{
         $script:__managerChoice12Count++
         if ($script:__managerStaticNetwork) {{ $answer = '2' }} else {{ $answer = '1' }}
@@ -342,11 +365,20 @@ function Read-Host {{
     }} else {{
         Write-Host "[manager] Unrecognized vendor prompt: $Prompt" -ForegroundColor Yellow
     }}
-    if ($AsSecureString) {{ return ConvertTo-SecureString $answer -AsPlainText -Force }}
+    if ($AsSecureString) {{
+        $secure = New-Object System.Security.SecureString
+        foreach ($ch in $answer.ToCharArray()) {{ $secure.AppendChar($ch) }}
+        $secure.MakeReadOnly()
+        return $secure
+    }}
     Write-Host "[manager] Answered vendor prompt: $Prompt" -ForegroundColor DarkGray
     return $answer
 }}
-. (Join-Path $scriptDir 'initial-setup.ps1')"#,
+try {{
+    . (Join-Path $scriptDir 'initial-setup.ps1')
+}} finally {{
+    Remove-Item -LiteralPath $script:__managerAskPass -Force -ErrorAction SilentlyContinue
+}}"#,
         script_dir = ps_single_quoted(&script_dir.to_string_lossy()),
         drive = ps_single_quoted(
             &request
@@ -356,12 +388,20 @@ function Read-Host {{
         adapter = ps_single_quoted(&request.adapter_name),
         memory_choice = ps_single_quoted(&memory_choice(request.memory_gb)),
         memory_gb = ps_single_quoted(&request.memory_gb.max(1).to_string()),
-        static_network = if request.static_network { "$true" } else { "$false" },
+        static_network = if request.static_network {
+            "$true"
+        } else {
+            "$false"
+        },
         static_ip = ps_single_quoted(&request.static_ip),
         gateway = ps_single_quoted(&request.gateway),
         dns = ps_single_quoted(non_empty_or(&request.dns, "1.1.1.1").as_ref()),
         player_ip = ps_single_quoted(&request.player_ip),
-        enable_swap = if request.enable_swap { "$true" } else { "$false" },
+        enable_swap = if request.enable_swap {
+            "$true"
+        } else {
+            "$false"
+        },
         remote_setup_input_b64 = ps_single_quoted(&base64_text(&remote_setup_answers(request))),
         remote_setup_script_b64 = ps_single_quoted(&base64_text(remote_setup_script())),
     )
@@ -415,7 +455,7 @@ fi
 if [ ! -f "$DOWNLOAD_PATH/scripts/battlegroup.sh" ] || [ ! -f "$DOWNLOAD_PATH/scripts/setup.sh" ]; then
   for attempt in 1 2 3 4 5; do
     echo "Steam setup attempt $attempt"
-    steamcmd +set_spew_level 1 1 +force_install_dir "$DOWNLOAD_PATH" +login anonymous +app_update 3104830 +logoff +quit || true
+    steamcmd +set_spew_level 1 1 +force_install_dir "$DOWNLOAD_PATH" +login anonymous +app_update 4754530 +logoff +quit || true
     if [ -f "$DOWNLOAD_PATH/scripts/battlegroup.sh" ] && [ -f "$DOWNLOAD_PATH/scripts/setup.sh" ]; then
       break
     fi
@@ -514,15 +554,7 @@ done
 }
 
 fn remote_setup_answers(request: &VendorHyperVSetupRequest) -> String {
-    let region_choice = if request
-        .region
-        .to_ascii_lowercase()
-        .contains("north america")
-    {
-        "2"
-    } else {
-        "1"
-    };
+    let region_choice = vendor_region_choice(&request.region);
     [
         non_empty_or(&request.world_name, "Arrakis"),
         region_choice.to_string(),
@@ -617,14 +649,22 @@ impl VendorPromptDriver {
             &combined,
             "network-mode",
             "choice [1/2]",
-            if self.request.static_network { "2" } else { "1" },
+            if self.request.static_network {
+                "2"
+            } else {
+                "1"
+            },
             &mut answers,
         );
         self.maybe_answer(
             &combined,
             "static-mode",
             "static ip configuration:",
-            if self.request.static_network { "2" } else { "1" },
+            if self.request.static_network {
+                "2"
+            } else {
+                "1"
+            },
             &mut answers,
         );
         self.maybe_answer(
@@ -634,7 +674,13 @@ impl VendorPromptDriver {
             non_empty_or(&self.request.static_ip, ""),
             &mut answers,
         );
-        self.maybe_answer(&combined, "cidr", "enter the cidr suffix", "/24", &mut answers);
+        self.maybe_answer(
+            &combined,
+            "cidr",
+            "enter the cidr suffix",
+            "/24",
+            &mut answers,
+        );
         self.maybe_answer(
             &combined,
             "gateway",
@@ -685,7 +731,7 @@ impl VendorPromptDriver {
             &combined,
             "region",
             "region",
-            non_empty_or(&self.request.region, "Europe Test"),
+            vendor_region_choice(&self.request.region),
             &mut answers,
         );
         self.maybe_answer(
@@ -721,6 +767,16 @@ impl VendorPromptDriver {
             prompt_id: id,
             answer: answer.into(),
         });
+    }
+}
+
+fn vendor_region_choice(region: &str) -> &'static str {
+    match region.trim().to_ascii_lowercase().as_str() {
+        "asia" => "1",
+        "north america" => "3",
+        "oceania" => "4",
+        "south america" => "5",
+        _ => "2",
     }
 }
 
@@ -793,9 +849,16 @@ fn emit(sink: &mut impl OperationSink, step_id: &'static str, message: impl Into
 
 fn redact_log_line(line: &str) -> String {
     let lower = line.to_ascii_lowercase();
-    if ["token", "secret", "password", "apikey", "auth", "private key"]
-        .iter()
-        .any(|needle| lower.contains(needle))
+    if [
+        "token",
+        "secret",
+        "password",
+        "apikey",
+        "auth",
+        "private key",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
     {
         "[redacted sensitive vendor output]".to_string()
     } else {
@@ -898,7 +961,7 @@ mod tests {
             dns: "1.1.1.1".to_string(),
             player_ip: "203.0.113.10".to_string(),
             world_name: "Arrakis".to_string(),
-            region: "Europe Test".to_string(),
+            region: "Europe".to_string(),
             self_host_token: "secret-token".to_string(),
             enable_swap: false,
         }
@@ -930,6 +993,8 @@ Enter the DNS server [1.1.1.1]
 Select the IP that players will connect to
 Choice
 Enter IP
+World name
+Region
 Enable experimental swap memory now? [Y/N]
 "#;
         let answers = driver.observe(transcript, "");
@@ -945,7 +1010,18 @@ Enable experimental swap memory now? [Y/N]
         assert!(rows.contains(&("static-mode", "2")));
         assert!(rows.contains(&("player-ip-choice", "3")));
         assert!(rows.contains(&("player-ip-manual", "203.0.113.10")));
+        assert!(rows.contains(&("world-name", "Arrakis")));
+        assert!(rows.contains(&("region", "2")));
         assert!(rows.contains(&("experimental-swap", "N")));
+    }
+
+    #[test]
+    fn maps_release_region_menu_choices() {
+        assert_eq!(vendor_region_choice("Asia"), "1");
+        assert_eq!(vendor_region_choice("Europe"), "2");
+        assert_eq!(vendor_region_choice("North America"), "3");
+        assert_eq!(vendor_region_choice("Oceania"), "4");
+        assert_eq!(vendor_region_choice("South America"), "5");
     }
 
     #[test]

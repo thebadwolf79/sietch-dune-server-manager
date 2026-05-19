@@ -10,14 +10,14 @@ use dune_manager_core::environment::{detect_setup_environment, SetupEnvironment}
 use dune_manager_core::models::{CommandFailure, CommandResult};
 use dune_manager_core::orchestration::{
     classify_dune_vm, is_started_state, openssh_base_args, BattlegroupManagementOrchestrator,
-    BattlegroupRef, BattlegroupUpdateOrchestrator, CreatedWorld, DuneVmCandidate,
-    DuneVmConfidence, ExperimentalSwapOrchestrator, ExperimentalSwapRequest, GuestBootstrapPlan,
+    BattlegroupRef, BattlegroupUpdateOrchestrator, CreatedWorld, DuneVmCandidate, DuneVmConfidence,
+    ExperimentalSwapOrchestrator, ExperimentalSwapRequest, GuestBootstrapPlan,
     GuestBootstrapProvider, HyperVVmLifecycleOrchestrator, InstanceMap, KubernetesProvider,
-    LowMemoryBattlegroupProfileRequest, MapInstanceOrchestrator, OpenSshRunner, OpenSshTarget,
-    OperationSink, OrchestrationEvent, RemoteCommandRunner, SetMapInstancesRequest,
-    SshGuestBootstrapProvider, StrictPowerShellHyperV, StructuredKubectl, UbuntuSshPreflight,
-    UbuntuSshPrepareRequest, UbuntuSshSetup, UbuntuSwapRequest, VendorHyperVSetupRequest,
-    VendorHyperVSetupRunner, VmProvider, WorldManifestRequest,
+    MapInstanceOrchestrator, OpenSshRunner, OpenSshTarget, OperationSink, OrchestrationEvent,
+    RemoteCommandRunner, SetMapInstancesRequest, SshGuestBootstrapProvider, StrictPowerShellHyperV,
+    StructuredKubectl, UbuntuSshPreflight, UbuntuSshPrepareRequest, UbuntuSshSetup,
+    UbuntuSwapRequest, VendorHyperVSetupRequest, VendorHyperVSetupRunner, VmProvider,
+    WorldManifestRequest,
 };
 use dune_manager_core::security::redact_text;
 use dune_manager_core::shell::{ps_single_quoted, run_powershell};
@@ -1254,10 +1254,12 @@ fn run_full_setup(
         )));
     }
 
+    let final_memory_gb = request.memory_gb.max(1);
+    let vendor_memory_gb = vendor_bootstrap_memory_gb(final_memory_gb);
     let vendor_request = VendorHyperVSetupRequest {
         vm_destination: PathBuf::from(&request.vm_destination),
         adapter_name: request.adapter_name.clone(),
-        memory_gb: request.memory_gb,
+        memory_gb: vendor_memory_gb,
         static_network: request.network_mode.eq_ignore_ascii_case("static"),
         static_ip: request.static_ip.clone(),
         gateway: request.gateway.clone(),
@@ -1273,7 +1275,10 @@ fn run_full_setup(
         .unwrap_or_else(|| "C".to_string());
     let vendor_destination = PathBuf::from(format!("{selected_drive}:\\DuneAwakeningServer"));
 
-    sink.info("setup", "Checking vendor VM destination and existing VM state.");
+    sink.info(
+        "setup",
+        "Checking vendor VM destination and existing VM state.",
+    );
     if destination_has_vm_artifacts(&vendor_destination) {
         return Err(dune_manager_core::errors::failure(format!(
             "Vendor VM location already contains VM files: {}. Remove the existing VM files first.",
@@ -1304,7 +1309,16 @@ fn run_full_setup(
         "vendor.hyperv",
         "Starting vendor Hyper-V initial setup through stdio.",
     );
-    let vendor_result = VendorHyperVSetupRunner::new(&server_package_dir).run(&vendor_request, sink)?;
+    if vendor_memory_gb != final_memory_gb {
+        sink.info(
+            "vendor.hyperv",
+            format!(
+                "Vendor setup will bootstrap with the {vendor_memory_gb} GB memory preset, then resize the VM to {final_memory_gb} GB."
+            ),
+        );
+    }
+    let vendor_result =
+        VendorHyperVSetupRunner::new(&server_package_dir).run(&vendor_request, sink)?;
     sink.info(
         "vendor.hyperv",
         format!(
@@ -1312,6 +1326,14 @@ fn run_full_setup(
             vendor_result.script_sha256
         ),
     );
+
+    resize_vendor_vm_memory_if_needed(
+        &provider,
+        vendor_vm_name,
+        vendor_memory_gb,
+        final_memory_gb,
+        sink,
+    )?;
 
     let runner = wait_for_local_battlegroup_runner(vendor_vm_name, sink)?;
     let record = detect_local_battlegroup_record(&runner, vendor_vm_name, sink)?;
@@ -1330,10 +1352,8 @@ fn run_full_setup(
 
     if request.enable_swap {
         sink.info("guest-swap", "Enabling experimental swap profile.");
-        let mut swap = ExperimentalSwapRequest::new(
-            record.namespace.clone(),
-            record.battlegroup_name.clone(),
-        );
+        let mut swap =
+            ExperimentalSwapRequest::new(record.namespace.clone(), record.battlegroup_name.clone());
         swap.restart_k3s = true;
         ExperimentalSwapOrchestrator::new(runner.clone()).enable(&swap, sink)?;
     }
@@ -1349,6 +1369,43 @@ fn run_full_setup(
         world_unique_name: record.world_unique_name,
         director_node_port: None,
     })
+}
+
+fn vendor_bootstrap_memory_gb(final_memory_gb: u64) -> u64 {
+    [40_u64, 30, 20, 10]
+        .into_iter()
+        .find(|preset| *preset <= final_memory_gb)
+        .unwrap_or(10)
+}
+
+fn resize_vendor_vm_memory_if_needed(
+    provider: &StrictPowerShellHyperV,
+    vm_name: &str,
+    vendor_memory_gb: u64,
+    final_memory_gb: u64,
+    sink: &TauriOperationSink,
+) -> CommandResult<()> {
+    if vendor_memory_gb == final_memory_gb {
+        return Ok(());
+    }
+
+    let final_memory_bytes = final_memory_gb
+        .checked_mul(1024 * 1024 * 1024)
+        .ok_or_else(|| dune_manager_core::errors::failure("Requested VM memory is too large."))?;
+    sink.info(
+        "vendor.hyperv",
+        format!(
+            "Resizing VM memory from the vendor {vendor_memory_gb} GB preset to {final_memory_gb} GB."
+        ),
+    );
+    provider.stop_vm(vm_name, false)?;
+    provider.set_startup_memory(vm_name, final_memory_bytes)?;
+    provider.start_vm(vm_name)?;
+    sink.info(
+        "vendor.hyperv",
+        "VM memory resize complete; waiting for the guest to come back online.",
+    );
+    Ok(())
 }
 
 fn wait_for_local_battlegroup_runner(
@@ -1438,10 +1495,8 @@ fn run_remote_ubuntu_setup(
     }
 
     ubuntu.prepare_host(&prepare, sink)?;
-    let mut ubuntu_swap_size_gib = None;
     if request.enable_swap {
         let swap_size_gib = recommended_ubuntu_swap_gib(&preflight, &request);
-        ubuntu_swap_size_gib = Some(swap_size_gib);
         let required_gib = required_layout_memory_gib(
             request.survival_instances,
             request.deep_desert_pve_instances + request.deep_desert_pvp_instances,
@@ -1529,23 +1584,6 @@ fn run_remote_ubuntu_setup(
         &runner,
         sink,
     )?;
-    if let Some(swap_size_gib) = ubuntu_swap_size_gib {
-        let operations = ExperimentalSwapOrchestrator::new(runner.clone())
-            .apply_battlegroup_memory_profile(
-                &LowMemoryBattlegroupProfileRequest::new(
-                    &created.namespace,
-                    &created.battlegroup_name,
-                    swap_size_gib,
-                ),
-                sink,
-            )?;
-        sink.info(
-            "ubuntu.swap.memory-profile",
-            format!(
-                "Applied Ubuntu low-memory BattleGroup profile with {operations} resource patch operations."
-            ),
-        );
-    }
 
     wait_for_database_ready(&runner, &created.namespace, 900, sink)?;
 
@@ -2237,7 +2275,7 @@ fn read_guest_package_status(
     let script = r#"
 set -u
 download=/home/dune/.dune/download
-manifest="$download/steamapps/appmanifest_3104830.acf"
+manifest="$download/steamapps/appmanifest_4754530.acf"
 ns=__NAMESPACE__
 bg=__BATTLEGROUP__
 read_vdf_value() {

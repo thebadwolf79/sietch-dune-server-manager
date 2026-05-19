@@ -1,6 +1,6 @@
 # Manual Ubuntu Server Setup Guide
 
-This guide explains how to install the Dune Awakening Playtest dedicated server on a fresh Ubuntu host without using Dune Dedicated Server Manager or `dune-manager-cli`.
+This guide explains how to install the Dune Awakening dedicated server on a fresh Ubuntu host without using Dune Dedicated Server Manager or `dune-manager-cli`.
 
 This path uses only:
 
@@ -93,10 +93,10 @@ grep -q '^[[:space:]]*/swapfile[[:space:]]' /etc/fstab \
   || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
 ```
 
-If k3s will run with swap enabled, configure kubelet before installing k3s:
+If k3s will run with swap enabled, configure kubelet before installing k3s. Use a k3s config drop-in so existing k3s arguments are preserved:
 
 ```sh
-sudo mkdir -p /etc/rancher/k3s
+sudo mkdir -p /etc/rancher/k3s/config.yaml.d
 sudo tee /etc/rancher/k3s/kubelet-config.yaml >/dev/null <<'EOF'
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
@@ -117,8 +117,8 @@ systemReserved:
   memory: "2Gi"
 EOF
 
-sudo tee /etc/rancher/k3s/config.yaml >/dev/null <<'EOF'
-kubelet-arg:
+sudo tee /etc/rancher/k3s/config.yaml.d/99-dune-swap.yaml >/dev/null <<'EOF'
+kubelet-arg+:
 - config=/etc/rancher/k3s/kubelet-config.yaml
 EOF
 ```
@@ -146,9 +146,22 @@ sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh +quit
 
 ## 7. Download the Dune server package
 
-The Dune dedicated server Steam app id is `3104830`.
+The Dune dedicated server Steam app id is `4754530`.
 
-SteamCMD can occasionally fail the first download attempt with `ERROR! Failed to install app '3104830' (Missing configuration)`. If that happens, run the same command a second time.
+SteamCMD can occasionally fail the first download attempt with `ERROR! Failed to install app '4754530' (Missing configuration)`. If that happens, run the same command a second time.
+
+If this host already has the old playtest package in the same download directory, clear it before installing the release package:
+
+```sh
+if [ -f /home/dune/.dune/download/steamapps/appmanifest_3104830.acf ] \
+   && [ ! -f /home/dune/.dune/download/steamapps/appmanifest_4754530.acf ]; then
+  sudo find /home/dune/.dune/download -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  sudo mkdir -p /home/dune/.dune/download
+  sudo chown -R dune:dune /home/dune/.dune/download
+elif [ -f /home/dune/.dune/download/steamapps/appmanifest_3104830.acf ]; then
+  sudo rm -f /home/dune/.dune/download/steamapps/appmanifest_3104830.acf
+fi
+```
 
 ```sh
 sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh \
@@ -157,7 +170,7 @@ sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh \
   +set_spew_level 1 1 \
   +force_install_dir /home/dune/.dune/download \
   +login anonymous \
-  +app_update 3104830 validate \
+  +app_update 4754530 validate \
   +logoff \
   +quit
 ```
@@ -667,7 +680,7 @@ Follow the prompts from the vendor script. When asked, provide:
 
 - Your Self-Host Service Token
 - The world/server name you want players to see
-- The region, usually `Europe Test` or `North America Test`
+- The region: `Asia`, `Europe`, `North America`, `Oceania`, or `South America`
 - Any layout or map choices offered by the script
 
 Do not paste the Self-Host Service Token into shared logs, screenshots, chat, or issue reports.
@@ -757,6 +770,73 @@ print(json.dumps(ops))'
 if [ "$PATCH" != "[]" ]; then
   sudo kubectl patch battlegroup "$BG" -n "$NS" --type=json -p "$PATCH"
 fi
+```
+
+Align the generated PostgreSQL credentials with the running database pod before schema initialization retries. On fresh Ubuntu clusters, the database container may start with only the `postgres` role/database, while the Dune schema utility connects as the generated game user. This step creates or updates that game role and database from the live `DatabaseDeployment` values.
+
+Do not paste command output or full Kubernetes object YAML into shared logs; they contain database credentials.
+
+```sh
+DDEP="$BG-db-dbdepl"
+if ! sudo kubectl get databasedeployment "$DDEP" -n "$NS" >/dev/null 2>&1; then
+  DDEP="$(
+    sudo kubectl get databasedeployments -n "$NS" --no-headers -o custom-columns=NAME:.metadata.name \
+      | awk -v bg="$BG" '$1 ~ "^" bg ".*dbdepl$" { print $1; exit }'
+  )"
+fi
+
+DBPOD="$DDEP-sts-0"
+elapsed=0
+while [ "$elapsed" -lt 180 ]; do
+  phase="$(sudo kubectl get pod "$DBPOD" -n "$NS" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  [ "$phase" = "Running" ] && break
+  sleep 5
+  elapsed=$((elapsed + 5))
+done
+
+if [ "${phase:-}" != "Running" ]; then
+  echo "Database pod $DBPOD is not running yet; wait and rerun this step."
+  exit 1
+fi
+
+SUPER_USER="$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.spec.superUser}')"
+SUPER_PASSWORD="$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.spec.superPassword}')"
+DB_PORT="$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.spec.port}')"
+DB_USER="$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.spec.user}')"
+DB_PASSWORD="$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.spec.password}')"
+DB_NAME="$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.spec.gameDatabaseName}')"
+
+[ -n "$SUPER_USER" ] || SUPER_USER=postgres
+[ -n "$DB_PORT" ] || DB_PORT=15432
+[ -n "$DB_USER" ] || DB_USER=dune
+[ -n "$DB_NAME" ] || DB_NAME=dune
+
+sudo kubectl exec -i -n "$NS" "$DBPOD" -- \
+  psql -h 127.0.0.1 -p "$DB_PORT" -U "$SUPER_USER" -d postgres \
+    -v ON_ERROR_STOP=1 \
+    -v db_user="$DB_USER" \
+    -v db_password="$DB_PASSWORD" \
+    -v db_name="$DB_NAME" >/dev/null <<'SQL'
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user') \gexec
+ALTER ROLE :"db_user" WITH LOGIN PASSWORD :'db_password';
+SELECT format('CREATE DATABASE %I OWNER %I', :'db_name', :'db_user')
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name') \gexec
+SQL
+
+sudo kubectl exec -i -n "$NS" "$DBPOD" -- \
+  psql -h 127.0.0.1 -p "$DB_PORT" -U "$SUPER_USER" -d postgres \
+    -v ON_ERROR_STOP=1 \
+    -v super_user="$SUPER_USER" \
+    -v super_password="$SUPER_PASSWORD" >/dev/null <<'SQL'
+ALTER ROLE :"super_user" WITH PASSWORD :'super_password';
+SQL
+```
+
+If schema initialization already failed once, the database operator should retry. Watch it with:
+
+```sh
+sudo kubectl get databasedeployments -n "$NS" -w
 ```
 
 ## 12. Install the battlegroup helper shortcuts
@@ -905,7 +985,7 @@ SteamCMD download fails:
 sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh +quit
 ```
 
-Then rerun the `app_update 3104830 validate` command.
+Then rerun the `app_update 4754530 validate` command.
 
 k3s is not ready:
 

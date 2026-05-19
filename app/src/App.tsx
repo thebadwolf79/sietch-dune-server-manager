@@ -282,6 +282,12 @@ type PendingServerUpdate =
   | { type: "remote"; server: RemoteServerRecord }
   | { type: "local"; server: DuneVmCandidate };
 
+type PendingPostSetupStart = {
+  server: DuneVmCandidate;
+  namespace: string;
+  battlegroupName: string;
+};
+
 type LocalHyperVRuntime = {
   namespace: string;
   battlegroupName: string;
@@ -431,7 +437,7 @@ const defaultForm: SetupForm = {
   playerIpMode: "local",
   playerIp: "",
   worldName: "Arrakis",
-  region: "Europe Test",
+  region: "Europe",
   tokenSource: "",
   survivalInstances: "1",
   includeSocial: true,
@@ -483,6 +489,7 @@ export function App() {
   const [rollbackRunning, setRollbackRunning] = useState(false);
   const [failedRollbackRequest, setFailedRollbackRequest] = useState<RollbackRequest | null>(null);
   const [pendingServerUpdate, setPendingServerUpdate] = useState<PendingServerUpdate | null>(null);
+  const [pendingPostSetupStart, setPendingPostSetupStart] = useState<PendingPostSetupStart | null>(null);
   const [localAttachOpen, setLocalAttachOpen] = useState(false);
   const [localAttachRunning, setLocalAttachRunning] = useState(false);
   const [localAttachForm, setLocalAttachForm] = useState<LocalHyperVAttachForm>(defaultLocalHyperVAttachForm);
@@ -649,8 +656,14 @@ export function App() {
       setNetworkAdapters(environment.networkAdapters);
       setExternalIp(environment.externalIp);
       setNetworkDetection("ready");
-      if (location) {
-        setForm((current) => (current.vmDestination ? current : { ...current, vmDestination: location }));
+      const detectedDrive = selectedInstallDrive(location, environment.drives);
+      const vendorLocation = detectedDrive
+        ? vendorVmDestinationForDrive(detectedDrive)
+        : environment.drives[0]
+          ? vendorVmDestinationForDrive(environment.drives[0].name || environment.drives[0].root)
+          : location;
+      if (vendorLocation) {
+        setForm((current) => (current.vmDestination ? current : { ...current, vmDestination: vendorLocation }));
       }
       const first = environment.networkAdapters[0];
       if (first) {
@@ -1358,7 +1371,7 @@ export function App() {
     [logLevelFilter, logRows],
   );
   const startSetup = async () => {
-    const setupMemoryGb = effectiveVmMemoryGb(form, calculatedMemory);
+    const setupMemoryGb = effectiveVmMemoryGb({ ...form, enableSwap: false }, calculatedMemory, hostReadiness);
     const request = setupRunRequest(form, setupMemoryGb);
     setStarted(true);
     setSetupRunning(true);
@@ -1389,14 +1402,41 @@ export function App() {
         const result = await invoke<SetupRunResult>("start_full_setup", {
           request,
         });
+        let registeredCandidate: DuneVmCandidate | null = null;
         if (form.saveLocalServer) {
           try {
             const candidate = await invoke<DuneVmCandidate>("register_local_hyperv_server", {
               request: { vmName: result.vmName || request.vmName },
             });
+            registeredCandidate = candidate;
             setDuneVms((servers) => persistLocalServers(upsertLocalServer(servers, candidate)));
           } catch (err) {
             setSetupRows((rows) => [...rows, log.warn("local.attach", `Setup completed but server registration failed: ${errorMessage(err)}`)]);
+          }
+        }
+        if (!registeredCandidate) {
+          try {
+            registeredCandidate = await invoke<DuneVmCandidate>("register_local_hyperv_server", {
+              request: { vmName: result.vmName || request.vmName },
+            });
+          } catch (err) {
+            setSetupRows((rows) => [...rows, log.warn("local.attach", `Setup completed but server detection failed: ${errorMessage(err)}`)]);
+          }
+        }
+        if (registeredCandidate) {
+          const detectedServer = registeredCandidate;
+          try {
+            const runtime = await invoke<LocalHyperVRuntime>("local_hyperv_runtime", {
+              request: { vmName: detectedServer.vm.name, host: primaryLocalServerIp(detectedServer) },
+            });
+            setLocalHyperVRuntimes((runtimes) => ({ ...runtimes, [localServerKey(detectedServer)]: runtime }));
+            setPendingPostSetupStart({
+              server: detectedServer,
+              namespace: runtime.namespace,
+              battlegroupName: runtime.battlegroupName,
+            });
+          } catch (err) {
+            setSetupRows((rows) => [...rows, log.warn("local.status", `Setup completed but BattleGroup status was not detected: ${errorMessage(err)}`)]);
           }
         }
       }
@@ -1439,6 +1479,14 @@ export function App() {
     } else {
       void runLocalHyperVBattlegroupAction(pending.server, "update");
     }
+  };
+
+  const confirmPostSetupStart = () => {
+    const pending = pendingPostSetupStart;
+    if (!pending) return;
+    setPendingPostSetupStart(null);
+    void runLocalHyperVBattlegroupAction(pending.server, "start");
+    setActivePage("servers");
   };
 
   return (
@@ -1585,6 +1633,13 @@ export function App() {
             if (!open) setPendingServerUpdate(null);
           }}
           onConfirm={confirmPendingServerUpdate}
+        />
+        <PostSetupStartDialog
+          pending={pendingPostSetupStart}
+          onOpenChange={(open) => {
+            if (!open) setPendingPostSetupStart(null);
+          }}
+          onStart={confirmPostSetupStart}
         />
         <RemoteAttachDialog
           open={remoteAttachOpen}
@@ -3025,7 +3080,7 @@ function InstallControls({
 }) {
   const deepDesertEnabled = layoutPreview.deepDesertTotal > 0;
   const warmOptions = zeroTo(layoutPreview.deepDesertTotal);
-  const vmMemoryGb = effectiveVmMemoryGb(form, calculatedMemory);
+  const vmMemoryGb = effectiveVmMemoryGb({ ...form, enableSwap: false }, calculatedMemory, hostReadiness);
   const requirements =
     form.setupTarget === "ubuntu"
       ? remoteSetupRequirementStatus(
@@ -3037,6 +3092,7 @@ function InstallControls({
         )
       : setupRequirementStatus(
           calculatedMemory,
+          false,
           form.vmMemoryGb,
           form.diskGb,
           form.processorCount,
@@ -3105,7 +3161,11 @@ function InstallControls({
                   onValueChange={(value) => {
                     const target = value as SetupTarget;
                     update("setupTarget", target);
+                    if (target === "hyperv") {
+                      update("enableSwap", false);
+                    }
                     if (target === "ubuntu") {
+                      update("enableSwap", true);
                       update("playerIpMode", "external");
                       update("playerIp", form.playerIp || form.remoteHost);
                     }
@@ -3119,16 +3179,35 @@ function InstallControls({
                 </Select.Root>
               </Grid>
               {form.setupTarget === "ubuntu" ? (
-                <Box className="destructive-warning" mt="3">
-                  <Text as="div" size="2" weight="medium">
-                    DO NOT USE AN EXISTING SERVER, ALWAYS CREATE A FRESH SERVER, WE ARE NOT RESPONSIBLE OF ANY DATA LOSS YOU MIGHT ENCOUNTER!
-                  </Text>
-                  <Text as="p" size="2" color="gray">
-                    Remote setup installs packages, creates users, configures k3s, downloads server files, opens
-                    service ports, and writes system configuration. Use a clean Ubuntu host dedicated to this Dune
-                    server so setup cannot conflict with existing workloads or data.
-                  </Text>
-                </Box>
+                <>
+                  <Box className="destructive-warning" mt="3">
+                    <Text as="div" size="2" weight="medium">
+                      DO NOT USE AN EXISTING SERVER, ALWAYS CREATE A FRESH SERVER, WE ARE NOT RESPONSIBLE OF ANY DATA LOSS YOU MIGHT ENCOUNTER!
+                    </Text>
+                    <Text as="p" size="2" color="gray">
+                      Remote setup installs packages, creates users, configures k3s, downloads server files, opens
+                      service ports, and writes system configuration. Use a clean Ubuntu host dedicated to this Dune
+                      server so setup cannot conflict with existing workloads or data.
+                    </Text>
+                  </Box>
+                  <Separator size="4" my="3" />
+                  <Flex align="center" justify="between" gap="3">
+                    <Box>
+                      <Text as="div" size="2" weight="medium">
+                        Native Ubuntu swap
+                      </Text>
+                      <Text as="div" size="2" color="gray">
+                        Create a swapfile during setup when the host memory is below the selected layout.
+                      </Text>
+                    </Box>
+                    <Switch checked={form.enableSwap} onCheckedChange={(value) => update("enableSwap", value)} />
+                  </Flex>
+                  <UbuntuSwapNotice
+                    calculatedMemory={calculatedMemory}
+                    preflight={remotePreflight}
+                    enabled={form.enableSwap}
+                  />
+                </>
               ) : null}
             </SetupSection>
 
@@ -3172,8 +3251,11 @@ function InstallControls({
                   <Select.Root value={form.region} onValueChange={(value) => update("region", value)}>
                     <Select.Trigger />
                     <Select.Content>
-                      <Select.Item value="Europe Test">Europe Test</Select.Item>
-                      <Select.Item value="North America Test">North America Test</Select.Item>
+                      <Select.Item value="Asia">Asia</Select.Item>
+                      <Select.Item value="Europe">Europe</Select.Item>
+                      <Select.Item value="North America">North America</Select.Item>
+                      <Select.Item value="Oceania">Oceania</Select.Item>
+                      <Select.Item value="South America">South America</Select.Item>
                     </Select.Content>
                   </Select.Root>
                 </Field>
@@ -3340,39 +3422,8 @@ function InstallControls({
                       text={`${requirements.processorRequired}; ${requirements.processorAvailable}`}
                     />
                   </FormRow>
-                  <Flex align="center" justify="between" gap="3">
-                    <Box>
-                      <Text as="div" size="2" weight="medium">
-                        Experimental swap profile
-                      </Text>
-                      <Text as="div" size="2" color="gray">
-                        Enable the vendor low-memory swap profile after setup.
-                      </Text>
-                    </Box>
-                    <Switch checked={form.enableSwap} onCheckedChange={(value) => update("enableSwap", value)} />
-                  </Flex>
                 </>
-              ) : (
-                <>
-                  <Separator size="4" my="3" />
-                  <Flex align="center" justify="between" gap="3">
-                    <Box>
-                      <Text as="div" size="2" weight="medium">
-                        Native Ubuntu swap
-                      </Text>
-                      <Text as="div" size="2" color="gray">
-                        Create a swapfile during setup when the host memory is below the selected layout.
-                      </Text>
-                    </Box>
-                    <Switch checked={form.enableSwap} onCheckedChange={(value) => update("enableSwap", value)} />
-                  </Flex>
-                  <UbuntuSwapNotice
-                    calculatedMemory={calculatedMemory}
-                    preflight={remotePreflight}
-                    enabled={form.enableSwap}
-                  />
-                </>
-              )}
+              ) : null}
             </Box>
 
             {form.setupTarget === "hyperv" ? (
@@ -3404,36 +3455,29 @@ function InstallControls({
                   gap="2"
                   className={hypervDetectionReady ? "setup-dependent-fields" : "setup-dependent-fields is-flow-disabled"}
                 >
-                  <FormRow label="VM Location">
-                    <Grid columns="1fr auto" gap="2">
-                      <TextField.Root
-                        placeholder="Resolving default VM location..."
-                        value={form.vmDestination}
-                        onChange={(event) => update("vmDestination", event.target.value)}
-                      />
-                      <Button
-                        type="button"
-                        variant="surface"
-                        onClick={async () => {
-                          const selected = await open({
-                            directory: true,
-                            defaultPath: form.vmDestination || undefined,
-                            multiple: false,
-                            title: "Choose VM files destination",
-                          });
-                          if (typeof selected === "string") {
-                            update("vmDestination", selected);
-                          }
-                        }}
-                      >
-                        Choose
-                      </Button>
-                    </Grid>
+                  <FormRow label="Install Drive">
+                    <Select.Root
+                      value={selectedInstallDrive(form.vmDestination, driveCandidates)}
+                      onValueChange={(value) => update("vmDestination", vendorVmDestinationForDrive(value))}
+                      disabled={driveCandidates.length === 0}
+                    >
+                      <Select.Trigger placeholder="Run local detection" />
+                      <Select.Content>
+                        {driveCandidates.map((drive) => (
+                          <Select.Item key={drive.root} value={drive.name || drive.root}>
+                            {drive.root} {formatGiB(drive.freeBytes)} free
+                          </Select.Item>
+                        ))}
+                      </Select.Content>
+                    </Select.Root>
+                    <Text as="div" size="2" color="gray" mt="2">
+                      VM files will be created at {form.vmDestination || "<drive>:\\DuneAwakeningServer"}.
+                    </Text>
                     <InlineRequirement
                       ok={requirements.diskOk && !vmDestinationHasVm}
                       text={
                         vmDestinationHasVm
-                          ? "Destination already contains VM files. Choose another folder."
+                          ? "Destination already contains VM files. Choose another drive."
                           : `${requirements.diskRequired}; ${requirements.diskAvailable}`
                       }
                     />
@@ -3757,7 +3801,7 @@ function setupRunRequest(form: SetupForm, memoryGb: number): SetupRunRequest {
     diskGb: parsePositiveInt(form.diskGb),
     memoryGb,
     processorCount: effectiveProcessorCount(form),
-    enableSwap: form.enableSwap,
+    enableSwap: false,
     networkMode: form.networkMode,
     switchName: form.switchName,
     adapterName: form.adapterName,
@@ -4212,7 +4256,6 @@ function remoteSetupBlockingIssues(
   if (!form.remoteUser.trim()) issues.push("SSH user is required.");
   if (!form.remoteKeyPath.trim()) issues.push("SSH private key file is required.");
   if (!preflight) issues.push("Run remote resource detection before setup.");
-  if (form.enableSwap && !preflight) issues.push("Run remote detection before enabling Ubuntu swap.");
   if (preflight && preflight.osId !== "ubuntu") issues.push("Remote host must be Ubuntu.");
   if (preflight && preflight.uid !== 0 && !preflight.passwordlessSudo) {
     issues.push("Remote setup requires root login or passwordless sudo.");
@@ -4290,12 +4333,39 @@ function deepDesertInstanceCount(form: SetupForm): number {
   return parsePositiveInt(form.deepDesertPveInstances) + parsePositiveInt(form.deepDesertPvpInstances);
 }
 
-function effectiveVmMemoryGb(form: SetupForm, calculatedMemory: CalculatedMemory): number {
-  return Math.max(minimumVmMemoryGb(form, calculatedMemory), parsePositiveInt(form.vmMemoryGb));
+function effectiveVmMemoryGb(
+  form: SetupForm,
+  calculatedMemory: CalculatedMemory,
+  readiness?: HostReadiness | null,
+): number {
+  return Math.max(
+    suggestedHyperVMemoryGb(form, calculatedMemory, readiness ?? null),
+    parsePositiveInt(form.vmMemoryGb),
+  );
 }
 
-function minimumVmMemoryGb(form: SetupForm, calculatedMemory: CalculatedMemory): number {
-  return calculatedMemory.gb;
+function suggestedHyperVMemoryGb(
+  form: SetupForm,
+  calculatedMemory: CalculatedMemory,
+  readiness: HostReadiness | null,
+): number {
+  if (!form.enableSwap) {
+    return calculatedMemory.gb;
+  }
+
+  const safeAvailableGb = conservativeHyperVAvailableMemoryGb(readiness?.availablePhysicalMemoryBytes ?? 0);
+  if (safeAvailableGb <= 0) {
+    return Math.max(20, calculatedMemory.gb - 10);
+  }
+  return Math.max(20, Math.min(calculatedMemory.gb, safeAvailableGb));
+}
+
+function conservativeHyperVAvailableMemoryGb(bytes: number): number {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return 0;
+  }
+  const gib = bytes / 1024 / 1024 / 1024;
+  return Math.max(0, Math.floor((gib - 1) / 5) * 5);
 }
 
 function effectiveProcessorCount(form: SetupForm): number {
@@ -4445,6 +4515,7 @@ function setupEnvironmentGate(
 
 function setupRequirementStatus(
   calculatedMemory: CalculatedMemory,
+  enableSwap: boolean,
   vmMemoryGb: string,
   diskGb: string,
   processorCount: string,
@@ -4452,14 +4523,23 @@ function setupRequirementStatus(
   readiness: HostReadiness | null,
   drives: DriveCandidate[],
 ): SetupRequirements {
-  const effectiveMemoryGb = Math.max(calculatedMemory.gb, parsePositiveInt(vmMemoryGb));
-  const requiredMemoryBytes = effectiveMemoryGb * 1024 * 1024 * 1024;
+  const effectiveMemoryGb = effectiveVmMemoryGb(
+    { ...defaultForm, enableSwap, vmMemoryGb },
+    calculatedMemory,
+    readiness,
+  );
   const requiredProcessors = Math.max(4, parsePositiveInt(processorCount));
   const requiredDiskGb = Math.max(0, parsePositiveInt(diskGb));
   const requiredDiskBytes = requiredDiskGb * 1024 * 1024 * 1024;
   const memoryAvailable = readiness?.availablePhysicalMemoryBytes ?? 0;
+  const safeAvailableMemoryGb = conservativeHyperVAvailableMemoryGb(memoryAvailable);
+  const swapGapGb = Math.max(0, calculatedMemory.gb - effectiveMemoryGb);
+  const swapGapOk = !enableSwap || swapGapGb <= 10;
+  const swapMemoryOk = !enableSwap || effectiveMemoryGb >= 20;
   const processorsAvailable = readiness?.logicalProcessorCount ?? 0;
-  const memoryOk = memoryAvailable >= requiredMemoryBytes;
+  const memoryOk = enableSwap
+    ? swapMemoryOk && swapGapOk && safeAvailableMemoryGb >= effectiveMemoryGb
+    : safeAvailableMemoryGb >= effectiveMemoryGb;
   const processorOk =
     requiredProcessors > 0 && (processorsAvailable === 0 || requiredProcessors <= processorsAvailable);
   const destinationDrive = findDriveForPath(vmDestination, drives);
@@ -4470,8 +4550,16 @@ function setupRequirementStatus(
     memoryOk,
     processorOk,
     diskOk,
-    memoryRequired: `${effectiveMemoryGb} GB required`,
-    memoryAvailable: readiness ? `${formatGiB(memoryAvailable)} available` : "Run local detection",
+    memoryRequired: enableSwap
+      ? swapGapOk
+        ? `${effectiveMemoryGb} GB RAM requested; ${swapGapGb} GB swap gap`
+        : `${effectiveMemoryGb} GB RAM requested; ${swapGapGb} GB swap gap exceeds 10 GB max`
+      : `${effectiveMemoryGb} GB required`,
+    memoryAvailable: readiness
+      ? enableSwap
+        ? `${safeAvailableMemoryGb || 0} GB safe allocation (${formatGiBFloor1(memoryAvailable)} detected)`
+        : `${safeAvailableMemoryGb || 0} GB safe allocation (${formatGiBFloor1(memoryAvailable)} detected)`
+      : "Run local detection",
     processorRequired: `${requiredProcessors || "A positive number of"} cores requested`,
     processorAvailable: readiness
       ? processorsAvailable
@@ -4499,6 +4587,25 @@ function findDriveForPath(path: string, drives: DriveCandidate[]): DriveCandidat
   );
 }
 
+function selectedInstallDrive(vmDestination: string, drives: DriveCandidate[]): string {
+  const drive = findDriveForPath(vmDestination, drives);
+  if (drive) {
+    return drive.name || drive.root;
+  }
+
+  const match = vmDestination.trim().match(/^([A-Za-z]):/);
+  return match ? match[1].toUpperCase() : "";
+}
+
+function vendorVmDestinationForDrive(driveName: string): string {
+  const drive = driveName.trim().replace(/\//g, "\\").replace(/\\+$/, "");
+  if (!drive) {
+    return "";
+  }
+  const root = drive.endsWith(":") ? `${drive}\\` : `${drive}:\\`;
+  return `${root}DuneAwakeningServer`;
+}
+
 function setupBlockingIssues(
   gate: EnvironmentGate,
   requirements: SetupRequirements,
@@ -4514,10 +4621,10 @@ function setupBlockingIssues(
     issues.push(`CPU Cores: ${requirements.processorRequired}; ${requirements.processorAvailable}.`);
   }
   if (!requirements.diskOk) {
-    issues.push(`VM Location: ${requirements.diskRequired}; ${requirements.diskAvailable}.`);
+    issues.push(`Install Drive: ${requirements.diskRequired}; ${requirements.diskAvailable}.`);
   }
   if (vmDestinationHasVm) {
-    issues.push("VM Location already contains VM files. Choose another folder.");
+    issues.push("Install drive already contains VM files. Choose another drive.");
   }
   if (parsePositiveInt(form.deepDesertWarmServers) > 0) {
     issues.push("Warm Deep Desert Instances are not supported yet; set them to 0 for this build.");
@@ -5068,6 +5175,44 @@ function ServerUpdateConfirmDialog({
             <Button color="amber" onClick={onConfirm}>
               Update Server
             </Button>
+          </AlertDialog.Action>
+        </Flex>
+      </AlertDialog.Content>
+    </AlertDialog.Root>
+  );
+}
+
+function PostSetupStartDialog({
+  pending,
+  onOpenChange,
+  onStart,
+}: {
+  pending: PendingPostSetupStart | null;
+  onOpenChange: (open: boolean) => void;
+  onStart: () => void;
+}) {
+  return (
+    <AlertDialog.Root open={!!pending} onOpenChange={onOpenChange}>
+      <AlertDialog.Content maxWidth="520px">
+        <AlertDialog.Title>Start BattleGroup?</AlertDialog.Title>
+        <AlertDialog.Description size="2" color="gray">
+          Setup finished and the BattleGroup is provisioned but not started.
+        </AlertDialog.Description>
+        {pending ? (
+          <Box className="info-card" mt="4">
+            <InfoRow label="VM" value={pending.server.vm.name} tone="green" />
+            <InfoRow label="BattleGroup" value={pending.battlegroupName} tone="green" />
+            <InfoRow label="Namespace" value={pending.namespace} tone="green" />
+          </Box>
+        ) : null}
+        <Flex gap="3" justify="end" mt="5">
+          <AlertDialog.Cancel>
+            <Button variant="soft" color="gray">
+              Not now
+            </Button>
+          </AlertDialog.Cancel>
+          <AlertDialog.Action>
+            <Button onClick={onStart}>Start BattleGroup</Button>
           </AlertDialog.Action>
         </Flex>
       </AlertDialog.Content>
