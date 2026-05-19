@@ -35,14 +35,14 @@ pub mod kubernetes_ssh;
 pub mod openssh_runner;
 /// Provider traits and shared provider data models.
 pub mod providers;
-/// Proxmox VE API provisioning support.
-pub mod proxmox;
 /// Strict command execution and strict JSON parsing.
 pub mod strict_command;
 /// Ubuntu-over-SSH remote setup phases.
 pub mod ubuntu_ssh_setup;
 /// Declarative flow descriptions derived from the vendor scripts.
 pub mod vendor_flows;
+/// Stdio driver for the vendor Hyper-V setup script.
+pub mod vendor_hyperv_setup;
 
 pub use battlegroup_kubernetes::*;
 pub use battlegroup_management::*;
@@ -59,7 +59,7 @@ pub use instance_management::*;
 pub use kubernetes_ssh::*;
 pub use openssh_runner::*;
 pub use providers::*;
-pub use proxmox::*;
 pub use strict_command::*;
 pub use ubuntu_ssh_setup::*;
 pub use vendor_flows::*;
+pub use vendor_hyperv_setup::*;

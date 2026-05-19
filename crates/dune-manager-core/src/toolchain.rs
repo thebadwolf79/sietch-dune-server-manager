@@ -18,7 +18,6 @@ use crate::{
 const STEAMCMD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
 const OPENSSH_URL: &str =
     "https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip";
-const QEMU_IMG_URL: &str = "https://cloudbase.it/downloads/qemu-img-win-x64-2_3_0.zip";
 /// Steam app id for the Dune Awakening dedicated server package.
 pub const SERVER_APP_ID: &str = "3104830";
 
@@ -33,9 +32,6 @@ pub enum ManagedTool {
     /// Windows OpenSSH client distribution.
     #[serde(rename = "openssh")]
     OpenSsh,
-    /// QEMU disk image conversion tool.
-    #[serde(rename = "qemu-img")]
-    QemuImg,
 }
 
 impl ManagedTool {
@@ -44,9 +40,8 @@ impl ManagedTool {
         match value.to_ascii_lowercase().as_str() {
             "steamcmd" | "steam-cmd" => Ok(Self::SteamCmd),
             "openssh" | "open-ssh" | "ssh" => Ok(Self::OpenSsh),
-            "qemu-img" | "qemuimg" | "qemu" => Ok(Self::QemuImg),
             _ => Err(failure(format!(
-                "Unknown managed tool {value}; expected steamcmd, openssh, or qemu-img"
+                "Unknown managed tool {value}; expected steamcmd or openssh"
             ))),
         }
     }
@@ -56,7 +51,6 @@ impl ManagedTool {
         match self {
             Self::SteamCmd => "steamcmd",
             Self::OpenSsh => "openssh",
-            Self::QemuImg => "qemu-img",
         }
     }
 
@@ -65,7 +59,6 @@ impl ManagedTool {
         match self {
             Self::SteamCmd => "steamcmd.exe",
             Self::OpenSsh => "ssh.exe",
-            Self::QemuImg => "qemu-img.exe",
         }
     }
 
@@ -74,7 +67,6 @@ impl ManagedTool {
         match self {
             Self::SteamCmd => STEAMCMD_URL,
             Self::OpenSsh => OPENSSH_URL,
-            Self::QemuImg => QEMU_IMG_URL,
         }
     }
 }
@@ -223,7 +215,6 @@ impl Toolchain {
         [
             ManagedTool::SteamCmd,
             ManagedTool::OpenSsh,
-            ManagedTool::QemuImg,
         ]
         .into_iter()
         .map(|tool| self.status(tool))
