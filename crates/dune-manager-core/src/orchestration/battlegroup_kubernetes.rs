@@ -282,8 +282,10 @@ where
 
 fn validate_region(region: &str) -> CommandResult<()> {
     match region {
-        "Europe Test" | "North America Test" => Ok(()),
-        _ => Err(failure("Region must be Europe Test or North America Test")),
+        "Asia" | "Europe" | "North America" | "Oceania" | "South America" => Ok(()),
+        _ => Err(failure(
+            "Region must be Asia, Europe, North America, Oceania, or South America",
+        )),
     }
 }
 
@@ -446,7 +448,7 @@ mod tests {
                 namespace: "funcom-seabass-sh-host-abcdef".to_string(),
                 name: "sh-host-abcdef".to_string(),
             },
-            "Europe Test",
+            "Europe",
         )
         .unwrap();
         let commands = commands.borrow();
@@ -457,7 +459,7 @@ mod tests {
             commands[1].contains("BATTLEGROUP_REGION_NAME") || commands[1].contains("/env/0/value")
         );
         assert!(commands[1].contains("dataCenter"));
-        assert!(commands[1].contains("-FarmRegion=Europe Test"));
+        assert!(commands[1].contains("-FarmRegion=Europe"));
         assert!(!commands.join("\n").contains("jq"));
         assert!(!commands.join("\n").contains(" sed "));
     }

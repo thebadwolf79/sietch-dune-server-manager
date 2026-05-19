@@ -6,8 +6,6 @@ use serde::Serialize;
 pub enum ProviderKind {
     /// Windows Hyper-V host provider.
     HyperV,
-    /// Proxmox VE API provider.
-    Proxmox,
     /// OpenSSH guest provider.
     Ssh,
     /// Container runtime provider.
@@ -24,8 +22,6 @@ pub enum StepDomain {
     Host,
     /// Hyper-V VM and switch operations.
     HyperV,
-    /// Proxmox VM, storage, and network operations.
-    Proxmox,
     /// SteamCMD package installation or update.
     Steam,
     /// SSH connectivity and transfer work.
@@ -521,7 +517,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 "Download guest server payload",
                 StepDomain::Steam,
                 StepAction::Download,
-                "steamcmd app_update 3104830",
+                "steamcmd app_update 4754530",
                 "Guest SteamCMD executor with retry policy",
                 StepFlags::new(false, false),
             ),
@@ -593,7 +589,7 @@ pub fn hyperv_initial_setup_flow() -> FlowSpec {
                 "Choose world region",
                 StepDomain::Interactive,
                 StepAction::Choose,
-                "world.sh Europe Test/North America Test",
+                "world.sh Asia/Europe/North America/Oceania/South America",
                 "Caller-selected region enum",
                 StepFlags::new(false, false),
             ),

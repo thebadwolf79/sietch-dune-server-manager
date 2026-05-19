@@ -18,11 +18,12 @@ use crate::{
 const STEAMCMD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
 const OPENSSH_URL: &str =
     "https://github.com/PowerShell/Win32-OpenSSH/releases/latest/download/OpenSSH-Win64.zip";
-const QEMU_IMG_URL: &str = "https://cloudbase.it/downloads/qemu-img-win-x64-2_3_0.zip";
 /// Steam app id for the Dune Awakening dedicated server package.
-pub const SERVER_APP_ID: &str = "3104830";
+pub const SERVER_APP_ID: &str = "4754530";
+const LEGACY_SERVER_APP_ID: &str = "3104830";
 
-const SERVER_MANIFEST_PATH: &str = "steamapps/appmanifest_3104830.acf";
+const SERVER_MANIFEST_PATH: &str = "steamapps/appmanifest_4754530.acf";
+const LEGACY_SERVER_MANIFEST_PATH: &str = "steamapps/appmanifest_3104830.acf";
 
 /// External command-line tool managed under the app-owned tools directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,9 +34,6 @@ pub enum ManagedTool {
     /// Windows OpenSSH client distribution.
     #[serde(rename = "openssh")]
     OpenSsh,
-    /// QEMU disk image conversion tool.
-    #[serde(rename = "qemu-img")]
-    QemuImg,
 }
 
 impl ManagedTool {
@@ -44,9 +42,8 @@ impl ManagedTool {
         match value.to_ascii_lowercase().as_str() {
             "steamcmd" | "steam-cmd" => Ok(Self::SteamCmd),
             "openssh" | "open-ssh" | "ssh" => Ok(Self::OpenSsh),
-            "qemu-img" | "qemuimg" | "qemu" => Ok(Self::QemuImg),
             _ => Err(failure(format!(
-                "Unknown managed tool {value}; expected steamcmd, openssh, or qemu-img"
+                "Unknown managed tool {value}; expected steamcmd or openssh"
             ))),
         }
     }
@@ -56,7 +53,6 @@ impl ManagedTool {
         match self {
             Self::SteamCmd => "steamcmd",
             Self::OpenSsh => "openssh",
-            Self::QemuImg => "qemu-img",
         }
     }
 
@@ -65,7 +61,6 @@ impl ManagedTool {
         match self {
             Self::SteamCmd => "steamcmd.exe",
             Self::OpenSsh => "ssh.exe",
-            Self::QemuImg => "qemu-img.exe",
         }
     }
 
@@ -74,7 +69,6 @@ impl ManagedTool {
         match self {
             Self::SteamCmd => STEAMCMD_URL,
             Self::OpenSsh => OPENSSH_URL,
-            Self::QemuImg => QEMU_IMG_URL,
         }
     }
 }
@@ -139,8 +133,8 @@ pub struct ServerPackageLayoutInfo {
     pub layout: ServerPackageLayout,
     /// Host-side batch entrypoint.
     pub battlegroup_bat: PathBuf,
-    /// Vendor SSH private key used for first guest contact.
-    pub ssh_key: PathBuf,
+    /// Vendor SSH private key used for first guest contact, when the package ships one.
+    pub ssh_key: Option<PathBuf>,
     /// Host-side bootstrap helper uploaded into the guest.
     pub bootstrap_setup: PathBuf,
     /// Packaged Hyper-V VM configuration.
@@ -220,14 +214,10 @@ impl Toolchain {
 
     /// Returns status for all supported tools.
     pub fn status_all(&self) -> Vec<ToolStatus> {
-        [
-            ManagedTool::SteamCmd,
-            ManagedTool::OpenSsh,
-            ManagedTool::QemuImg,
-        ]
-        .into_iter()
-        .map(|tool| self.status(tool))
-        .collect()
+        [ManagedTool::SteamCmd, ManagedTool::OpenSsh]
+            .into_iter()
+            .map(|tool| self.status(tool))
+            .collect()
     }
 
     /// Installs one tool from its default URL or a caller-provided archive URL.
@@ -278,6 +268,7 @@ impl Toolchain {
             return Err(failure("SteamCMD is not installed"));
         }
         let install_dir = install_dir.as_ref();
+        remove_legacy_server_package_if_needed(install_dir)?;
         let mut command = Command::new(&steamcmd.executable);
         suppress_console_window(&mut command);
         let output = command
@@ -326,6 +317,7 @@ impl Toolchain {
         install_dir: impl AsRef<Path>,
     ) -> CommandResult<ServerPackageStatus> {
         let install_dir = install_dir.as_ref();
+        let legacy_installed = legacy_server_package_installed(install_dir);
         let layout = detect_server_package_layout(install_dir).ok();
         let installed_build_id = read_installed_server_build_id(install_dir);
         let latest_build_id = if self.status(ManagedTool::SteamCmd).installed {
@@ -333,12 +325,16 @@ impl Toolchain {
         } else {
             None
         };
-        let update_available = installed_build_id
-            .as_deref()
-            .zip(latest_build_id.as_deref())
-            .is_some_and(|(installed, latest)| installed != latest);
-        let complete = layout.is_some();
+        let update_available = legacy_installed
+            || installed_build_id
+                .as_deref()
+                .zip(latest_build_id.as_deref())
+                .is_some_and(|(installed, latest)| installed != latest);
+        let complete = layout.is_some() && !legacy_installed;
         let message = match (&layout, &installed_build_id, &latest_build_id) {
+            _ if legacy_installed => format!(
+                "Old playtest server package app {LEGACY_SERVER_APP_ID} is installed; update the package to install release app {SERVER_APP_ID}."
+            ),
             (Some(info), Some(installed), Some(latest)) if installed == latest => {
                 format!("{:?} package is current at build {installed}.", info.layout)
             }
@@ -359,7 +355,7 @@ impl Toolchain {
                 info.layout
             ),
             (None, _, _) => {
-                "Server package is missing required VM, SSH key, or bootstrap assets.".to_string()
+                "Server package is missing required VM or bootstrap assets.".to_string()
             }
         };
         Ok(ServerPackageStatus {
@@ -377,6 +373,61 @@ impl Toolchain {
 
 fn server_package_exists(install_dir: &Path) -> bool {
     detect_server_package_layout(install_dir).is_ok()
+}
+
+fn legacy_server_package_installed(install_dir: &Path) -> bool {
+    install_dir.join(LEGACY_SERVER_MANIFEST_PATH).is_file()
+        && !install_dir.join(SERVER_MANIFEST_PATH).is_file()
+}
+
+fn remove_legacy_server_package_if_needed(install_dir: &Path) -> CommandResult<()> {
+    let legacy_manifest = install_dir.join(LEGACY_SERVER_MANIFEST_PATH);
+    if !legacy_manifest.is_file() {
+        return Ok(());
+    }
+    if install_dir.join(SERVER_MANIFEST_PATH).is_file() {
+        fs::remove_file(&legacy_manifest).map_err(|err| {
+            failure(format!(
+                "Failed to remove old server package manifest {}: {err}",
+                legacy_manifest.display()
+            ))
+        })?;
+        return Ok(());
+    }
+    if !install_dir.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(install_dir).map_err(|err| {
+        failure(format!(
+            "Failed to inspect old server package at {}: {err}",
+            install_dir.display()
+        ))
+    })? {
+        let path = entry
+            .map_err(|err| {
+                failure(format!(
+                    "Failed to inspect old server package at {}: {err}",
+                    install_dir.display()
+                ))
+            })?
+            .path();
+        if path.is_dir() {
+            fs::remove_dir_all(&path).map_err(|err| {
+                failure(format!(
+                    "Failed to remove old server package directory {}: {err}",
+                    path.display()
+                ))
+            })?;
+        } else {
+            fs::remove_file(&path).map_err(|err| {
+                failure(format!(
+                    "Failed to remove old server package file {}: {err}",
+                    path.display()
+                ))
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// Detects a complete server package layout and returns its required paths.
@@ -397,44 +448,45 @@ pub fn detect_server_package_layout(
             install_dir.join("Virtual Machines").display()
         ))
     })?;
-    let candidates = [
-        (
-            ServerPackageLayout::BattlegroupManagement,
-            install_dir
-                .join("battlegroup-management")
-                .join("ssh")
-                .join("bundledSshKey"),
-            install_dir
-                .join("battlegroup-management")
-                .join("bootstrap")
-                .join("setup"),
-        ),
-        (
-            ServerPackageLayout::LegacyInternalScripts,
-            install_dir
-                .join("internal-scripts")
-                .join("ssh")
-                .join("sshKey"),
-            install_dir
-                .join("internal-scripts")
-                .join("bootstrap")
-                .join("setup"),
-        ),
-    ];
-    for (layout, ssh_key, bootstrap_setup) in candidates {
-        if ssh_key.is_file() && bootstrap_setup.is_file() {
-            return Ok(ServerPackageLayoutInfo {
-                package_dir: install_dir.to_path_buf(),
-                layout,
-                battlegroup_bat,
-                ssh_key,
-                bootstrap_setup,
-                vmcx_path,
-            });
-        }
+    let battlegroup_management_setup = install_dir
+        .join("battlegroup-management")
+        .join("bootstrap")
+        .join("setup");
+    if battlegroup_management_setup.is_file() {
+        let ssh_key = install_dir
+            .join("battlegroup-management")
+            .join("ssh")
+            .join("bundledSshKey");
+        return Ok(ServerPackageLayoutInfo {
+            package_dir: install_dir.to_path_buf(),
+            layout: ServerPackageLayout::BattlegroupManagement,
+            battlegroup_bat,
+            ssh_key: ssh_key.is_file().then_some(ssh_key),
+            bootstrap_setup: battlegroup_management_setup,
+            vmcx_path,
+        });
+    }
+
+    let legacy_setup = install_dir
+        .join("internal-scripts")
+        .join("bootstrap")
+        .join("setup");
+    let legacy_ssh_key = install_dir
+        .join("internal-scripts")
+        .join("ssh")
+        .join("sshKey");
+    if legacy_setup.is_file() && legacy_ssh_key.is_file() {
+        return Ok(ServerPackageLayoutInfo {
+            package_dir: install_dir.to_path_buf(),
+            layout: ServerPackageLayout::LegacyInternalScripts,
+            battlegroup_bat,
+            ssh_key: Some(legacy_ssh_key),
+            bootstrap_setup: legacy_setup,
+            vmcx_path,
+        });
     }
     Err(failure(format!(
-        "Vendor SSH key/bootstrap files were not found in supported layouts under {}",
+        "Vendor bootstrap files were not found in supported layouts under {}",
         install_dir.display()
     )))
 }
@@ -579,7 +631,10 @@ fn default_runtime_root() -> CommandResult<PathBuf> {
 /// Copies the packaged bootstrap SSH key to a temporary path and restricts its ACL for OpenSSH.
 pub fn prepare_vendor_ssh_key(server_package_dir: impl AsRef<Path>) -> CommandResult<PathBuf> {
     let layout = detect_server_package_layout(server_package_dir)?;
-    prepare_restricted_ssh_key_copy(&layout.ssh_key)
+    let ssh_key = layout.ssh_key.ok_or_else(|| {
+        failure("The release server package does not include a bootstrap SSH key")
+    })?;
+    prepare_restricted_ssh_key_copy(&ssh_key)
 }
 
 /// Copies usable vendor SSH key candidates to temporary paths with OpenSSH-compatible ACLs.
@@ -622,7 +677,9 @@ fn prepare_vendor_ssh_key_candidates_inner(
             sources.push(active_key);
         }
     }
-    sources.push(layout.ssh_key);
+    if let Some(ssh_key) = layout.ssh_key {
+        sources.push(ssh_key);
+    }
     sources.dedup();
 
     let mut candidates = Vec::with_capacity(sources.len());
@@ -1102,17 +1159,15 @@ mod tests {
     fn detects_new_battlegroup_management_layout() {
         let root = temp_package_root("new-layout");
         fs::create_dir_all(root.join("Virtual Machines")).unwrap();
-        fs::create_dir_all(root.join("battlegroup-management/ssh")).unwrap();
         fs::create_dir_all(root.join("battlegroup-management/bootstrap")).unwrap();
         fs::write(root.join("battlegroup.bat"), "").unwrap();
         fs::write(root.join("Virtual Machines/test.vmcx"), "").unwrap();
-        fs::write(root.join("battlegroup-management/ssh/bundledSshKey"), "key").unwrap();
         fs::write(root.join("battlegroup-management/bootstrap/setup"), "setup").unwrap();
 
         let layout = detect_server_package_layout(&root).unwrap();
 
         assert_eq!(layout.layout, ServerPackageLayout::BattlegroupManagement);
-        assert!(layout.ssh_key.ends_with("bundledSshKey"));
+        assert!(layout.ssh_key.is_none());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1130,7 +1185,10 @@ mod tests {
         let layout = detect_server_package_layout(&root).unwrap();
 
         assert_eq!(layout.layout, ServerPackageLayout::LegacyInternalScripts);
-        assert!(layout.ssh_key.ends_with("sshKey"));
+        assert!(layout
+            .ssh_key
+            .as_ref()
+            .is_some_and(|path| path.ends_with("sshKey")));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1139,7 +1197,7 @@ mod tests {
         let manifest = r#"
 "AppState"
 {
-  "appid" "3104830"
+  "appid" "4754530"
   "buildid" "23216207"
 }
 "#;
@@ -1165,6 +1223,38 @@ mod tests {
             parse_public_branch_build_id(app_info).as_deref(),
             Some("23299999")
         );
+    }
+
+    #[test]
+    fn removes_legacy_package_before_release_install() {
+        let root = temp_package_root("legacy-cleanup");
+        fs::create_dir_all(root.join("steamapps")).unwrap();
+        fs::create_dir_all(root.join("internal-scripts")).unwrap();
+        fs::write(root.join("steamapps/appmanifest_3104830.acf"), "old").unwrap();
+        fs::write(root.join("internal-scripts/old.txt"), "old").unwrap();
+        fs::write(root.join("old-root.txt"), "old").unwrap();
+
+        remove_legacy_server_package_if_needed(&root).unwrap();
+
+        assert!(root.exists());
+        assert!(!root.join("steamapps").exists());
+        assert!(!root.join("internal-scripts").exists());
+        assert!(!root.join("old-root.txt").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removes_stale_legacy_manifest_when_release_manifest_exists() {
+        let root = temp_package_root("stale-legacy-manifest");
+        fs::create_dir_all(root.join("steamapps")).unwrap();
+        fs::write(root.join("steamapps/appmanifest_3104830.acf"), "old").unwrap();
+        fs::write(root.join("steamapps/appmanifest_4754530.acf"), "new").unwrap();
+
+        remove_legacy_server_package_if_needed(&root).unwrap();
+
+        assert!(!root.join("steamapps/appmanifest_3104830.acf").exists());
+        assert!(root.join("steamapps/appmanifest_4754530.acf").exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     fn temp_package_root(name: &str) -> PathBuf {

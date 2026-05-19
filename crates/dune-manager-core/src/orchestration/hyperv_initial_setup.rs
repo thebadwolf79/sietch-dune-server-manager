@@ -516,7 +516,7 @@ mod tests {
                     guest_bootstrap: GuestBootstrapPlan {
                         player_ip: "10.0.0.4".to_string(),
                         world_name: "Adain".to_string(),
-                        world_region: "Europe Test".to_string(),
+                        world_region: "Europe".to_string(),
                         self_host_token: "token".to_string(),
                         host_id: "host123".to_string(),
                         world_suffix: "abcdef".to_string(),

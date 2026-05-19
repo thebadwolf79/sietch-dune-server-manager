@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -10,15 +10,13 @@ use crate::{
     errors::failure,
     models::{CommandFailure, CommandResult},
     orchestration::{
-        battlegroup_command_catalog, convert_vhdx_to_cached_qcow2,
-        detect_player_address_candidates, find_vendor_vhdx, hyperv_initial_setup_flow,
+        battlegroup_command_catalog, detect_player_address_candidates, hyperv_initial_setup_flow,
         BattlegroupManagementOrchestrator, BattlegroupRef, BattlegroupUpdateOrchestrator,
         DuneVmDetector, ExperimentalSwapOrchestrator, ExperimentalSwapRequest,
         GuestBootstrapOrchestrator, GuestBootstrapPlan, GuestNetworkConfig,
         HyperVVmLifecycleOrchestrator, HyperVVmSetupOrchestrator, HyperVVmSetupRequest,
         InstanceMap, MapInstanceOrchestrator, MemoryProfile, OpenSshGuestProvider, OpenSshRunner,
-        OpenSshTarget, OrchestrationEvent, ProxmoxClient, ProxmoxClientConfig,
-        ProxmoxCreateVmRequest, SetMapDisplayNameRequest, SetMapInstancesRequest,
+        OpenSshTarget, OrchestrationEvent, SetMapDisplayNameRequest, SetMapInstancesRequest,
         SshGuestBootstrapProvider, StepAction, StepDomain, StrictPowerShellHyperV,
         StructuredBattlegroupOps, StructuredKubectl, UbuntuSshPrepareRequest, UbuntuSshSetup,
         VecOperationSink, VmProvider, WorldManifestRequest, DEFAULT_VM_DISK_BYTES,
@@ -118,11 +116,7 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
                     ));
                 }
                 let mut results = Vec::new();
-                for tool in [
-                    ManagedTool::SteamCmd,
-                    ManagedTool::OpenSsh,
-                    ManagedTool::QemuImg,
-                ] {
+                for tool in [ManagedTool::SteamCmd, ManagedTool::OpenSsh] {
                     results.push(toolchain.install(tool, force, None)?);
                 }
                 to_json(results)
@@ -204,56 +198,6 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
                 events: sink.events,
             })
         }
-        ["proxmox", "detect"] => {
-            let client = proxmox_client(&args)?;
-            to_json(client.detect()?)
-        }
-        ["proxmox", "convert-image"] => {
-            let toolchain = toolchain(&args)?;
-            let server_package = args
-                .optional("--server-package")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("dune-server"));
-            let source = args
-                .optional("--source-vhdx")
-                .map(PathBuf::from)
-                .map(Ok)
-                .unwrap_or_else(|| find_vendor_vhdx(&server_package))?;
-            let cache_dir = args
-                .optional("--cache-dir")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| toolchain.root().join("images").join("proxmox"));
-            let qemu = if let Some(path) = args.optional("--qemu-img") {
-                PathBuf::from(path)
-            } else {
-                toolchain.status(ManagedTool::QemuImg).executable
-            };
-            to_json(convert_vhdx_to_cached_qcow2(qemu, source, cache_dir)?)
-        }
-        ["proxmox", "create-alpine-vm"] => {
-            let client = proxmox_client(&args)?;
-            let request = proxmox_create_request(&args)?;
-            let qcow2 = args.required("--qcow2")?;
-            let mut sink = VecOperationSink::default();
-            let result = client.create_alpine_vm(&request, Path::new(&qcow2), &mut sink)?;
-            to_json(OperationOutput {
-                ok: true,
-                result,
-                events: sink.events,
-            })
-        }
-        ["proxmox", "vm", "status"] => {
-            let client = proxmox_client(&args)?;
-            to_json(client.vm_status(&args.required("--node")?, args.required_u64("--vmid")?)?)
-        }
-        ["proxmox", "vm", "start"] => {
-            let client = proxmox_client(&args)?;
-            to_json(client.start_vm(&args.required("--node")?, args.required_u64("--vmid")?)?)
-        }
-        ["proxmox", "vm", "stop"] => {
-            let client = proxmox_client(&args)?;
-            to_json(client.stop_vm(&args.required("--node")?, args.required_u64("--vmid")?)?)
-        }
         ["guest", "player-candidates"] => {
             let host = args.required("--host")?;
             let guest = ssh_guest_provider(&args)?;
@@ -294,7 +238,7 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
                 args.required("--player-ip")?,
                 args.required("--world-name")?,
                 args.optional("--region")
-                    .unwrap_or_else(|| "Europe Test".to_string()),
+                    .unwrap_or_else(|| "Europe".to_string()),
                 token,
             )?;
             let runner = ssh_runner(&args)?;
@@ -358,7 +302,7 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
                 args.required("--player-ip")?,
                 args.required("--world-name")?,
                 args.optional("--region")
-                    .unwrap_or_else(|| "Europe Test".to_string()),
+                    .unwrap_or_else(|| "Europe".to_string()),
                 token,
             )?;
             Ok(json!({
@@ -420,7 +364,7 @@ fn run_cli(args: Vec<String>) -> CommandResult<Value> {
                 args.required("--player-ip")?,
                 args.required("--world-name")?,
                 args.optional("--region")
-                    .unwrap_or_else(|| "Europe Test".to_string()),
+                    .unwrap_or_else(|| "Europe".to_string()),
                 token,
             )?;
             plan.validate()?;
@@ -659,61 +603,6 @@ fn toolchain(args: &CliArgs) -> CommandResult<Toolchain> {
     } else {
         Toolchain::from_default_root()
     }
-}
-
-fn proxmox_client(args: &CliArgs) -> CommandResult<ProxmoxClient> {
-    ProxmoxClient::new(ProxmoxClientConfig {
-        base_url: args.required("--url")?,
-        token_id: args.required("--token-id")?,
-        token_secret: proxmox_token_secret(args)?,
-        accepted_certificate_sha256: args.optional("--cert-sha256"),
-    })
-}
-
-fn proxmox_token_secret(args: &CliArgs) -> CommandResult<String> {
-    if let Some(value) = args.optional("--token-secret") {
-        return Ok(value);
-    }
-    if let Some(path) = args.optional("--token-secret-file") {
-        let text = std::fs::read_to_string(&path).map_err(|err| {
-            failure(format!(
-                "Failed to read Proxmox token secret file {path}: {err}"
-            ))
-        })?;
-        let secret = text.trim_end_matches(['\r', '\n']).to_string();
-        if secret.is_empty() {
-            return Err(failure("Proxmox token secret file is empty"));
-        }
-        return Ok(secret);
-    }
-    if let Some(name) = args.optional("--token-secret-env") {
-        let secret = std::env::var(&name)
-            .map_err(|_| failure(format!("Environment variable {name} is not set")))?;
-        if secret.trim().is_empty() {
-            return Err(failure(format!("Environment variable {name} is empty")));
-        }
-        return Ok(secret);
-    }
-    Err(failure(
-        "Missing Proxmox token secret; use --token-secret, --token-secret-file, or --token-secret-env",
-    ))
-}
-
-fn proxmox_create_request(args: &CliArgs) -> CommandResult<ProxmoxCreateVmRequest> {
-    Ok(ProxmoxCreateVmRequest {
-        node: args.required("--node")?,
-        vmid: args.required_u64("--vmid")?,
-        vm_name: args.required("--vm-name")?,
-        vm_storage: args.required("--vm-storage")?,
-        import_storage: args.required("--import-storage")?,
-        bridge: args.required("--bridge")?,
-        mac_address: args.optional("--mac-address"),
-        memory_gb: args.required_u64("--memory-gb")?,
-        cores: u32::try_from(args.required_u64("--cores")?)
-            .map_err(|_| failure("--cores must fit in a 32-bit value"))?,
-        disk_gb: args.required_u64("--disk-gb")?,
-        qemu_guest_agent: !args.has_flag("--no-qemu-guest-agent"),
-    })
 }
 
 fn optional_port(args: &CliArgs, name: &str) -> CommandResult<Option<u16>> {
@@ -1044,18 +933,18 @@ fn usage() -> Vec<&'static str> {
         "dune-manager-cli ubuntu install-k3s --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
         "dune-manager-cli ubuntu bootstrap-kubernetes --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
         "dune-manager-cli ubuntu install-payload --ssh PATH --key PATH --host HOST [--user root] [--linux-user dune] [--server-root /home/dune/.dune]",
-        "dune-manager-cli ubuntu create-world --ssh PATH --key PATH --host HOST (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region \"Europe Test\"] [--user root]",
-        "dune-manager-cli token plan (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region \"Europe Test\"]",
+        "dune-manager-cli ubuntu create-world --ssh PATH --key PATH --host HOST (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region Europe] [--user root]",
+        "dune-manager-cli token plan (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region Europe]",
         "dune-manager-cli guest player-candidates --ssh PATH --key PATH --host IP [--user dune]",
         "dune-manager-cli guest write-player-settings --ssh PATH --key PATH --host IP --player-ip IP [--user dune]",
         "dune-manager-cli guest apply-static-network --ssh PATH --key PATH --host IP --address-cidr IP/PREFIX --gateway IP --dns IP [--interface eth0] [--user dune]",
-        "dune-manager-cli guest bootstrap --ssh PATH --key PATH --host IP (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region \"Europe Test\"] [--enable-experimental-swap] [--experimental-swap-size-gib 30] [--experimental-swap-no-restart-k3s] [--user dune]",
+        "dune-manager-cli guest bootstrap --ssh PATH --key PATH --host IP (--token JWT | --token-file PATH | --token-env NAME) --player-ip IP --world-name NAME [--region Europe] [--enable-experimental-swap] [--experimental-swap-size-gib 30] [--experimental-swap-no-restart-k3s] [--user dune]",
         "dune-manager-cli guest experimental-swap status --ssh PATH --key PATH --host IP [--namespace NS --name BG] [--user dune]",
         "dune-manager-cli guest experimental-swap enable --ssh PATH --key PATH --host IP --namespace NS --name BG [--swap-size-gib 30] [--no-restart-k3s] [--user dune]",
         "dune-manager-cli bg list --ssh PATH --key PATH --host IP [--user dune]",
         "dune-manager-cli bg status --ssh PATH --key PATH --host IP --namespace NS --name BG [--user dune]",
         "dune-manager-cli bg start|stop|restart --ssh PATH --key PATH --host IP --namespace NS --name BG [--director-timeout 60]",
-        "dune-manager-cli bg patch-region --ssh PATH --key PATH --host IP --namespace NS --name BG --region \"Europe Test\"",
+        "dune-manager-cli bg patch-region --ssh PATH --key PATH --host IP --namespace NS --name BG --region Europe",
         "dune-manager-cli bg instances set --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --count N [--pvp-count N] [--restart]",
         "dune-manager-cli bg display-name set --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --dimension N --display-name NAME [--restart]",
         "dune-manager-cli bg display-name clear --ssh PATH --key PATH --host IP --namespace NS --name BG --map survival-1|deep-desert --dimension N [--restart]",

@@ -317,7 +317,7 @@ fn emit(
         message: message.into(),
         domain: StepDomain::Kubernetes,
         action,
-        provider: ProviderKind::HyperV,
+        provider: ProviderKind::Kubernetes,
     });
 }
 

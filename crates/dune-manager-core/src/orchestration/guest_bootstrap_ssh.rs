@@ -12,7 +12,7 @@ use crate::{
 };
 
 const DUNE_HOME: &str = "/home/dune/.dune";
-const SERVER_APP_ID: &str = "3104830";
+const SERVER_APP_ID: &str = "4754530";
 
 /// SSH-backed implementation of the guest bootstrap phases.
 #[derive(Debug, Clone)]
@@ -87,7 +87,6 @@ where
 
     fn scale_operator_deployments(&self) -> CommandResult<()> {
         self.run_phase(&format!("{}\n{}", KUBECTL_HELPERS, SCALE_OPERATOR_SCRIPT))?;
-        self.repair_operator_webhooks()?;
         Ok(())
     }
 
@@ -130,8 +129,7 @@ where
             return Err(failure("Battlegroup image version file was empty"));
         }
 
-        self.repair_operator_webhooks()?;
-        self.sync_existing_postgres_superuser_password(namespace, battlegroup_name)?;
+        self.sync_existing_postgres_credentials(namespace, battlegroup_name)?;
 
         let command = format!(
             "sudo kubectl get battlegroup {} -n {} -o json",
@@ -176,15 +174,7 @@ impl<R> SshGuestBootstrapProvider<R>
 where
     R: RemoteCommandRunner,
 {
-    fn repair_operator_webhooks(&self) -> CommandResult<()> {
-        self.run_phase(&format!(
-            "{}\n{}",
-            KUBECTL_HELPERS, REPAIR_OPERATOR_WEBHOOKS_SCRIPT
-        ))?;
-        Ok(())
-    }
-
-    fn sync_existing_postgres_superuser_password(
+    fn sync_existing_postgres_credentials(
         &self,
         namespace: &str,
         battlegroup_name: &str,
@@ -222,8 +212,12 @@ fn validate_world_manifest_request(request: &WorldManifestRequest) -> CommandRes
         ));
     }
     match request.world_region.as_str() {
-        "Europe Test" | "North America Test" => {}
-        _ => return Err(failure("Region must be Europe Test or North America Test")),
+        "Asia" | "Europe" | "North America" | "Oceania" | "South America" => {}
+        _ => {
+            return Err(failure(
+                "Region must be Asia, Europe, North America, Oceania, or South America",
+            ))
+        }
     }
     if request.self_host_token.trim().is_empty()
         || request.self_host_token.contains('\n')
@@ -328,30 +322,6 @@ sudo rc-update add k3s >/dev/null
 const CONTAINER_IMAGE_HELPERS: &str = r#"
 set -eu
 DOWNLOAD_PATH=/home/dune/.dune/download
-wait_k3s_until_ready() {
-  local elapsed=0
-  while [ ! -S /run/k3s/containerd/containerd.sock ]; do
-    sleep 2
-    elapsed=$((elapsed + 2))
-    if [ "$elapsed" -ge 180 ]; then echo "k3s containerd socket did not become ready in 180s" >&2; return 1; fi
-  done
-  elapsed=0
-  until sudo ctr -n k8s.io version >/dev/null 2>&1; do
-    sleep 2
-    elapsed=$((elapsed + 2))
-    if [ "$elapsed" -ge 180 ]; then echo "k3s containerd did not accept commands in 180s" >&2; return 1; fi
-  done
-  elapsed=0
-  until sudo kubectl get nodes >/dev/null 2>&1; do
-    sleep 2
-    elapsed=$((elapsed + 2))
-    if [ "$elapsed" -ge 180 ]; then echo "k3s API did not become ready in 180s" >&2; return 1; fi
-  done
-}
-restart_k3s_and_wait_until_ready() {
-  sudo rc-service k3s restart >&2
-  wait_k3s_until_ready
-}
 load_image_from_file() {
   local file_name="$1"
   if [ ! -f "$DOWNLOAD_PATH/$file_name" ]; then
@@ -359,21 +329,20 @@ load_image_from_file() {
     exit 1
   fi
   local attempt=1
-  while [ "$attempt" -le 8 ]; do
-    wait_k3s_until_ready
+  while [ "$attempt" -le 3 ]; do
     if sudo ctr -n k8s.io images import "$DOWNLOAD_PATH/$file_name" >&2; then
       return 0
     fi
-    echo "Import of $file_name failed (attempt $attempt/8)." >&2
+    echo "Import of $file_name failed (attempt $attempt/3)." >&2
     if ! sudo ctr -n k8s.io version >/dev/null 2>&1; then
       echo "k3s/containerd is not responding; restarting k3s." >&2
       restart_k3s_and_wait_until_ready
     else
-      sleep 10
+      sleep 5
     fi
     attempt=$((attempt + 1))
   done
-  echo "Failed to import $file_name after 8 attempts" >&2
+  echo "Failed to import $file_name after 3 attempts" >&2
   exit 1
 }
 "#;
@@ -503,91 +472,6 @@ scale_deployment funcom-operators serveroperator-controller-manager 1
 scale_deployment funcom-operators utilitiesoperator-controller-manager 1
 "#;
 
-const REPAIR_OPERATOR_WEBHOOKS_SCRIPT: &str = r#"
-operator_webhook_needs_cert() {
-  local secret="$1" svc="$2" crt="$3"
-  if ! sudo kubectl get secret "$secret" -n funcom-operators >/dev/null 2>&1; then
-    return 0
-  fi
-  if ! sudo kubectl get secret "$secret" -n funcom-operators -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d > "$crt" 2>/dev/null; then
-    return 0
-  fi
-  if ! openssl x509 -in "$crt" -noout -ext subjectAltName 2>/dev/null | grep -q "DNS:${svc}.funcom-operators.svc"; then
-    return 0
-  fi
-  return 1
-}
-
-repair_operator_webhook() {
-  local op="$1"
-  local secret="${op}-webhook-server-cert"
-  local svc="${op}-webhook-svc"
-  local deploy="${op}-controller-manager"
-  local tmp="/tmp/dune-${op}-webhook"
-  local crt="${tmp}.crt"
-  local key="${tmp}.key"
-  local conf="${tmp}.conf"
-  local changed=0
-
-  if operator_webhook_needs_cert "$secret" "$svc" "$crt"; then
-    cat > "$conf" <<EOF
-[req]
-distinguished_name=req_distinguished_name
-x509_extensions=v3_req
-prompt=no
-[req_distinguished_name]
-CN=${svc}.funcom-operators.svc
-[v3_req]
-subjectAltName=@alt_names
-[alt_names]
-DNS.1=${svc}
-DNS.2=${svc}.funcom-operators
-DNS.3=${svc}.funcom-operators.svc
-EOF
-    sudo openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
-      -keyout "$key" -out "$crt" -config "$conf" >/dev/null 2>&1
-    sudo kubectl delete secret "$secret" -n funcom-operators --ignore-not-found >/dev/null 2>&1
-    sudo kubectl create secret tls "$secret" -n funcom-operators \
-      --cert="$crt" --key="$key" >/dev/null
-    changed=1
-  fi
-
-  if ! sudo kubectl get secret "$secret" -n funcom-operators -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d > "$crt" 2>/dev/null; then
-    echo "Unable to read operator webhook certificate secret $secret" >&2
-    return 1
-  fi
-  local ca_bundle
-  ca_bundle=$(base64 "$crt" | tr -d '\n')
-
-  for resource in $(sudo kubectl get mutatingwebhookconfigurations,validatingwebhookconfigurations -o name 2>/dev/null || true); do
-    i=0
-    while [ "$i" -lt 20 ]; do
-      service_name=$(sudo kubectl get "$resource" -o "jsonpath={.webhooks[$i].clientConfig.service.name}" 2>/dev/null || true)
-      if [ -z "$service_name" ]; then
-        break
-      fi
-      service_namespace=$(sudo kubectl get "$resource" -o "jsonpath={.webhooks[$i].clientConfig.service.namespace}" 2>/dev/null || true)
-      if [ "$service_name" = "$svc" ] && [ "$service_namespace" = "funcom-operators" ]; then
-        patch="[{\"op\":\"add\",\"path\":\"/webhooks/$i/clientConfig/caBundle\",\"value\":\"$ca_bundle\"}]"
-        kubectl_retry patch "$resource" --type=json -p="$patch" >/dev/null
-      fi
-      i=$((i + 1))
-    done
-  done
-
-  if [ "$changed" = "1" ] && sudo kubectl get deployment "$deploy" -n funcom-operators >/dev/null 2>&1; then
-    kubectl_retry rollout -n funcom-operators restart "deployment/$deploy"
-    kubectl_retry rollout -n funcom-operators status "deployment/$deploy" --timeout=180s
-  fi
-
-  sudo rm -f "$crt" "$key" "$conf"
-}
-
-for op in battlegroupoperator databaseoperator serveroperator utilitiesoperator; do
-  repair_operator_webhook "$op"
-done
-"#;
-
 const INSTALL_HELPER_SCRIPT: &str = r#"
 set -eu
 mkdir -p /home/dune/.dune/bin
@@ -622,11 +506,15 @@ fn create_world_script(request: &WorldManifestRequest) -> String {
     script.push_str(&shell_value("TITLE_PATCH", &title_patch));
     script.push_str(
         r#"
-if sudo kubectl get ns "$NS" >/dev/null 2>&1; then
-  echo "Battlegroup namespace already exists: $NS" >&2
-  exit 1
+if sudo kubectl get battlegroup "$WORLD_UNIQUE_NAME" -n "$NS" >/dev/null 2>&1; then
+  sudo kubectl patch battlegroup "$WORLD_UNIQUE_NAME" -n "$NS" --type=merge -p "$TITLE_PATCH" >/dev/null
+  printf '%s' "$WORLD_UNIQUE_NAME" > /home/dune/.dune/.manager-bootstrap-world-name
+  printf '{"namespace":"%s","battlegroupName":"%s"}\n' "$NS" "$WORLD_UNIQUE_NAME"
+  exit 0
 fi
 RMQ_SECRET=$(openssl rand -base64 64 | tr -d '\n')
+DB_PASSWORD=$(openssl rand -hex 32)
+DB_SUPER_PASSWORD=$(openssl rand -hex 32)
 escape_sed() { printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'; }
 escape_sed_pipe() { printf '%s' "$1" | sed -e 's/[|&]/\\&/g'; }
 cp "$G_SCRIPT_PATH/templates/world-template.yaml" "$G_SPEC_PATH/$WORLD_UNIQUE_NAME.yaml"
@@ -637,6 +525,8 @@ sed -i "s/{WORLD_UNIQUE_NAME}/$(escape_sed "$WORLD_UNIQUE_NAME")/g" "$G_SPEC_PAT
 sed -i "s/{WORLD_REGION}/$(escape_sed "$WORLD_REGION")/g" "$G_SPEC_PATH/$WORLD_UNIQUE_NAME.yaml"
 sed -i "s/{WORLD_IMAGE_TAG}/0-0-shipping/g" "$G_SPEC_PATH/$WORLD_UNIQUE_NAME.yaml"
 sed -i "s/{FLS_SECRET}/$(escape_sed "$FLS_TOKEN")/g" "$G_SPEC_PATH/$WORLD_UNIQUE_NAME.yaml"
+sed -i "s/{WORLD_DUNE_PASS}/$(escape_sed "$DB_PASSWORD")/g" "$G_SPEC_PATH/$WORLD_UNIQUE_NAME.yaml"
+sed -i "s/{WORLD_POSTGRES_PASS}/$(escape_sed "$DB_SUPER_PASSWORD")/g" "$G_SPEC_PATH/$WORLD_UNIQUE_NAME.yaml"
 sed -i "s/{FLS_SECRET}/$(escape_sed "$FLS_TOKEN")/g" "$G_SPEC_PATH/$WORLD_UNIQUE_NAME-fls-secret.yaml"
 sed -i "s|{RMQ_SECRET}|$(escape_sed_pipe "$RMQ_SECRET")|g" "$G_SPEC_PATH/$WORLD_UNIQUE_NAME-rmq-secret.yaml"
 world_tmp="$G_SPEC_PATH/$WORLD_UNIQUE_NAME.yaml.tmp"
@@ -672,11 +562,13 @@ if [ "$elapsed" -ge 300 ]; then
   echo "Timed out waiting for operators" >&2
   exit 1
 fi
-sudo kubectl create ns "$NS" >&2
-sudo kubectl create -n "$NS" -f "$G_SPEC_PATH/$WORLD_UNIQUE_NAME-fls-secret.yaml" >&2
-sudo kubectl create -n "$NS" -f "$G_SPEC_PATH/$WORLD_UNIQUE_NAME-rmq-secret.yaml" >&2
-sudo kubectl create -n "$NS" -f "$G_SPEC_PATH/$WORLD_UNIQUE_NAME.yaml" >&2
-sudo kubectl patch battlegroup "$WORLD_UNIQUE_NAME" -n "$NS" --type=merge -p "$TITLE_PATCH" >&2
+if ! sudo kubectl get ns "$NS" >/dev/null 2>&1; then
+  sudo kubectl create ns "$NS" >/dev/null
+fi
+sudo kubectl apply -n "$NS" -f "$G_SPEC_PATH/$WORLD_UNIQUE_NAME-fls-secret.yaml" >/dev/null
+sudo kubectl apply -n "$NS" -f "$G_SPEC_PATH/$WORLD_UNIQUE_NAME-rmq-secret.yaml" >/dev/null
+sudo kubectl apply -n "$NS" -f "$G_SPEC_PATH/$WORLD_UNIQUE_NAME.yaml" >/dev/null
+sudo kubectl patch battlegroup "$WORLD_UNIQUE_NAME" -n "$NS" --type=merge -p "$TITLE_PATCH" >/dev/null
 printf '%s' "$WORLD_UNIQUE_NAME" > /home/dune/.dune/.manager-bootstrap-world-name
 printf '{"namespace":"%s","battlegroupName":"%s"}\n' "$NS" "$WORLD_UNIQUE_NAME"
 "#,
@@ -714,8 +606,15 @@ if [ -z "$DDEP" ]; then
 fi
 
 DBPOD="$DDEP-sts-0"
-if ! sudo kubectl get pod "$DBPOD" -n "$NS" >/dev/null 2>&1; then
-  echo "No running database pod found for $DDEP; skipping Postgres password sync." >&2
+elapsed=0
+while [ "$elapsed" -lt 180 ]; do
+  phase=$(sudo kubectl get pod "$DBPOD" -n "$NS" -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  if [ "$phase" = "Running" ]; then break; fi
+  sleep 5
+  elapsed=$((elapsed + 5))
+done
+if [ "${phase:-}" != "Running" ]; then
+  echo "No running database pod found for $DDEP; skipping Postgres credential sync." >&2
   exit 0
 fi
 
@@ -730,12 +629,34 @@ DB_PORT=$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.sp
 if [ -z "$SUPER_USER" ]; then SUPER_USER=postgres; fi
 if [ -z "$DB_PORT" ]; then DB_PORT=15432; fi
 
+DB_USER=$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.spec.user}' 2>/dev/null || true)
+DB_PASSWORD=$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.spec.password}' 2>/dev/null || true)
+DB_NAME=$(sudo kubectl get databasedeployment "$DDEP" -n "$NS" -o jsonpath='{.spec.gameDatabaseName}' 2>/dev/null || true)
+if [ -z "$DB_USER" ]; then DB_USER=dune; fi
+if [ -z "$DB_NAME" ]; then DB_NAME=dune; fi
+if [ -z "$DB_PASSWORD" ]; then
+  echo "Database deployment $DDEP has no game database password; skipping game role sync." >&2
+else
+  sudo kubectl exec -i -n "$NS" "$DBPOD" -- \
+    psql -h 127.0.0.1 -p "$DB_PORT" -U "$SUPER_USER" -d postgres \
+      -v ON_ERROR_STOP=1 \
+      -v db_user="$DB_USER" \
+      -v db_password="$DB_PASSWORD" \
+      -v db_name="$DB_NAME" >/dev/null <<'SQL'
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user') \gexec
+ALTER ROLE :"db_user" WITH LOGIN PASSWORD :'db_password';
+SELECT format('CREATE DATABASE %I OWNER %I', :'db_name', :'db_user')
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name') \gexec
+SQL
+fi
+
 ESCAPED_PASSWORD=$(printf '%s' "$SUPER_PASSWORD" | sed "s/'/''/g")
 ESCAPED_USER=$(printf '%s' "$SUPER_USER" | sed 's/"/""/g')
 printf "ALTER ROLE \"%s\" WITH PASSWORD '%s';\n" "$ESCAPED_USER" "$ESCAPED_PASSWORD" |
   sudo kubectl exec -i -n "$NS" "$DBPOD" -- \
     psql -h 127.0.0.1 -p "$DB_PORT" -U "$SUPER_USER" -d postgres -v ON_ERROR_STOP=1 >/dev/null
-echo "Postgres superuser password is aligned with database deployment $DDEP." >&2
+echo "Postgres credentials are aligned with database deployment $DDEP." >&2
 "#;
 
 const APPLY_DEFAULT_SETTINGS_SCRIPT: &str = r#"
@@ -892,7 +813,7 @@ mod tests {
         let world = provider
             .create_world(&WorldManifestRequest {
                 world_name: "Adain".to_string(),
-                world_region: "Europe Test".to_string(),
+                world_region: "Europe".to_string(),
                 player_ip: "203.0.113.10".to_string(),
                 world_unique_name: "sh-host-abcdef".to_string(),
                 self_host_token: "header.payload.signature".to_string(),
@@ -902,7 +823,13 @@ mod tests {
         assert_eq!(world.namespace, "funcom-seabass-sh-host-abcdef");
         let script = scripts.borrow().first().cloned().unwrap();
         assert!(script.contains("printf '{\"namespace\":\"%s\",\"battlegroupName\":\"%s\"}"));
-        assert!(script.contains("kubectl create ns \"$NS\" >&2"));
+        assert!(script.contains("kubectl create ns \"$NS\" >/dev/null"));
+        assert!(script.contains("kubectl apply -n \"$NS\""));
+        assert!(script.contains("DB_PASSWORD=$(openssl rand -hex 32)"));
+        assert!(script.contains("s/{WORLD_DUNE_PASS}/$(escape_sed \"$DB_PASSWORD\")/g"));
+        assert!(script.contains(
+            "s/{WORLD_POSTGRES_PASS}/$(escape_sed \"$DB_SUPER_PASSWORD\")/g"
+        ));
         assert!(script.contains("s/{WORLD_IMAGE_TAG}/0-0-shipping/g"));
         assert!(script.contains("HOST_DATACENTER_IP_ADDRESS"));
         assert!(script.contains("PLAYER_IP=$(cat <<"));
@@ -921,7 +848,7 @@ mod tests {
         provider
             .create_world(&WorldManifestRequest {
                 world_name: "Great Banana".to_string(),
-                world_region: "Europe Test".to_string(),
+                world_region: "Europe".to_string(),
                 player_ip: "203.0.113.10".to_string(),
                 world_unique_name: "sh-host-abcdef".to_string(),
                 self_host_token: "header.payload.signature".to_string(),
@@ -982,7 +909,7 @@ mod tests {
     #[test]
     fn guest_download_uses_validating_app_update() {
         let script = download_script();
-        assert!(script.contains("+app_update 3104830 validate"));
+        assert!(script.contains("+app_update 4754530 validate"));
     }
 
     #[test]
@@ -999,7 +926,6 @@ mod tests {
     fn battlegroup_image_patch_uses_rust_built_json_patch_without_jq() {
         let remote = MockRemote::with_outputs([
             "1952287-0-shipping",
-            "",
             "",
             r#"{
               "metadata":{"name":"sh-host-abcdef"},
@@ -1021,16 +947,13 @@ mod tests {
 
         let scripts = scripts.borrow();
         assert!(scripts[0].contains("version.txt"));
-        assert!(scripts[1].contains("repair_operator_webhook"));
-        assert!(scripts[1].contains("subjectAltName"));
-        assert!(scripts[1].contains("caBundle"));
-        assert!(scripts[2].contains("ALTER ROLE"));
-        assert!(scripts[2].contains("superPassword"));
-        assert!(scripts[3].contains("kubectl get battlegroup"));
-        assert!(scripts[4].contains("kubectl patch battlegroup"));
-        assert!(scripts[4].contains("--type=json"));
-        assert!(scripts[4].contains("1952287-0-shipping"));
-        assert!(scripts[4].contains("seabass-server-gateway"));
+        assert!(scripts[1].contains("ALTER ROLE"));
+        assert!(scripts[1].contains("superPassword"));
+        assert!(scripts[2].contains("kubectl get battlegroup"));
+        assert!(scripts[3].contains("kubectl patch battlegroup"));
+        assert!(scripts[3].contains("--type=json"));
+        assert!(scripts[3].contains("1952287-0-shipping"));
+        assert!(scripts[3].contains("seabass-server-gateway"));
         assert!(!scripts.join("\n").contains("jq"));
     }
 

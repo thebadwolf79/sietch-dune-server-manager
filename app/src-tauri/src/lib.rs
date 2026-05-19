@@ -1,40 +1,29 @@
 use std::{
-    collections::{BTreeMap, HashMap},
-    fs::{self, OpenOptions},
-    io::Write,
+    collections::HashMap,
     net::{TcpListener, TcpStream},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-    thread,
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
 };
 
 use dune_manager_core::environment::{detect_setup_environment, SetupEnvironment};
 use dune_manager_core::models::{CommandFailure, CommandResult};
 use dune_manager_core::orchestration::{
-    classify_dune_vm, convert_vhdx_to_cached_qcow2, detect_player_address_candidates,
-    find_vendor_vhdx, is_started_state, openssh_base_args, wait_for_vm_ipv4,
-    BattlegroupManagementOrchestrator, BattlegroupRef, BattlegroupUpdateOrchestrator, CreatedWorld,
-    DuneVmCandidate, DuneVmConfidence, ExperimentalSwapOrchestrator, ExperimentalSwapRequest,
-    GuestBootstrapOrchestrator, GuestBootstrapPlan, GuestBootstrapProvider, GuestNetworkConfig,
-    GuestNetworkPlan, GuestProvider, HyperVVmLifecycleOrchestrator, HyperVVmSetupOrchestrator,
-    HyperVVmSetupRequest, InstanceMap, KubernetesProvider, LowMemoryBattlegroupProfileRequest,
-    MapInstanceOrchestrator, MemoryProfile, OpenSshGuestProvider, OpenSshRunner, OpenSshTarget,
-    OperationSink, OrchestrationEvent, ProxmoxClient, ProxmoxClientConfig, ProxmoxCreateVmRequest,
-    ProxmoxDetection, ProxmoxVmStatus, RemoteCommandRunner, SetMapInstancesRequest,
-    SshGuestBootstrapProvider, StrictPowerShellHyperV, StructuredKubectl, UbuntuSshPreflight,
-    UbuntuSshPrepareRequest, UbuntuSshSetup, UbuntuSwapRequest, VmProvider, WorldManifestRequest,
+    classify_dune_vm, is_started_state, openssh_base_args, BattlegroupManagementOrchestrator,
+    BattlegroupRef, BattlegroupUpdateOrchestrator, CreatedWorld, DuneVmCandidate, DuneVmConfidence,
+    ExperimentalSwapOrchestrator, ExperimentalSwapRequest, GuestBootstrapPlan,
+    GuestBootstrapProvider, HyperVVmLifecycleOrchestrator, InstanceMap, KubernetesProvider,
+    MapInstanceOrchestrator, OpenSshRunner, OpenSshTarget, OperationSink, OrchestrationEvent,
+    RemoteCommandRunner, SetMapInstancesRequest, SshGuestBootstrapProvider, StrictPowerShellHyperV,
+    StructuredKubectl, UbuntuSshPreflight, UbuntuSshPrepareRequest, UbuntuSshSetup,
+    UbuntuSwapRequest, VendorHyperVSetupRequest, VendorHyperVSetupRunner, VmProvider,
+    WorldManifestRequest,
 };
 use dune_manager_core::security::redact_text;
 use dune_manager_core::shell::{ps_single_quoted, run_powershell};
 use dune_manager_core::toolchain::{
-    default_server_package_dir, default_vm_destination, prepare_vendor_ssh_key,
-    prepare_vendor_ssh_key_candidates, prepare_vendor_ssh_key_candidates_for_vm,
-    rotate_vendor_guest_ssh_key_for_vm, ManagedTool, ServerPackageStatus, Toolchain,
+    default_server_package_dir, default_vm_destination, prepare_vendor_ssh_key_candidates,
+    ManagedTool, ServerPackageStatus, Toolchain,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -158,111 +147,6 @@ struct RemoteSetupRequest {
     deep_desert_pvp_instances: usize,
     deep_desert_warm_servers: usize,
     enable_swap: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProxmoxConnectionRequest {
-    profile_id: Option<String>,
-    host_url: String,
-    token_id: String,
-    token_secret: Option<String>,
-    accepted_certificate_sha256: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProxmoxTrustRequest {
-    host_url: String,
-    certificate_sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProxmoxTrustResult {
-    host_url: String,
-    certificate_sha256: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProxmoxAlpineSetupRequest {
-    profile_id: Option<String>,
-    host_url: String,
-    token_id: String,
-    token_secret: Option<String>,
-    accepted_certificate_sha256: Option<String>,
-    node: String,
-    vm_storage: String,
-    import_storage: String,
-    bridge: String,
-    bridge_cidr: Option<String>,
-    vmid: u64,
-    vm_name: String,
-    disk_gb: u64,
-    memory_gb: u64,
-    processor_count: u32,
-    static_ip: Option<String>,
-    gateway: Option<String>,
-    dns: Option<String>,
-    temporary_dhcp_ip: Option<String>,
-    ssh_key_path: String,
-    player_ip: String,
-    world_name: String,
-    region: String,
-    self_host_token: String,
-    survival_instances: usize,
-    deep_desert_pve_instances: usize,
-    deep_desert_pvp_instances: usize,
-    deep_desert_warm_servers: usize,
-    enable_swap: bool,
-    #[serde(default)]
-    install_qemu_guest_agent: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProxmoxAlpineSetupResult {
-    host: String,
-    user: String,
-    key_path: String,
-    namespace: String,
-    battlegroup_name: String,
-    world_unique_name: String,
-    node: String,
-    vmid: u64,
-    vm_name: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProxmoxGuestNetworkProbeRequest {
-    temporary_dhcp_ip: String,
-    ssh_key_path: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProxmoxGuestNetworkProbeResult {
-    temporary_ip: String,
-    interface: Option<String>,
-    address_cidr: Option<String>,
-    static_ip: Option<String>,
-    prefix_length: Option<u8>,
-    gateway: Option<String>,
-    dns: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProxmoxVmActionRequest {
-    profile_id: Option<String>,
-    host_url: String,
-    token_id: String,
-    token_secret: Option<String>,
-    accepted_certificate_sha256: Option<String>,
-    node: String,
-    vmid: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -446,15 +330,6 @@ struct SetupLogPayload {
     message: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AppLogEntry {
-    timestamp: String,
-    level: String,
-    scope: String,
-    message: String,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SetupRunResult {
@@ -508,15 +383,6 @@ struct RollbackResult {
 
 struct TauriOperationSink {
     app: tauri::AppHandle,
-    heartbeat: Arc<Mutex<OperationHeartbeat>>,
-    heartbeat_running: Arc<AtomicBool>,
-}
-
-struct OperationHeartbeat {
-    scope: String,
-    message: String,
-    updated_at: Instant,
-    emitted_at: Instant,
 }
 
 #[derive(Default, Clone)]
@@ -542,61 +408,13 @@ impl TunnelRegistry {
 }
 
 impl TauriOperationSink {
-    fn new(app: tauri::AppHandle) -> Self {
-        let heartbeat = Arc::new(Mutex::new(OperationHeartbeat {
-            scope: "setup".to_string(),
-            message: "Waiting for the next setup step.".to_string(),
-            updated_at: Instant::now(),
-            emitted_at: Instant::now(),
-        }));
-        let heartbeat_running = Arc::new(AtomicBool::new(true));
-        let thread_app = app.clone();
-        let thread_heartbeat = Arc::clone(&heartbeat);
-        let thread_running = Arc::clone(&heartbeat_running);
-        thread::spawn(move || {
-            while thread_running.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_secs(5));
-                let Ok(mut state) = thread_heartbeat.lock() else {
-                    continue;
-                };
-                if state.updated_at.elapsed() < Duration::from_secs(30)
-                    || state.emitted_at.elapsed() < Duration::from_secs(30)
-                {
-                    continue;
-                }
-                state.emitted_at = Instant::now();
-                let _ = thread_app.emit(
-                    "setup-log",
-                    SetupLogPayload {
-                        level: "info",
-                        scope: state.scope.clone(),
-                        message: format!("Still working: {}", state.message),
-                    },
-                );
-            }
-        });
-        Self {
-            app,
-            heartbeat,
-            heartbeat_running,
-        }
-    }
-
     fn info(&self, scope: impl Into<String>, message: impl Into<String>) {
-        let scope = scope.into();
-        let message = message.into();
-        if let Ok(mut state) = self.heartbeat.lock() {
-            state.scope = scope.clone();
-            state.message = message.clone();
-            state.updated_at = Instant::now();
-            state.emitted_at = Instant::now();
-        }
         let _ = self.app.emit(
             "setup-log",
             SetupLogPayload {
                 level: "info",
-                scope,
-                message,
+                scope: scope.into(),
+                message: message.into(),
             },
         );
     }
@@ -624,101 +442,10 @@ impl TauriOperationSink {
     }
 }
 
-impl Drop for TauriOperationSink {
-    fn drop(&mut self) {
-        self.heartbeat_running.store(false, Ordering::Relaxed);
-    }
-}
-
 impl OperationSink for TauriOperationSink {
     fn emit(&mut self, event: OrchestrationEvent) {
         self.info(event.step_id, event.message);
     }
-}
-
-#[tauri::command]
-async fn append_app_log_entries(entries: Vec<AppLogEntry>) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = app_log_file_path().map_err(command_error_message)?;
-        append_app_log_entries_inner(&path, &entries).map_err(command_error_message)?;
-        Ok(path.to_string_lossy().to_string())
-    })
-    .await
-    .map_err(|err| format!("Log writer worker failed: {err}"))?
-}
-
-#[tauri::command]
-async fn open_app_log_file() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let path = app_log_file_path().map_err(command_error_message)?;
-        if !path.is_file() {
-            append_app_log_entries_inner(&path, &[]).map_err(command_error_message)?;
-        }
-        Command::new("notepad.exe")
-            .arg(&path)
-            .spawn()
-            .map_err(|err| format!("Failed to open app log file: {err}"))?;
-        Ok(path.to_string_lossy().to_string())
-    })
-    .await
-    .map_err(|err| format!("Log open worker failed: {err}"))?
-}
-
-fn app_log_file_path() -> CommandResult<PathBuf> {
-    let root = if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-        PathBuf::from(local_app_data).join("DuneDedicatedServerManager")
-    } else {
-        std::env::current_dir()
-            .map_err(|err| {
-                dune_manager_core::errors::failure(format!(
-                    "Failed to resolve current directory: {err}"
-                ))
-            })?
-            .join(".dune-manager")
-    };
-    Ok(root.join("logs").join("dune-manager.log"))
-}
-
-fn append_app_log_entries_inner(path: &Path, entries: &[AppLogEntry]) -> CommandResult<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            dune_manager_core::errors::failure(format!(
-                "Failed to create app log directory {}: {err}",
-                parent.display()
-            ))
-        })?;
-    }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|err| {
-            dune_manager_core::errors::failure(format!(
-                "Failed to open app log file {}: {err}",
-                path.display()
-            ))
-        })?;
-    for entry in entries {
-        let timestamp = one_line_log_field(&entry.timestamp);
-        let level = one_line_log_field(&entry.level).to_ascii_uppercase();
-        let scope = one_line_log_field(&entry.scope);
-        let message = redact_text(&one_line_log_field(&entry.message));
-        writeln!(file, "[{timestamp}] {level:<5} {scope}: {message}").map_err(|err| {
-            dune_manager_core::errors::failure(format!(
-                "Failed to write app log file {}: {err}",
-                path.display()
-            ))
-        })?;
-    }
-    Ok(())
-}
-
-fn one_line_log_field(value: &str) -> String {
-    value
-        .replace('\r', " ")
-        .replace('\n', " ")
-        .trim()
-        .to_string()
 }
 
 #[tauri::command]
@@ -738,7 +465,7 @@ async fn server_package_status() -> Result<ServerPackageStatus, String> {
 async fn update_server_package(app: tauri::AppHandle) -> Result<ServerPackageStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let sink = TauriOperationSink::new(worker_app);
+        let sink = TauriOperationSink { app: worker_app };
         sink.info("server-package", "Installing or validating SteamCMD.");
         let toolchain = Toolchain::from_default_root().map_err(command_error_message)?;
         toolchain
@@ -774,7 +501,7 @@ async fn start_full_setup(
 ) -> Result<SetupRunResult, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink::new(worker_app);
+        let mut sink = TauriOperationSink { app: worker_app };
         sink.info("setup", "Starting full setup workflow.");
         match run_full_setup(request, &mut sink) {
             Ok(result) => {
@@ -822,202 +549,36 @@ async fn preflight_remote_ubuntu(
 }
 
 #[tauri::command]
-async fn detect_proxmox(request: ProxmoxConnectionRequest) -> Result<ProxmoxDetection, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let client = proxmox_client_from_connection(&request)?;
-        client.detect().map_err(command_error_message)
-    })
-    .await
-    .map_err(|err| format!("Proxmox detection worker failed: {err}"))?
-}
-
-#[tauri::command]
-async fn trust_proxmox_certificate(
-    request: ProxmoxTrustRequest,
-) -> Result<ProxmoxTrustResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        if request.host_url.trim().is_empty() {
-            return Err("Proxmox URL is required.".to_string());
-        }
-        if request.certificate_sha256.trim().is_empty() {
-            return Err("Certificate fingerprint is required.".to_string());
-        }
-        Ok(ProxmoxTrustResult {
-            host_url: request.host_url.trim().to_string(),
-            certificate_sha256: request.certificate_sha256.trim().to_ascii_lowercase(),
-        })
-    })
-    .await
-    .map_err(|err| format!("Proxmox trust worker failed: {err}"))?
-}
-
-#[tauri::command]
-async fn probe_proxmox_guest_network(
-    request: ProxmoxGuestNetworkProbeRequest,
-) -> Result<ProxmoxGuestNetworkProbeResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let temporary_ip = request.temporary_dhcp_ip.trim().replace(",", ".");
-        if temporary_ip.is_empty() {
-            return Err("Temporary Proxmox DHCP IP is required.".to_string());
-        }
-        if temporary_ip.parse::<std::net::Ipv4Addr>().is_err() {
-            return Err(format!(
-                "The provided temporary IP address '{}' is not a valid IPv4 address.",
-                request.temporary_dhcp_ip.trim()
-            ));
-        }
-
-        let toolchain = Toolchain::from_default_root().map_err(|err| err.message)?;
-        toolchain
-            .install(ManagedTool::OpenSsh, false, None)
-            .map_err(|err| err.message)?;
-        let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
-        let server_package_dir = default_server_package_dir().map_err(|err| err.message)?;
-        let ssh_key_path = validate_guest_ssh_key_path(&request.ssh_key_path)?;
-        ensure_generated_guest_key_installed(
-            &server_package_dir,
-            &ssh_path,
-            &ssh_key_path,
-            &temporary_ip,
-            None,
-        )
-        .map_err(command_error_message)?;
-        let runner = OpenSshRunner::new(OpenSshTarget::new(
-            ssh_path,
-            ssh_key_path,
-            "dune",
-            temporary_ip.clone(),
-        ));
-        let output = runner
-            .run_script(
-                r#"
-set -eu
-iface="$(ip route show default 2>/dev/null | awk 'NR==1 { for (i=1;i<=NF;i++) if ($i=="dev") { print $(i+1); exit } }')"
-gateway="$(ip route show default 2>/dev/null | awk 'NR==1 { for (i=1;i<=NF;i++) if ($i=="via") { print $(i+1); exit } }')"
-if [ -n "$iface" ]; then
-  address_cidr="$(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk 'NR==1 { print $4; exit }')"
-else
-  address_cidr="$(ip -4 -o addr show scope global 2>/dev/null | awk 'NR==1 { print $4; exit }')"
-fi
-static_ip="${address_cidr%%/*}"
-prefix_length=""
-if [ "$static_ip" != "$address_cidr" ]; then
-  prefix_length="${address_cidr#*/}"
-fi
-dns="$(awk '/^nameserver[[:space:]]+[0-9.]+/ { print $2; exit }' /etc/resolv.conf 2>/dev/null || true)"
-printf 'interface=%s\n' "$iface"
-printf 'addressCidr=%s\n' "$address_cidr"
-printf 'staticIp=%s\n' "$static_ip"
-printf 'prefixLength=%s\n' "$prefix_length"
-printf 'gateway=%s\n' "$gateway"
-printf 'dns=%s\n' "$dns"
-"#,
-            )
-            .map_err(command_error_message)?;
-        let values = parse_key_value_lines(&output);
-        let clean = |key: &str| {
-            values
-                .get(key)
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        };
-        let prefix_length = clean("prefixLength").and_then(|value| value.parse::<u8>().ok());
-        Ok(ProxmoxGuestNetworkProbeResult {
-            temporary_ip,
-            interface: clean("interface"),
-            address_cidr: clean("addressCidr"),
-            static_ip: clean("staticIp"),
-            prefix_length,
-            gateway: clean("gateway"),
-            dns: clean("dns"),
-        })
-    })
-    .await
-    .map_err(|err| format!("Proxmox guest network probe worker failed: {err}"))?
-}
-
-#[tauri::command]
-async fn proxmox_vm_status(request: ProxmoxVmActionRequest) -> Result<ProxmoxVmStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let connection = proxmox_connection_from_vm_action(&request);
-        let client = proxmox_client_from_connection(&connection)?;
-        client
-            .vm_status(&request.node, request.vmid)
-            .map_err(command_error_message)
-    })
-    .await
-    .map_err(|err| format!("Proxmox VM status worker failed: {err}"))?
-}
-
-#[tauri::command]
-async fn start_proxmox_vm(request: ProxmoxVmActionRequest) -> Result<ProxmoxVmStatus, String> {
-    run_proxmox_vm_action(request, "start").await
-}
-
-#[tauri::command]
-async fn stop_proxmox_vm(request: ProxmoxVmActionRequest) -> Result<ProxmoxVmStatus, String> {
-    run_proxmox_vm_action(request, "stop").await
-}
-
-async fn run_proxmox_vm_action(
-    request: ProxmoxVmActionRequest,
-    action: &'static str,
-) -> Result<ProxmoxVmStatus, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let connection = proxmox_connection_from_vm_action(&request);
-        let client = proxmox_client_from_connection(&connection)?;
-        match action {
-            "start" => {
-                client
-                    .start_vm(&request.node, request.vmid)
-                    .map_err(command_error_message)?;
-            }
-            "stop" => {
-                client
-                    .stop_vm(&request.node, request.vmid)
-                    .map_err(command_error_message)?;
-            }
-            _ => unreachable!(),
-        }
-        client
-            .vm_status(&request.node, request.vmid)
-            .map_err(command_error_message)
-    })
-    .await
-    .map_err(|err| format!("Proxmox VM action worker failed: {err}"))?
-}
-
-#[tauri::command]
-async fn start_proxmox_alpine_setup(
+async fn start_remote_ubuntu_setup(
     app: tauri::AppHandle,
-    request: ProxmoxAlpineSetupRequest,
-) -> Result<ProxmoxAlpineSetupResult, String> {
+    request: RemoteSetupRequest,
+) -> Result<RemoteSetupRunResult, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink::new(worker_app);
+        let mut sink = TauriOperationSink { app: worker_app };
         sink.warn(
-            "proxmox",
-            "Proxmox setup creates a VM, uploads an imported disk image, and bootstraps the Alpine guest over SSH.",
+            "ubuntu",
+            "Remote Ubuntu setup can modify packages, users, k3s, firewall state, and server files on the target host.",
         );
-        match run_proxmox_alpine_setup(request, &mut sink) {
+        match run_remote_ubuntu_setup(request, &mut sink) {
             Ok(result) => {
-                sink.info("proxmox", "Proxmox Alpine setup completed.");
+                sink.info("ubuntu", "Remote Ubuntu setup completed.");
                 Ok(result)
             }
             Err(err) => {
-                sink.error("proxmox", err.message.clone());
+                sink.error("ubuntu", err.message.clone());
                 if !err.stderr.trim().is_empty() {
                     sink.error("stderr", err.stderr);
                 }
                 if !err.stdout.trim().is_empty() {
                     sink.error("stdout", err.stdout);
                 }
-                Err(err.message)
+                Err("Remote Ubuntu setup failed; see setup log for details.".to_string())
             }
         }
     })
     .await
-    .map_err(|err| format!("Proxmox Alpine setup worker failed: {err}"))?
+    .map_err(|err| format!("Remote Ubuntu setup worker failed: {err}"))?
 }
 
 #[tauri::command]
@@ -1046,35 +607,6 @@ async fn detect_remote_ubuntu_servers(
     })
     .await
     .map_err(|err| format!("Remote server detection worker failed: {err}"))?
-}
-
-#[tauri::command]
-async fn detect_remote_alpine_servers(
-    request: RemoteConnectionRequest,
-) -> Result<Vec<RemoteServerRecord>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let request = RemoteConnectionRequest {
-            server_type: Some("alpine".to_string()),
-            user: Some("dune".to_string()),
-            key_path: None,
-            ..request
-        };
-        let runner = runner_for_remote_kind(
-            request.server_type.as_deref(),
-            request.host.clone(),
-            "dune".to_string(),
-            None,
-        )?;
-        let value = runner
-            .run_json(
-                "sudo kubectl get battlegroups -A -o json",
-                "remote alpine guest battlegroups",
-            )
-            .map_err(command_error_message)?;
-        Ok(remote_records_from_battlegroups(&request, &value))
-    })
-    .await
-    .map_err(|err| format!("Remote Alpine guest detection worker failed: {err}"))?
 }
 
 #[tauri::command]
@@ -1313,7 +845,7 @@ async fn update_local_hyperv_battlegroup(
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink::new(worker_app);
+        let mut sink = TauriOperationSink { app: worker_app };
         sink.info("bg.update", "Checking local Hyper-V battlegroup update.");
         let runner = local_hyperv_runner(&request.vm_name, request.host.as_deref())?;
         run_battlegroup_update_with_runner(
@@ -1335,7 +867,7 @@ async fn update_remote_battlegroup(
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink::new(worker_app);
+        let mut sink = TauriOperationSink { app: worker_app };
         sink.info("bg.update", "Checking remote battlegroup update.");
         let runner = runner_for_remote_kind(
             request.server_type.as_deref(),
@@ -1362,7 +894,7 @@ async fn run_local_hyperv_action(
     action: &'static str,
 ) -> Result<DuneVmCandidate, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink::new(app);
+        let mut sink = TauriOperationSink { app };
         let provider = StrictPowerShellHyperV::new();
         let lifecycle = HyperVVmLifecycleOrchestrator::new(&provider);
         match action {
@@ -1387,7 +919,7 @@ async fn run_local_hyperv_battlegroup_action(
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink::new(worker_app);
+        let mut sink = TauriOperationSink { app: worker_app };
         sink.info("bg.check", "Checking local Hyper-V battlegroup state.");
         let runner = local_hyperv_runner(&request.vm_name, request.host.as_deref())?;
         run_battlegroup_action_with_runner(
@@ -1409,7 +941,7 @@ async fn run_remote_battlegroup_action(
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink::new(worker_app);
+        let mut sink = TauriOperationSink { app: worker_app };
         sink.info("bg.check", "Checking remote battlegroup state.");
         let runner = runner_for_remote_kind(
             request.server_type.as_deref(),
@@ -1485,6 +1017,61 @@ fn payload_update_mode(server_type: Option<&str>) -> PayloadUpdateMode {
     } else {
         PayloadUpdateMode::GenericGuest
     }
+}
+
+fn wait_for_battlegroup_fully_stopped(
+    kubernetes: &StructuredKubectl<OpenSshRunner>,
+    battlegroup: &BattlegroupRef,
+    timeout_seconds: u64,
+    sink: &mut TauriOperationSink,
+) -> CommandResult<()> {
+    sink.info("bg.update", "Verifying BattleGroup is fully stopped.");
+    let mut elapsed = 0;
+    let mut last = None;
+    while elapsed <= timeout_seconds {
+        let state = kubernetes.battlegroup_state(&battlegroup.namespace, &battlegroup.name)?;
+        if is_fully_stopped_state(&state) {
+            return Ok(());
+        }
+        last = Some(state);
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        elapsed += 5;
+    }
+    let detail = last
+        .map(|state| {
+            format!(
+                "last phase={}, stop={}, serverGroup={}, director={}",
+                state.phase, state.stop, state.server_group_phase, state.director_phase
+            )
+        })
+        .unwrap_or_else(|| "no BattleGroup state was read".to_string());
+    Err(dune_manager_core::errors::failure(format!(
+        "BattleGroup did not fully stop within {timeout_seconds}s ({detail})"
+    )))
+}
+
+fn is_fully_stopped_state(state: &dune_manager_core::orchestration::BattlegroupState) -> bool {
+    state.stop
+        && stoppedish_phase(&state.phase)
+        && stoppedish_phase(&state.server_group_phase)
+        && !director_running_phase(&state.director_phase)
+}
+
+fn stoppedish_phase(phase: &str) -> bool {
+    let normalized = phase.trim().to_ascii_lowercase();
+    normalized.is_empty()
+        || matches!(
+            normalized.as_str(),
+            "stopped" | "suspended" | "notready" | "not_ready" | "unknown"
+        )
+}
+
+fn director_running_phase(phase: &str) -> bool {
+    let normalized = phase.trim().to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "running" | "ready" | "healthy" | "available" | "reconciling"
+    )
 }
 
 fn run_battlegroup_update_with_runner(
@@ -1579,128 +1166,6 @@ fn verify_guest_payload_build(
     }
 }
 
-fn install_alpine_qemu_guest_agent(
-    runner: &OpenSshRunner,
-    sink: &mut TauriOperationSink,
-) -> CommandResult<()> {
-    sink.info(
-        "guest.qemu-agent",
-        "Installing or validating QEMU guest agent.",
-    );
-    let output = runner.run_script(
-        r#"
-set -eu
-if command -v apk >/dev/null 2>&1; then
-  sudo apk update >/dev/null
-  sudo apk add --no-cache qemu-guest-agent >/dev/null
-  sudo modprobe virtio_console >/dev/null 2>&1 || true
-  sudo rc-update add qemu-guest-agent default >/dev/null
-  sudo rc-service qemu-guest-agent restart >/dev/null 2>&1 || sudo rc-service qemu-guest-agent start >/dev/null
-  echo "installed=apk"
-elif command -v qemu-ga >/dev/null 2>&1 || command -v qemu-guest-agent >/dev/null 2>&1; then
-  echo "installed=present"
-else
-  echo "skipped=no_supported_package_manager"
-fi
-"#,
-    )?;
-    if output.contains("skipped=no_supported_package_manager") {
-        sink.warn(
-            "guest.qemu-agent",
-            "QEMU guest agent could not be installed automatically because the guest does not expose a supported package manager; continuing without it.",
-        );
-    }
-    Ok(())
-}
-
-fn wait_for_battlegroup_fully_stopped(
-    kubernetes: &StructuredKubectl<OpenSshRunner>,
-    battlegroup: &BattlegroupRef,
-    timeout_seconds: u64,
-    sink: &mut TauriOperationSink,
-) -> CommandResult<()> {
-    sink.info("bg.update", "Verifying BattleGroup is fully stopped.");
-    let mut elapsed = 0;
-    let mut last = None;
-    while elapsed <= timeout_seconds {
-        let state = kubernetes.battlegroup_state(&battlegroup.namespace, &battlegroup.name)?;
-        if is_fully_stopped_state(&state) {
-            return Ok(());
-        }
-        last = Some(state);
-        std::thread::sleep(std::time::Duration::from_secs(5));
-        elapsed += 5;
-    }
-    let detail = last
-        .map(|state| {
-            format!(
-                "last phase={}, stop={}, serverGroup={}, director={}",
-                state.phase, state.stop, state.server_group_phase, state.director_phase
-            )
-        })
-        .unwrap_or_else(|| "no BattleGroup state was read".to_string());
-    Err(dune_manager_core::errors::failure(format!(
-        "BattleGroup did not fully stop within {timeout_seconds}s ({detail})"
-    )))
-}
-
-fn is_fully_stopped_state(state: &dune_manager_core::orchestration::BattlegroupState) -> bool {
-    state.stop
-        && stoppedish_phase(&state.phase)
-        && stoppedish_phase(&state.server_group_phase)
-        && !director_running_phase(&state.director_phase)
-}
-
-fn stoppedish_phase(phase: &str) -> bool {
-    let normalized = phase.trim().to_ascii_lowercase();
-    normalized.is_empty()
-        || matches!(
-            normalized.as_str(),
-            "stopped" | "suspended" | "notready" | "not_ready" | "unknown"
-        )
-}
-
-fn director_running_phase(phase: &str) -> bool {
-    let normalized = phase.trim().to_ascii_lowercase();
-    matches!(
-        normalized.as_str(),
-        "running" | "ready" | "healthy" | "available" | "reconciling"
-    )
-}
-
-#[tauri::command]
-async fn start_remote_ubuntu_setup(
-    app: tauri::AppHandle,
-    request: RemoteSetupRequest,
-) -> Result<RemoteSetupRunResult, String> {
-    let worker_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink::new(worker_app);
-        sink.warn(
-            "ubuntu",
-            "Remote Ubuntu setup can modify packages, users, k3s, firewall state, and server files on the target host.",
-        );
-        match run_remote_ubuntu_setup(request, &mut sink) {
-            Ok(result) => {
-                sink.info("ubuntu", "Remote Ubuntu setup completed.");
-                Ok(result)
-            }
-            Err(err) => {
-                sink.error("ubuntu", err.message.clone());
-                if !err.stderr.trim().is_empty() {
-                    sink.error("stderr", err.stderr);
-                }
-                if !err.stdout.trim().is_empty() {
-                    sink.error("stdout", err.stdout);
-                }
-                Err("Remote Ubuntu setup failed; see setup log for details.".to_string())
-            }
-        }
-    })
-    .await
-    .map_err(|err| format!("Remote Ubuntu setup worker failed: {err}"))?
-}
-
 #[tauri::command]
 async fn rollback_setup(
     app: tauri::AppHandle,
@@ -1708,7 +1173,7 @@ async fn rollback_setup(
 ) -> Result<RollbackResult, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let sink = TauriOperationSink::new(worker_app);
+        let sink = TauriOperationSink { app: worker_app };
         sink.warn("rollback", "Rolling back setup artifacts.");
         rollback_setup_inner(request, &sink).map_err(|err| {
             sink.error("rollback", err.message.clone());
@@ -1782,19 +1247,47 @@ fn run_full_setup(
     let toolchain = Toolchain::from_default_root()?;
     let server_package_dir = default_server_package_dir()?;
     let provider = StrictPowerShellHyperV::new();
-    let vm_destination = PathBuf::from(&request.vm_destination);
-
-    sink.info("setup", "Checking VM destination and existing VM state.");
-    if destination_has_vm_artifacts(&vm_destination) {
+    let vendor_vm_name = "dune-awakening";
+    if !request.vm_name.eq_ignore_ascii_case(vendor_vm_name) {
         return Err(dune_manager_core::errors::failure(format!(
-            "VM Location already contains VM files: {}. Choose another destination or remove the existing VM files first.",
-            vm_destination.display()
+            "Vendor Hyper-V setup creates a VM named '{vendor_vm_name}'. Reset the VM name to '{vendor_vm_name}' before starting setup."
         )));
     }
-    if provider.get_vm(&request.vm_name)?.is_some() {
+
+    let final_memory_gb = request.memory_gb.max(1);
+    let vendor_memory_gb = vendor_bootstrap_memory_gb(final_memory_gb);
+    let vendor_request = VendorHyperVSetupRequest {
+        vm_destination: PathBuf::from(&request.vm_destination),
+        adapter_name: request.adapter_name.clone(),
+        memory_gb: vendor_memory_gb,
+        static_network: request.network_mode.eq_ignore_ascii_case("static"),
+        static_ip: request.static_ip.clone(),
+        gateway: request.gateway.clone(),
+        dns: request.dns.clone(),
+        player_ip: request.player_ip.clone(),
+        world_name: request.world_name.clone(),
+        region: request.region.clone(),
+        self_host_token: request.self_host_token.clone(),
+        enable_swap: request.enable_swap,
+    };
+    let selected_drive = vendor_request
+        .preferred_drive_name()
+        .unwrap_or_else(|| "C".to_string());
+    let vendor_destination = PathBuf::from(format!("{selected_drive}:\\DuneAwakeningServer"));
+
+    sink.info(
+        "setup",
+        "Checking vendor VM destination and existing VM state.",
+    );
+    if destination_has_vm_artifacts(&vendor_destination) {
         return Err(dune_manager_core::errors::failure(format!(
-            "A Hyper-V VM named '{}' already exists. Remove it before setup.",
-            request.vm_name
+            "Vendor VM location already contains VM files: {}. Remove the existing VM files first.",
+            vendor_destination.display()
+        )));
+    }
+    if provider.get_vm(vendor_vm_name)?.is_some() {
+        return Err(dune_manager_core::errors::failure(format!(
+            "A Hyper-V VM named '{vendor_vm_name}' already exists. Remove it before setup."
         )));
     }
 
@@ -1802,169 +1295,178 @@ fn run_full_setup(
     toolchain.install(ManagedTool::SteamCmd, false, None)?;
     sink.info("tools", "Installing or validating OpenSSH.");
     toolchain.install(ManagedTool::OpenSsh, false, None)?;
-
     sink.info("steam", "Installing or validating the server package.");
     toolchain.install_server_package(&server_package_dir)?;
+    sink.info(
+        "vendor.hyperv",
+        format!(
+            "Vendor setup owns disk sizing and CPU/switch defaults; app requested disk={}GB, cpu={}, switch='{}'.",
+            request.disk_gb, request.processor_count, request.switch_name
+        ),
+    );
 
-    sink.info("ssh", "Preparing the vendor VM SSH key.");
-    let ssh_key = prepare_vendor_ssh_key(&server_package_dir)?;
-    let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
-
-    let environment = detect_setup_environment()?;
-    let adapter = environment
-        .network_adapters
-        .iter()
-        .find(|adapter| adapter.name == request.adapter_name)
-        .ok_or_else(|| {
-            dune_manager_core::errors::failure(
-                "Selected network adapter was not found in the current host environment",
-            )
-        })?;
-
-    let guest_network = if request.network_mode.eq_ignore_ascii_case("static") {
-        let address_cidr = format!("{}/{}", request.static_ip.trim(), adapter.prefix_length);
-        GuestNetworkPlan::Static(GuestNetworkConfig {
-            interface: "eth0".to_string(),
-            address_cidr,
-            gateway: request.gateway.clone(),
-            dns: request.dns.clone(),
-        })
-    } else {
-        GuestNetworkPlan::Dhcp
-    };
-
-    let guest_plan = GuestBootstrapPlan::from_self_host_token(
-        request.player_ip.clone(),
-        request.world_name.clone(),
-        request.region.clone(),
-        request.self_host_token.clone(),
-    )?;
-
-    let vm_setup = HyperVVmSetupOrchestrator::new(&provider, &provider);
-    let vm = vm_setup.import_and_prepare_vm(
-        &HyperVVmSetupRequest {
-            install_path: server_package_dir.clone(),
-            vm_name: request.vm_name.clone(),
-            destination_path: vm_destination,
-            switch_name: request.switch_name.clone(),
-            adapter_name: request.adapter_name.clone(),
-            memory: MemoryProfile::CustomBytes(
-                request.memory_gb.saturating_mul(1024 * 1024 * 1024),
+    sink.info(
+        "vendor.hyperv",
+        "Starting vendor Hyper-V initial setup through stdio.",
+    );
+    if vendor_memory_gb != final_memory_gb {
+        sink.info(
+            "vendor.hyperv",
+            format!(
+                "Vendor setup will bootstrap with the {vendor_memory_gb} GB memory preset, then resize the VM to {final_memory_gb} GB."
             ),
-            processor_count: request.processor_count,
-            replace_existing_vm: false,
-            clear_destination: false,
-            disk_size_bytes: request.disk_gb.saturating_mul(1024 * 1024 * 1024),
-        },
+        );
+    }
+    let vendor_result =
+        VendorHyperVSetupRunner::new(&server_package_dir).run(&vendor_request, sink)?;
+    sink.info(
+        "vendor.hyperv",
+        format!(
+            "Vendor setup completed using script hash {}.",
+            vendor_result.script_sha256
+        ),
+    );
+
+    resize_vendor_vm_memory_if_needed(
+        &provider,
+        vendor_vm_name,
+        vendor_memory_gb,
+        final_memory_gb,
         sink,
     )?;
 
-    sink.info(
-        "hyperv.wait-for-ip",
-        "Waiting for VM IPv4 address from DHCP.",
-    );
-    let first_ip = wait_for_vm_ipv4(&provider, &vm.vm_name, 180)?;
-    let mut guest = OpenSshGuestProvider::new(ssh_path.clone(), ssh_key.clone(), "dune");
-    sink.info("guest.wait-for-ssh", "Waiting for guest SSH.");
-    guest.wait_for_ssh(&first_ip, 180)?;
-
-    sink.info(
-        "ssh.rotate-key",
-        "Generating and installing a fresh VM SSH key.",
-    );
-    let rotation = rotate_vendor_guest_ssh_key_for_vm(
-        &server_package_dir,
-        &ssh_path,
-        &ssh_key,
-        &first_ip,
-        &vm.vm_name,
-    )?;
-    if rotation.rotated {
-        sink.info("ssh.rotate-key", rotation.message.clone());
-        guest = OpenSshGuestProvider::new(ssh_path.clone(), rotation.key_path.clone(), "dune");
-        guest.wait_for_ssh(&first_ip, 180)?;
-    } else {
-        sink.warn("ssh.rotate-key", rotation.message.clone());
-    }
-
-    let guest_ip = match &guest_network {
-        GuestNetworkPlan::Dhcp => first_ip,
-        GuestNetworkPlan::Static(config) => {
-            sink.info(
-                "guest.apply-static-network",
-                "Applying static guest network.",
-            );
-            guest.apply_static_network(&first_ip, config)?;
-            let static_ip = config
-                .address_cidr
-                .split_once('/')
-                .map(|(ip, _)| ip.to_string())
-                .unwrap_or_else(|| config.address_cidr.clone());
-            guest.wait_for_ssh(&static_ip, 180)?;
-            static_ip
-        }
-    };
-
-    let bootstrap_runner = OpenSshRunner::new(OpenSshTarget::new(
-        ssh_path,
-        rotation.key_path,
-        "dune",
-        guest_ip.clone(),
-    ));
-
-    let player_ip = if request.player_ip.trim().is_empty() {
-        let candidates = detect_player_address_candidates(&guest, &guest_ip, sink)?;
-        candidates
-            .public_ip
-            .unwrap_or_else(|| candidates.guest_lan_ip.clone())
-    } else {
-        request.player_ip.clone()
-    };
-    sink.info(
-        "guest.write-player-settings",
-        "Writing player-facing server address.",
-    );
-    guest.write_player_settings(&guest_ip, &player_ip)?;
-
-    let bootstrap =
-        GuestBootstrapOrchestrator::new(SshGuestBootstrapProvider::new(bootstrap_runner.clone()))
-            .run(&guest_plan, sink)?;
-
-    wait_for_database_ready(&bootstrap_runner, &bootstrap.namespace, 900, sink)?;
+    let runner = wait_for_local_battlegroup_runner(vendor_vm_name, sink)?;
+    let record = detect_local_battlegroup_record(&runner, vendor_vm_name, sink)?;
+    wait_for_database_ready(&runner, &record.namespace, 900, sink)?;
 
     let layout_changed = apply_instance_layout(
         &request,
-        &bootstrap.namespace,
-        &bootstrap.battlegroup_name,
-        &bootstrap_runner,
+        &record.namespace,
+        &record.battlegroup_name,
+        &runner,
         sink,
     )?;
-
     if layout_changed {
-        wait_for_database_ready(&bootstrap_runner, &bootstrap.namespace, 900, sink)?;
+        wait_for_database_ready(&runner, &record.namespace, 900, sink)?;
     }
 
     if request.enable_swap {
         sink.info("guest-swap", "Enabling experimental swap profile.");
-        let mut swap = ExperimentalSwapRequest::new(
-            bootstrap.namespace.clone(),
-            bootstrap.battlegroup_name.clone(),
-        );
+        let mut swap =
+            ExperimentalSwapRequest::new(record.namespace.clone(), record.battlegroup_name.clone());
         swap.restart_k3s = true;
-        ExperimentalSwapOrchestrator::new(bootstrap_runner.clone()).enable(&swap, sink)?;
+        ExperimentalSwapOrchestrator::new(runner.clone()).enable(&swap, sink)?;
     }
 
     sink.info(
         "setup",
-        "Initial setup complete. The battlegroup is provisioned but not started.",
+        "Vendor setup complete. The battlegroup is provisioned but not started.",
     );
     Ok(SetupRunResult {
-        vm_name: vm.vm_name,
-        namespace: bootstrap.namespace,
-        battlegroup_name: bootstrap.battlegroup_name,
-        world_unique_name: bootstrap.world_unique_name,
+        vm_name: vendor_vm_name.to_string(),
+        namespace: record.namespace,
+        battlegroup_name: record.battlegroup_name,
+        world_unique_name: record.world_unique_name,
         director_node_port: None,
     })
+}
+
+fn vendor_bootstrap_memory_gb(final_memory_gb: u64) -> u64 {
+    [40_u64, 30, 20, 10]
+        .into_iter()
+        .find(|preset| *preset <= final_memory_gb)
+        .unwrap_or(10)
+}
+
+fn resize_vendor_vm_memory_if_needed(
+    provider: &StrictPowerShellHyperV,
+    vm_name: &str,
+    vendor_memory_gb: u64,
+    final_memory_gb: u64,
+    sink: &TauriOperationSink,
+) -> CommandResult<()> {
+    if vendor_memory_gb == final_memory_gb {
+        return Ok(());
+    }
+
+    let final_memory_bytes = final_memory_gb
+        .checked_mul(1024 * 1024 * 1024)
+        .ok_or_else(|| dune_manager_core::errors::failure("Requested VM memory is too large."))?;
+    sink.info(
+        "vendor.hyperv",
+        format!(
+            "Resizing VM memory from the vendor {vendor_memory_gb} GB preset to {final_memory_gb} GB."
+        ),
+    );
+    provider.stop_vm(vm_name, false)?;
+    provider.set_startup_memory(vm_name, final_memory_bytes)?;
+    provider.start_vm(vm_name)?;
+    sink.info(
+        "vendor.hyperv",
+        "VM memory resize complete; waiting for the guest to come back online.",
+    );
+    Ok(())
+}
+
+fn wait_for_local_battlegroup_runner(
+    vm_name: &str,
+    sink: &TauriOperationSink,
+) -> CommandResult<OpenSshRunner> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    let mut last_error = "VM is not reachable yet".to_string();
+    while std::time::Instant::now() < deadline {
+        match local_hyperv_runner(vm_name, None) {
+            Ok(runner) => return Ok(runner),
+            Err(err) => {
+                last_error = err;
+                sink.info(
+                    "local.hyperv.discover",
+                    "Waiting for the vendor-created VM to become reachable.",
+                );
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+        }
+    }
+    Err(dune_manager_core::errors::failure(format!(
+        "Vendor setup finished, but the local Hyper-V VM could not be reached: {last_error}"
+    )))
+}
+
+fn detect_local_battlegroup_record(
+    runner: &OpenSshRunner,
+    vm_name: &str,
+    sink: &TauriOperationSink,
+) -> CommandResult<RemoteServerRecord> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    let mut last_error = "No Dune battlegroups were detected inside the VM.".to_string();
+    while std::time::Instant::now() < deadline {
+        match runner.run_json(
+            "sudo kubectl get battlegroups -A -o json",
+            "local hyperv battlegroups",
+        ) {
+            Ok(value) => {
+                let connection = RemoteConnectionRequest {
+                    host: vm_name.to_string(),
+                    key_path: None,
+                    server_type: Some("hyperv".to_string()),
+                    user: Some("dune".to_string()),
+                };
+                if let Some(record) = remote_records_from_battlegroups(&connection, &value)
+                    .into_iter()
+                    .next()
+                {
+                    return Ok(record);
+                }
+            }
+            Err(err) => last_error = command_error_message(err),
+        }
+        sink.info(
+            "local.hyperv.discover",
+            "Waiting for vendor-created BattleGroup resources.",
+        );
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+    Err(dune_manager_core::errors::failure(last_error))
 }
 
 fn run_remote_ubuntu_setup(
@@ -1988,15 +1490,13 @@ fn run_remote_ubuntu_setup(
     let preflight = ubuntu.preflight()?;
     if !preflight.passwordless_sudo && preflight.uid != 0 {
         return Err(dune_manager_core::errors::failure(
-            "Remote setup needs root or a sudo user that can run sudo without a password prompt. Add a NOPASSWD sudoers rule for this setup user, then run detection again.",
+            "Remote setup requires root login or passwordless sudo.",
         ));
     }
 
     ubuntu.prepare_host(&prepare, sink)?;
-    let mut ubuntu_swap_size_gib = None;
     if request.enable_swap {
         let swap_size_gib = recommended_ubuntu_swap_gib(&preflight, &request);
-        ubuntu_swap_size_gib = Some(swap_size_gib);
         let required_gib = required_layout_memory_gib(
             request.survival_instances,
             request.deep_desert_pve_instances + request.deep_desert_pvp_instances,
@@ -2041,11 +1541,6 @@ fn run_remote_ubuntu_setup(
         world_unique_name: plan.world_unique_name(),
         self_host_token: plan.self_host_token.clone(),
     };
-    sink.info(
-        "ubuntu.webhooks",
-        "Reconciling operator webhook certificates.",
-    );
-    provider.scale_operator_deployments()?;
     let created = ensure_remote_world(&provider, &runner, &world_request, sink)?;
     sink.info("ubuntu.helper.install", "Installing battlegroup helper.");
     provider.install_battlegroup_helper()?;
@@ -2089,23 +1584,6 @@ fn run_remote_ubuntu_setup(
         &runner,
         sink,
     )?;
-    if let Some(swap_size_gib) = ubuntu_swap_size_gib {
-        let operations = ExperimentalSwapOrchestrator::new(runner.clone())
-            .apply_battlegroup_memory_profile(
-                &LowMemoryBattlegroupProfileRequest::new(
-                    &created.namespace,
-                    &created.battlegroup_name,
-                    swap_size_gib,
-                ),
-                sink,
-            )?;
-        sink.info(
-            "ubuntu.swap.memory-profile",
-            format!(
-                "Applied Ubuntu low-memory BattleGroup profile with {operations} resource patch operations."
-            ),
-        );
-    }
 
     wait_for_database_ready(&runner, &created.namespace, 900, sink)?;
 
@@ -2126,332 +1604,6 @@ fn run_remote_ubuntu_setup(
     })
 }
 
-fn run_proxmox_alpine_setup(
-    request: ProxmoxAlpineSetupRequest,
-    sink: &mut TauriOperationSink,
-) -> CommandResult<ProxmoxAlpineSetupResult> {
-    let connection = ProxmoxConnectionRequest {
-        profile_id: request.profile_id.clone(),
-        host_url: request.host_url.clone(),
-        token_id: request.token_id.clone(),
-        token_secret: request.token_secret.clone(),
-        accepted_certificate_sha256: request.accepted_certificate_sha256.clone(),
-    };
-    let client =
-        proxmox_client_from_connection(&connection).map_err(dune_manager_core::errors::failure)?;
-    let toolchain = Toolchain::from_default_root()?;
-    let server_package_dir = default_server_package_dir()?;
-
-    sink.info("tools", "Installing or validating SteamCMD.");
-    toolchain.install(ManagedTool::SteamCmd, false, None)?;
-    sink.info("tools", "Installing or validating OpenSSH.");
-    toolchain.install(ManagedTool::OpenSsh, false, None)?;
-    sink.info("tools", "Installing or validating qemu-img.");
-    toolchain.install(ManagedTool::QemuImg, false, None)?;
-
-    sink.info("steam", "Installing or validating the server package.");
-    toolchain.install_server_package(&server_package_dir)?;
-    let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
-    let ssh_key = validate_guest_ssh_key_path(&request.ssh_key_path)
-        .map_err(dune_manager_core::errors::failure)?;
-
-    sink.info(
-        "proxmox.image",
-        "Converting vendor VHDX image to cached qcow2.",
-    );
-    let source_vhdx = find_vendor_vhdx(&server_package_dir)?;
-    let conversion = convert_vhdx_to_cached_qcow2(
-        toolchain.status(ManagedTool::QemuImg).executable,
-        source_vhdx,
-        toolchain.root().join("images").join("proxmox"),
-    )?;
-    if conversion.converted_now {
-        sink.info("proxmox.image", "Converted VHDX to qcow2.");
-    } else {
-        sink.info("proxmox.image", "Reusing cached qcow2 conversion.");
-    }
-
-    let mac_address = generated_proxmox_mac(request.vmid);
-    let create_request = ProxmoxCreateVmRequest {
-        node: request.node.clone(),
-        vmid: request.vmid,
-        vm_name: request.vm_name.clone(),
-        vm_storage: request.vm_storage.clone(),
-        import_storage: request.import_storage.clone(),
-        bridge: request.bridge.clone(),
-        mac_address: Some(mac_address.clone()),
-        memory_gb: request.memory_gb,
-        cores: request.processor_count,
-        disk_gb: request.disk_gb,
-        qemu_guest_agent: request.install_qemu_guest_agent,
-    };
-    let vm_exists = client.vm_status(&request.node, request.vmid).is_ok();
-    if !vm_exists {
-        client.create_alpine_vm(&create_request, &conversion.qcow2_path, sink)?;
-    } else {
-        sink.info(
-            "proxmox.vm",
-            format!(
-                "VM {} already exists. Resuming setup from existing VM.",
-                request.vmid
-            ),
-        );
-        validate_and_reconcile_existing_proxmox_vm(&client, &create_request, &mac_address, sink)?;
-        let status = client.vm_status(&request.node, request.vmid)?;
-        if status.status != "running" {
-            sink.info("proxmox.vm", "Starting the existing Proxmox VM.");
-            client.start_vm(&request.node, request.vmid)?;
-        }
-    }
-
-    let first_ip = if let Some(temp_ip) = request
-        .temporary_dhcp_ip
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let cleaned_ip = temp_ip.replace(",", ".");
-        if cleaned_ip.parse::<std::net::Ipv4Addr>().is_err() {
-            return Err(dune_manager_core::errors::failure(format!(
-                "The provided temporary IP address '{}' is not a valid IPv4 address.",
-                temp_ip
-            )));
-        }
-        sink.info(
-            "proxmox.network",
-            format!("Using user-provided temporary IP {cleaned_ip} for SSH bootstrap."),
-        );
-        cleaned_ip
-    } else {
-        return Err(dune_manager_core::errors::failure(
-            "Temporary Proxmox DHCP IP is required. Please provide the temporary IP from the Proxmox Console or router leases.",
-        ));
-    };
-    sink.info(
-        "ssh",
-        format!("Installing and validating generated guest SSH key at {first_ip}."),
-    );
-    wait_for_generated_guest_key(
-        &server_package_dir,
-        &ssh_path,
-        &ssh_key,
-        &first_ip,
-        180,
-        sink,
-    )?;
-
-    let guest = OpenSshGuestProvider::new(ssh_path.clone(), ssh_key.clone(), "dune");
-
-    let mut bootstrap_ip = first_ip.clone();
-    if let Some(static_ip) = request
-        .static_ip
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let gateway = request
-            .gateway
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                dune_manager_core::errors::failure("Static guest gateway is required")
-            })?;
-        let dns = request
-            .dns
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("1.1.1.1");
-        let prefix = request
-            .bridge_cidr
-            .as_deref()
-            .and_then(cidr_prefix)
-            .unwrap_or(24);
-        sink.info(
-            "guest-network",
-            "Applying static guest network using the configured guest IP.",
-        );
-        guest.apply_static_network(
-            &first_ip,
-            &GuestNetworkConfig {
-                interface: "eth0".to_string(),
-                address_cidr: format!("{static_ip}/{prefix}"),
-                gateway: gateway.to_string(),
-                dns: dns.to_string(),
-            },
-        )?;
-        bootstrap_ip = static_ip.to_string();
-        std::thread::sleep(std::time::Duration::from_secs(6));
-        guest.wait_for_ssh(&bootstrap_ip, 180)?;
-    }
-
-    let plan = GuestBootstrapPlan::from_self_host_token(
-        request.player_ip.clone(),
-        request.world_name.clone(),
-        request.region.clone(),
-        request.self_host_token.clone(),
-    )?;
-    plan.validate()?;
-    guest.write_player_settings(&bootstrap_ip, &plan.player_ip)?;
-    let runner = OpenSshRunner::new(OpenSshTarget::new(
-        ssh_path,
-        ssh_key.clone(),
-        "dune",
-        bootstrap_ip.clone(),
-    ));
-    if request.install_qemu_guest_agent {
-        install_alpine_qemu_guest_agent(&runner, sink)?;
-    }
-    let provider = SshGuestBootstrapProvider::new(runner.clone());
-    let bootstrap = GuestBootstrapOrchestrator::new(provider).run(&plan, sink)?;
-    wait_for_database_ready(&runner, &bootstrap.namespace, 900, sink)?;
-
-    let layout_request = SetupRequest {
-        vm_destination: String::new(),
-        vm_name: request.vm_name.clone(),
-        disk_gb: request.disk_gb,
-        memory_gb: request.memory_gb,
-        processor_count: request.processor_count,
-        enable_swap: request.enable_swap,
-        network_mode: "dhcp".to_string(),
-        switch_name: String::new(),
-        adapter_name: String::new(),
-        static_ip: bootstrap_ip.clone(),
-        gateway: request.gateway.unwrap_or_default(),
-        dns: request.dns.unwrap_or_default(),
-        player_ip: request.player_ip.clone(),
-        world_name: request.world_name.clone(),
-        region: request.region.clone(),
-        self_host_token: request.self_host_token.clone(),
-        survival_instances: request.survival_instances,
-        deep_desert_pve_instances: request.deep_desert_pve_instances,
-        deep_desert_pvp_instances: request.deep_desert_pvp_instances,
-        deep_desert_warm_servers: request.deep_desert_warm_servers,
-    };
-    let layout_changed = apply_instance_layout(
-        &layout_request,
-        &bootstrap.namespace,
-        &bootstrap.battlegroup_name,
-        &runner,
-        sink,
-    )?;
-    if layout_changed {
-        wait_for_database_ready(&runner, &bootstrap.namespace, 900, sink)?;
-    }
-    if request.enable_swap {
-        sink.info("guest-swap", "Enabling experimental swap profile.");
-        let mut swap = ExperimentalSwapRequest::new(
-            bootstrap.namespace.clone(),
-            bootstrap.battlegroup_name.clone(),
-        );
-        swap.restart_k3s = true;
-        ExperimentalSwapOrchestrator::new(runner.clone()).enable(&swap, sink)?;
-    }
-
-    sink.info("bg", "Starting battlegroup after Proxmox setup.");
-    let battlegroup = BattlegroupRef {
-        namespace: bootstrap.namespace.clone(),
-        name: bootstrap.battlegroup_name.clone(),
-    };
-    let _director_node_port =
-        BattlegroupManagementOrchestrator::new(StructuredKubectl::new(runner))
-            .start_and_wait_director(&battlegroup, 180, sink)?;
-
-    Ok(ProxmoxAlpineSetupResult {
-        host: bootstrap_ip,
-        user: "dune".to_string(),
-        key_path: ssh_key.to_string_lossy().to_string(),
-        namespace: bootstrap.namespace,
-        battlegroup_name: bootstrap.battlegroup_name,
-        world_unique_name: bootstrap.world_unique_name,
-        node: request.node,
-        vmid: request.vmid,
-        vm_name: request.vm_name,
-    })
-}
-
-fn validate_and_reconcile_existing_proxmox_vm(
-    client: &ProxmoxClient,
-    request: &ProxmoxCreateVmRequest,
-    mac_address: &str,
-    sink: &TauriOperationSink,
-) -> CommandResult<()> {
-    let config = client.vm_config(&request.node, request.vmid)?;
-    let actual_name = config.name.as_deref().unwrap_or_default().trim();
-    if actual_name != request.vm_name.trim() {
-        return Err(dune_manager_core::errors::failure(format!(
-            "Proxmox VMID {} already exists as '{}', expected '{}'. Choose a different VMID or remove the existing VM before setup.",
-            request.vmid,
-            actual_name,
-            request.vm_name.trim()
-        )));
-    }
-
-    let net0 = config.net0.as_deref().unwrap_or_default();
-    let net0_lower = net0.to_ascii_lowercase();
-    if !net0_lower.contains(&mac_address.to_ascii_lowercase()) {
-        return Err(dune_manager_core::errors::failure(format!(
-            "Proxmox VMID {} has an unexpected network adapter. Expected MAC {} in net0.",
-            request.vmid, mac_address
-        )));
-    }
-    let expected_bridge = format!("bridge={}", request.bridge.trim()).to_ascii_lowercase();
-    if !net0_lower.contains(&expected_bridge) {
-        return Err(dune_manager_core::errors::failure(format!(
-            "Proxmox VMID {} is attached to an unexpected bridge. Expected {}.",
-            request.vmid,
-            request.bridge.trim()
-        )));
-    }
-
-    if !config
-        .boot
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .contains("scsi0")
-    {
-        return Err(dune_manager_core::errors::failure(format!(
-            "Proxmox VMID {} does not boot from scsi0; refusing to resume setup.",
-            request.vmid
-        )));
-    }
-    if config
-        .scsi0
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-    {
-        return Err(dune_manager_core::errors::failure(format!(
-            "Proxmox VMID {} is missing scsi0; refusing to resume setup.",
-            request.vmid
-        )));
-    }
-
-    if request.qemu_guest_agent
-        && !config
-            .agent
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .contains("enabled=1")
-    {
-        sink.info(
-            "proxmox.vm",
-            "Enabling Proxmox QEMU guest agent integration on the existing VM.",
-        );
-        client.update_vm_config(
-            &request.node,
-            request.vmid,
-            &BTreeMap::from([("agent".to_string(), "enabled=1".to_string())]),
-        )?;
-    }
-
-    Ok(())
-}
-
 fn wait_for_database_ready<R: RemoteCommandRunner>(
     runner: &R,
     namespace: &str,
@@ -2460,115 +1612,50 @@ fn wait_for_database_ready<R: RemoteCommandRunner>(
 ) -> CommandResult<()> {
     sink.info(
         "database.wait",
-        format!(
-            "Waiting for database schema initialization to complete. Timeout is {} minutes.",
-            timeout_seconds / 60
-        ),
+        "Waiting for database schema initialization to complete.",
     );
-    let started = std::time::Instant::now();
-    let mut last_summary = String::new();
-    let mut last_log_at = 0;
-    while started.elapsed().as_secs() <= timeout_seconds {
-        let status = database_wait_status(runner, namespace)?;
-        let elapsed = started.elapsed().as_secs();
-        if status.ready {
-            sink.info(
-                "database.wait",
-                format!(
-                    "Database schema initialization completed: {}",
-                    status.summary
-                ),
-            );
-            return Ok(());
-        }
-        if status.summary != last_summary || elapsed.saturating_sub(last_log_at) >= 30 {
-            sink.info(
-                "database.wait",
-                format!(
-                    "Still waiting for database schema initialization ({elapsed}s): {}",
-                    status.summary
-                ),
-            );
-            last_summary = status.summary;
-            last_log_at = elapsed;
-        }
-        std::thread::sleep(std::time::Duration::from_secs(5));
-    }
-    let diagnostics =
-        database_wait_diagnostics(runner, namespace).unwrap_or_else(|err| err.message);
-    Err(dune_manager_core::errors::failure(format!(
-        "Database schema initialization did not complete within {timeout_seconds} seconds.\n{diagnostics}"
-    )))
-}
-
-struct DatabaseWaitStatus {
-    ready: bool,
-    summary: String,
-}
-
-fn database_wait_status<R: RemoteCommandRunner>(
-    runner: &R,
-    namespace: &str,
-) -> CommandResult<DatabaseWaitStatus> {
     let script = format!(
         r#"
 set -eu
 ns={ns}
-rows=$(sudo kubectl get databasedeployments -n "$ns" --no-headers -o custom-columns=NAME:.metadata.name,PHASE:.status.phase 2>/dev/null || true)
-if [ -z "$rows" ]; then
-  echo "waiting|No DatabaseDeployment resources yet"
-  exit 0
-fi
-summary=$(printf '%s\n' "$rows" | awk '{{name=$1; phase=$2; if (phase == "") phase="Pending"; printf "%s=%s", name, phase; if (NR > 0) printf ", "}}' | sed 's/, $//')
-phases=$(printf '%s\n' "$rows" | awk '{{print $2}}')
-if printf '%s\n' "$phases" | grep -Eq '^(Ready|Healthy|Running|Succeeded)$' &&
-   ! printf '%s\n' "$phases" | grep -Eq '^(|Pending|Failed|Error)$'; then
-  printf 'ready|%s\n' "$summary"
-else
-  printf 'waiting|%s\n' "$summary"
-fi
-"#,
-        ns = sh_single_quoted(namespace),
-    );
-    let output = runner.run_script(&script)?;
-    let (state, summary) = output
-        .split_once('|')
-        .map(|(state, summary)| (state.trim(), summary.trim()))
-        .unwrap_or(("waiting", output.trim()));
-    Ok(DatabaseWaitStatus {
-        ready: state == "ready",
-        summary: if summary.is_empty() {
-            "status unavailable".to_string()
-        } else {
-            summary.to_string()
-        },
-    })
-}
-
-fn database_wait_diagnostics<R: RemoteCommandRunner>(
-    runner: &R,
-    namespace: &str,
-) -> CommandResult<String> {
-    let script = format!(
-        r#"
-set -eu
-ns={ns}
-echo "DatabaseDeployment status:"
-sudo kubectl get databasedeployments -n "$ns" -o wide 2>&1 || true
-echo
-echo "Database-related pods:"
-sudo kubectl get pods -n "$ns" --no-headers 2>&1 | awk '/db|postgres|schema|util/ {{print}}' || true
+timeout={timeout}
+elapsed=0
+last_phase=""
+recovered_failed_util=0
+while [ "$elapsed" -le "$timeout" ]; do
+  phases=$(sudo kubectl get databasedeployments -n "$ns" -o jsonpath='{{range .items[*]}}{{.status.phase}}{{"\n"}}{{end}}' 2>/dev/null || true)
+  if [ -n "$phases" ]; then
+    last_phase=$(printf '%s' "$phases" | tr '\n' ',' | sed 's/,$//')
+    if printf '%s\n' "$phases" | grep -Eq '^(Ready|Healthy|Running|Succeeded)$' &&
+       ! printf '%s\n' "$phases" | grep -Eq '^(|Pending|Failed|Error)$'; then
+      echo "Database ready: $last_phase"
+      exit 0
+    fi
+  fi
+  failed_pod=$(sudo kubectl get pods -n "$ns" --no-headers 2>/dev/null | awk '/db.*util/ && ($3 == "Error" || $3 == "Failed" || $3 == "CrashLoopBackOff") {{print $1; exit}}' || true)
+  if [ -n "$failed_pod" ] && [ "$recovered_failed_util" -lt 1 ]; then
+    echo "Database utility pod $failed_pod failed; deleting it so the operator can recreate schema initialization." >&2
+    sudo kubectl logs -n "$ns" "$failed_pod" --tail=80 2>&1 |
+      sed -E 's/(password|token|secret|auth|key)([^[:space:]]*)[=:][^[:space:]]+/\1\2=<redacted>/Ig' >&2 || true
+    sudo kubectl delete pod -n "$ns" "$failed_pod" >/dev/null 2>&1 || true
+    recovered_failed_util=$((recovered_failed_util + 1))
+  fi
+  sleep 5
+  elapsed=$((elapsed + 5))
+done
+echo "Database did not become ready within $timeout seconds. Last phase: ${{last_phase:-unknown}}" >&2
 failed_pod=$(sudo kubectl get pods -n "$ns" --no-headers 2>/dev/null | awk '/db.*util/ && ($3 == "Error" || $3 == "Failed" || $3 == "CrashLoopBackOff") {{print $1; exit}}' || true)
 if [ -n "$failed_pod" ]; then
-  echo
-  echo "Last failed database schema utility pod: $failed_pod"
+  echo "Last failed database schema utility pod: $failed_pod" >&2
   sudo kubectl logs -n "$ns" "$failed_pod" --tail=120 2>&1 |
-    sed -E 's/(password|token|secret|auth|key)([^[:space:]]*)[=:][^[:space:]]+/\1\2=<redacted>/Ig' || true
+    sed -E 's/(password|token|secret|auth|key)([^[:space:]]*)[=:][^[:space:]]+/\1\2=<redacted>/Ig' >&2 || true
 fi
+exit 1
 "#,
-        ns = sh_single_quoted(namespace)
+        ns = sh_single_quoted(namespace),
+        timeout = timeout_seconds
     );
-    runner.run_script(&script)
+    runner.run_script(&script).map(|_| ())
 }
 
 fn remote_records_from_battlegroups(
@@ -2616,13 +1703,7 @@ fn remote_record_from_battlegroup(
         .user
         .as_deref()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            if is_alpine_remote_kind(&server_type) {
-                "dune"
-            } else {
-                "root"
-            }
-        })
+        .unwrap_or("root")
         .to_string();
     Some(RemoteServerRecord {
         id: remote_record_id(&server_type, &request.host, request.key_path.as_deref()),
@@ -2638,14 +1719,9 @@ fn remote_record_from_battlegroup(
     })
 }
 
-fn remote_record_id(server_type: &str, host: &str, key_path: Option<&str>) -> String {
+fn remote_record_id(_server_type: &str, host: &str, key_path: Option<&str>) -> String {
     format!(
-        "{}:{}:{}",
-        if is_alpine_remote_kind(server_type) {
-            "alpine"
-        } else {
-            "ubuntu"
-        },
+        "ubuntu:{}:{}",
         host.trim().to_lowercase(),
         key_path.unwrap_or_default().trim().to_lowercase()
     )
@@ -2683,210 +1759,6 @@ where
     provider.create_world(request)
 }
 
-fn proxmox_connection_from_vm_action(request: &ProxmoxVmActionRequest) -> ProxmoxConnectionRequest {
-    ProxmoxConnectionRequest {
-        profile_id: request.profile_id.clone(),
-        host_url: request.host_url.clone(),
-        token_id: request.token_id.clone(),
-        token_secret: request.token_secret.clone(),
-        accepted_certificate_sha256: request.accepted_certificate_sha256.clone(),
-    }
-}
-
-fn proxmox_client_from_connection(
-    request: &ProxmoxConnectionRequest,
-) -> Result<ProxmoxClient, String> {
-    let token_secret = proxmox_token_secret(request)?;
-    if let (Some(profile_id), Some(secret)) = (
-        request
-            .profile_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty()),
-        request
-            .token_secret
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty()),
-    ) {
-        store_proxmox_token_secret(profile_id, secret)?;
-    }
-    ProxmoxClient::new(ProxmoxClientConfig {
-        base_url: request.host_url.clone(),
-        token_id: request.token_id.clone(),
-        token_secret,
-        accepted_certificate_sha256: request.accepted_certificate_sha256.clone(),
-    })
-    .map_err(|err| err.message)
-}
-
-fn proxmox_token_secret(request: &ProxmoxConnectionRequest) -> Result<String, String> {
-    if let Some(secret) = request
-        .token_secret
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(secret.to_string());
-    }
-    let profile_id = request
-        .profile_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Proxmox token secret is required.".to_string())?;
-    read_proxmox_token_secret(profile_id)
-}
-
-fn store_proxmox_token_secret(profile_id: &str, secret: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new("dune-dedicated-server-manager.proxmox", profile_id)
-        .map_err(|err| format!("Failed to open OS credential store: {err}"))?;
-    entry
-        .set_password(secret)
-        .map_err(|err| format!("Failed to store Proxmox token secret: {err}"))
-}
-
-fn read_proxmox_token_secret(profile_id: &str) -> Result<String, String> {
-    let entry = keyring::Entry::new("dune-dedicated-server-manager.proxmox", profile_id)
-        .map_err(|err| format!("Failed to open OS credential store: {err}"))?;
-    entry
-        .get_password()
-        .map_err(|_| "Proxmox token secret is not stored for this profile.".to_string())
-}
-
-fn generated_proxmox_mac(vmid: u64) -> String {
-    let seed = (vmid as u32).wrapping_mul(2_654_435_761);
-    format!(
-        "02:DA:{:02X}:{:02X}:{:02X}:{:02X}",
-        (seed >> 24) & 0xff,
-        (seed >> 16) & 0xff,
-        (seed >> 8) & 0xff,
-        seed & 0xff
-    )
-}
-
-fn cidr_prefix(value: &str) -> Option<u8> {
-    value
-        .trim()
-        .split_once('/')
-        .and_then(|(_, prefix)| prefix.parse::<u8>().ok())
-        .filter(|prefix| *prefix <= 32)
-}
-
-fn parse_key_value_lines(output: &str) -> HashMap<String, String> {
-    output
-        .lines()
-        .filter_map(|line| {
-            let (key, value) = line.split_once('=')?;
-            Some((key.trim().to_string(), value.trim().to_string()))
-        })
-        .collect()
-}
-
-fn validate_guest_ssh_key_path(value: &str) -> Result<PathBuf, String> {
-    let key_path = PathBuf::from(value.trim());
-    if key_path.as_os_str().is_empty() {
-        return Err("Proxmox guest SSH private key is required.".to_string());
-    }
-    if !key_path.is_file() {
-        return Err(format!(
-            "Proxmox guest SSH private key was not found: {}",
-            key_path.display()
-        ));
-    }
-    Ok(key_path)
-}
-
-fn wait_for_generated_guest_key(
-    server_package_dir: &std::path::Path,
-    ssh_path: &std::path::Path,
-    generated_key_path: &std::path::Path,
-    host: &str,
-    timeout_seconds: u64,
-    sink: &mut TauriOperationSink,
-) -> CommandResult<()> {
-    let started = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(timeout_seconds);
-    let mut last_error = None;
-    while started.elapsed() <= timeout {
-        match ensure_generated_guest_key_installed(
-            server_package_dir,
-            ssh_path,
-            generated_key_path,
-            host,
-            Some(&mut *sink),
-        ) {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                last_error = Some(err.message);
-                std::thread::sleep(std::time::Duration::from_secs(5));
-            }
-        }
-    }
-    Err(dune_manager_core::errors::failure(format!(
-        "Generated SSH key did not authenticate to the Proxmox guest within {timeout_seconds} seconds. Last error: {}",
-        last_error.unwrap_or_else(|| "no SSH attempt completed".to_string())
-    )))
-}
-
-fn ensure_generated_guest_key_installed(
-    server_package_dir: &std::path::Path,
-    ssh_path: &std::path::Path,
-    generated_key_path: &std::path::Path,
-    host: &str,
-    sink: Option<&mut TauriOperationSink>,
-) -> CommandResult<()> {
-    let generated_runner = OpenSshRunner::new(OpenSshTarget::new(
-        ssh_path.to_path_buf(),
-        generated_key_path.to_path_buf(),
-        "dune",
-        host.to_string(),
-    ));
-    if generated_runner.run("true").is_ok() {
-        return Ok(());
-    }
-
-    if let Some(sink) = sink {
-        sink.info(
-            "ssh",
-            "Installing generated SSH public key into the guest for future access.",
-        );
-    }
-    let public_key_path = PathBuf::from(format!("{}.pub", generated_key_path.to_string_lossy()));
-    let public_key = std::fs::read_to_string(&public_key_path).map_err(|err| {
-        dune_manager_core::errors::failure(format!(
-            "Failed to read Proxmox guest SSH public key {}: {err}",
-            public_key_path.display()
-        ))
-    })?;
-    let bootstrap_key = prepare_vendor_ssh_key(server_package_dir)?;
-    let bootstrap_runner = OpenSshRunner::new(OpenSshTarget::new(
-        ssh_path.to_path_buf(),
-        bootstrap_key,
-        "dune",
-        host.to_string(),
-    ));
-    let script = format!(
-        r#"
-set -eu
-mkdir -p "$HOME/.ssh"
-chmod 700 "$HOME/.ssh"
-printf '%s\n' {public_key} > "$HOME/.ssh/authorized_keys.new"
-chmod 600 "$HOME/.ssh/authorized_keys.new"
-mv "$HOME/.ssh/authorized_keys.new" "$HOME/.ssh/authorized_keys"
-echo GENERATED_KEY_INSTALLED
-"#,
-        public_key = sh_single_quoted(public_key.trim()),
-    );
-    let output = bootstrap_runner.run_script(&script)?;
-    if !output.contains("GENERATED_KEY_INSTALLED") {
-        return Err(dune_manager_core::errors::failure(
-            "Generated SSH key installation did not complete.",
-        ));
-    }
-    generated_runner.run("true").map(|_| ())
-}
-
 fn remote_runner(host: String, user: String, key_path: String) -> Result<OpenSshRunner, String> {
     let toolchain = Toolchain::from_default_root().map_err(|err| err.message)?;
     toolchain
@@ -2899,29 +1771,6 @@ fn remote_runner(host: String, user: String, key_path: String) -> Result<OpenSsh
         user,
         host,
     )))
-}
-
-fn vendor_guest_target_for_vm(
-    ssh_path: PathBuf,
-    vm_name: &str,
-    host: String,
-) -> Result<OpenSshTarget, String> {
-    let server_package_dir = default_server_package_dir().map_err(|err| err.message)?;
-    let candidates = prepare_vendor_ssh_key_candidates_for_vm(&server_package_dir, vm_name)
-        .map_err(command_error_message)?;
-    let mut last_error = None;
-    for key_path in candidates {
-        let target = OpenSshTarget::new(ssh_path.clone(), key_path, "dune", host.clone());
-        let runner = OpenSshRunner::new(target.clone());
-        match runner.run("true") {
-            Ok(_) => return Ok(target),
-            Err(err) => last_error = Some(command_error_message(err)),
-        }
-    }
-    let detail = last_error.unwrap_or_else(|| "no vendor SSH key candidates were available".into());
-    Err(format!(
-        "Could not authenticate to the Dune guest. Tried the VM-specific key, vendor active SSH key, and packaged bootstrap key. Last error: {detail}"
-    ))
 }
 
 fn vendor_guest_target(ssh_path: PathBuf, host: String) -> Result<OpenSshTarget, String> {
@@ -2943,14 +1792,8 @@ fn vendor_guest_target(ssh_path: PathBuf, host: String) -> Result<OpenSshTarget,
     ))
 }
 
-fn vendor_guest_runner_for_vm(
-    ssh_path: PathBuf,
-    vm_name: &str,
-    host: String,
-) -> Result<OpenSshRunner, String> {
-    Ok(OpenSshRunner::new(vendor_guest_target_for_vm(
-        ssh_path, vm_name, host,
-    )?))
+fn vendor_guest_runner(ssh_path: PathBuf, host: String) -> Result<OpenSshRunner, String> {
+    Ok(OpenSshRunner::new(vendor_guest_target(ssh_path, host)?))
 }
 
 fn runner_for_remote_kind(
@@ -2962,12 +1805,8 @@ fn runner_for_remote_kind(
     let key_path = key_path
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "SSH private key is required for remote servers.".to_string())?;
+        .ok_or_else(|| "SSH private key is required for remote Ubuntu servers.".to_string())?;
     remote_runner(host, user, key_path)
-}
-
-fn is_alpine_remote_kind(server_type: &str) -> bool {
-    matches!(server_type.trim(), "alpine" | "remoteHyperv")
 }
 
 fn start_server_tunnel_inner(
@@ -3114,31 +1953,6 @@ fn tunnel_target(request: &ServerTunnelStartRequest) -> Result<OpenSshTarget, St
             request.user.as_deref().unwrap_or("root").trim().to_string(),
             request.host.trim().to_string(),
         )),
-        "alpine" => {
-            let host = request.host.trim().to_string();
-            if host.is_empty() {
-                return Err("Remote Alpine guest IP is required.".to_string());
-            }
-            let key_path = request
-                .key_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| "Remote Alpine guest SSH private key is required.".to_string())?;
-            Ok(OpenSshTarget::new(
-                ssh_path,
-                PathBuf::from(key_path),
-                request.user.as_deref().unwrap_or("dune").trim().to_string(),
-                host,
-            ))
-        }
-        "remoteHyperv" => {
-            let host = request.host.trim().to_string();
-            if host.is_empty() {
-                return Err("Remote Alpine guest IP is required.".to_string());
-            }
-            vendor_guest_target(ssh_path, host)
-        }
         "hyperv" => {
             let vm_name = request
                 .vm_name
@@ -3164,7 +1978,7 @@ fn tunnel_target(request: &ServerTunnelStartRequest) -> Result<OpenSshTarget, St
                     candidate.vm.name
                 ));
             }
-            vendor_guest_target_for_vm(ssh_path, &candidate.vm.name, host)
+            vendor_guest_target(ssh_path, host)
         }
         other => Err(format!("Unsupported tunnel server kind: {other}")),
     }
@@ -3341,7 +2155,7 @@ fn local_hyperv_runner(
         .install(ManagedTool::OpenSsh, false, None)
         .map_err(|err| err.message)?;
     let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
-    vendor_guest_runner_for_vm(ssh_path, &candidate.vm.name, ip)
+    vendor_guest_runner(ssh_path, ip)
 }
 
 fn generate_ubuntu_ssh_key_inner(
@@ -3461,7 +2275,7 @@ fn read_guest_package_status(
     let script = r#"
 set -u
 download=/home/dune/.dune/download
-manifest="$download/steamapps/appmanifest_3104830.acf"
+manifest="$download/steamapps/appmanifest_4754530.acf"
 ns=__NAMESPACE__
 bg=__BATTLEGROUP__
 read_vdf_value() {
@@ -4150,20 +2964,10 @@ pub fn run() {
             stop_local_hyperv_battlegroup,
             update_local_hyperv_battlegroup,
             update_remote_battlegroup,
-            append_app_log_entries,
-            open_app_log_file,
             register_local_hyperv_server,
             start_local_hyperv_server,
             stop_local_hyperv_server,
             detect_remote_ubuntu_servers,
-            detect_remote_alpine_servers,
-            detect_proxmox,
-            trust_proxmox_certificate,
-            probe_proxmox_guest_network,
-            start_proxmox_alpine_setup,
-            proxmox_vm_status,
-            start_proxmox_vm,
-            stop_proxmox_vm,
             server_package_status,
             update_server_package,
             generate_ubuntu_ssh_key,

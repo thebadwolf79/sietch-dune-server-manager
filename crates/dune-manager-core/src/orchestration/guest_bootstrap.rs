@@ -250,8 +250,10 @@ where
 /// Validates a vendor-supported world region label.
 pub fn validate_region(value: &str) -> CommandResult<()> {
     match value {
-        "Europe Test" | "North America Test" => Ok(()),
-        _ => Err(failure("Region must be Europe Test or North America Test")),
+        "Asia" | "Europe" | "North America" | "Oceania" | "South America" => Ok(()),
+        _ => Err(failure(
+            "Region must be Asia, Europe, North America, Oceania, or South America",
+        )),
     }
 }
 
@@ -486,7 +488,7 @@ mod tests {
                 &GuestBootstrapPlan {
                     player_ip: "10.0.0.4".to_string(),
                     world_name: "Adain".to_string(),
-                    world_region: "Europe Test".to_string(),
+                    world_region: "Europe".to_string(),
                     self_host_token: "token".to_string(),
                     host_id: "abc123".to_string(),
                     world_suffix: "abcdef".to_string(),
@@ -531,7 +533,7 @@ mod tests {
         let plan = GuestBootstrapPlan::from_self_host_token(
             "10.0.0.4",
             "Adain",
-            "Europe Test",
+            "Europe",
             "e30.eyJIb3N0SWQiOiJBQkMxMjMifQ.sig",
         )
         .unwrap();
