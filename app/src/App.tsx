@@ -3272,10 +3272,10 @@ function InstallControls({
                     href="#"
                     onClick={(event) => {
                       event.preventDefault();
-                      void openExternal("https://account-pts.duneawakening.com/account");
+                      void openExternal("https://account.duneawakening.com/account");
                     }}
                   >
-                    account-pts.duneawakening.com/account
+                    account.duneawakening.com/account
                   </Link>
                   .
                 </Text>
