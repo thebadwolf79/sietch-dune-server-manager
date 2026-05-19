@@ -57,14 +57,14 @@ export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -y
 sudo apt-get install -y \
   ca-certificates curl tar gzip unzip openssl util-linux iproute2 procps \
-  lsb-release sudo python3 lib32gcc-s1 lib32stdc++6
+  lsb-release sudo python3 jq lib32gcc-s1 lib32stdc++6
 ```
 
 ## 4. Create the `dune` service user
 
 ```sh
 sudo useradd -m -s /bin/bash dune 2>/dev/null || true
-sudo mkdir -p /home/dune/.dune /home/dune/.dune/download /home/dune/Steam /home/dune/.steam
+sudo mkdir -p /home/dune/.dune /home/dune/.dune/bin /home/dune/.dune/download /home/dune/Steam /home/dune/.steam
 sudo chown -R dune:dune /home/dune/.dune /home/dune/Steam /home/dune/.steam
 ```
 
@@ -148,8 +148,6 @@ sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh +quit
 
 The Dune dedicated server Steam app id is `4754530`.
 
-SteamCMD can occasionally fail the first download attempt with `ERROR! Failed to install app '4754530' (Missing configuration)`. If that happens, run the same command a second time.
-
 If this host already has the old playtest package in the same download directory, clear it before installing the release package:
 
 ```sh
@@ -162,6 +160,8 @@ elif [ -f /home/dune/.dune/download/steamapps/appmanifest_3104830.acf ]; then
   sudo rm -f /home/dune/.dune/download/steamapps/appmanifest_3104830.acf
 fi
 ```
+
+> **Important:** SteamCMD may print `ERROR! Failed to install app '4754530' (Missing configuration)` on the first download attempt. This is usually transient. Run the exact same command below again before changing anything else.
 
 ```sh
 sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh \
@@ -182,7 +182,7 @@ test -f /home/dune/.dune/download/scripts/setup.sh
 test -f /home/dune/.dune/download/scripts/battlegroup.sh
 ```
 
-If either command fails, rerun the SteamCMD download. Steam downloads can fail transiently.
+If the SteamCMD command failed with `Missing configuration`, or either `test -f` command fails, rerun the SteamCMD download command above. Do this at least once before moving on.
 
 ## 8. Install k3s
 
@@ -665,7 +665,60 @@ printf '\n\n\n%s\n' "$PLAYER_IP" | sudo tee /home/dune/.dune/settings.conf >/dev
 sudo chown dune:dune /home/dune/.dune/settings.conf
 ```
 
-## 11. Run the vendor setup script
+## 11. Patch the vendor scripts for Ubuntu
+
+The downloaded vendor scripts currently assume Alpine/OpenRC for a few service commands. Ubuntu uses systemd, so patch those commands before running `setup.sh`.
+
+Run this from your root shell:
+
+```sh
+cd /home/dune/.dune/download/scripts
+
+for file in setup/k3s.sh setup/helper.sh setup/experimental_swap.sh; do
+  if [ -f "$file" ] && [ ! -f "$file.ubuntu-patch.bak" ]; then
+    cp -p "$file" "$file.ubuntu-patch.bak"
+  fi
+done
+
+python3 - <<'PY'
+from pathlib import Path
+
+replacements = {
+    "setup/k3s.sh": {
+        "sudo rc-service k3s start": "sudo systemctl start k3s",
+        "sudo rc-update add k3s": "sudo systemctl enable k3s",
+    },
+    "setup/helper.sh": {
+        "sudo rc-service k3s restart": "sudo systemctl restart k3s",
+    },
+    "setup/experimental_swap.sh": {
+        "sudo rc-update add swap boot": "sudo systemctl daemon-reload || true",
+        "sudo rc-service k3s stop": "sudo systemctl stop k3s",
+        "sudo rc-service k3s restart": "sudo systemctl restart k3s",
+        "echo 0 | sudo tee /sys/fs/cgroup/openrc.k3s/memory.swap.max": (
+            "if [ -w /sys/fs/cgroup/system.slice/k3s.service/memory.swap.max ]; "
+            "then echo 0 | sudo tee /sys/fs/cgroup/system.slice/k3s.service/memory.swap.max >/dev/null; fi"
+        ),
+    },
+}
+
+for relative_path, file_replacements in replacements.items():
+    path = Path(relative_path)
+    text = path.read_text()
+    for old, new in file_replacements.items():
+        text = text.replace(old, new)
+    path.write_text(text)
+PY
+
+chmod +x setup.sh setup/k3s.sh setup/helper.sh setup/experimental_swap.sh battlegroup.sh
+
+if grep -RIn --exclude='*.ubuntu-patch.bak' 'rc-service\|rc-update\|openrc.k3s' setup; then
+  echo "Some Alpine/OpenRC references remain. Stop here and inspect the lines above."
+  exit 1
+fi
+```
+
+## 12. Run the vendor setup script
 
 The fresh k3s cluster is now prepared for the Funcom operators. Run the downloaded vendor setup script as the `dune` user to create the world resources:
 
@@ -839,7 +892,7 @@ If schema initialization already failed once, the database operator should retry
 sudo kubectl get databasedeployments -n "$NS" -w
 ```
 
-## 12. Install the battlegroup helper shortcuts
+## 13. Install the battlegroup helper shortcuts
 
 The vendor setup normally creates these helpers. Run these commands anyway if `/home/dune/.dune/bin/battlegroup` or `/home/dune/.dune/bin/bg-util` is missing or not executable.
 
@@ -862,7 +915,7 @@ sudo -iu dune
 /home/dune/.dune/bin/battlegroup start
 ```
 
-## 13. Verify Kubernetes resources
+## 14. Verify Kubernetes resources
 
 List battlegroup namespaces:
 
@@ -895,7 +948,7 @@ sudo kubectl patch battlegroup "$BG" -n "$NS" --type=merge -p '{"spec":{"stop":f
 
 It can take several minutes before all pods are running and the server appears in-game.
 
-## 14. Useful management commands
+## 15. Useful management commands
 
 Status:
 
@@ -942,7 +995,7 @@ sudo kubectl get battlegroups -A
 sudo kubectl describe battlegroup "$BG" -n "$NS"
 ```
 
-## 15. Access Director or File Browser safely
+## 16. Access Director or File Browser safely
 
 Do not expose Director or File Browser directly to the public internet.
 
@@ -977,7 +1030,7 @@ Then open:
 http://127.0.0.1:18888/
 ```
 
-## 16. Troubleshooting
+## 17. Troubleshooting
 
 SteamCMD download fails:
 
