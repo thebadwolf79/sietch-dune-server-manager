@@ -723,11 +723,16 @@ fi
 The fresh k3s cluster is now prepared for the Funcom operators. Run the downloaded vendor setup script as the `dune` user to create the world resources:
 
 ```sh
+sudo mkdir -p /home/dune/.dune/bin /home/dune/.dune/download
+sudo chown -R dune:dune /home/dune/.dune
+
 sudo -iu dune
 cd /home/dune/.dune/download
 chmod +x scripts/setup.sh scripts/battlegroup.sh
 ./scripts/setup.sh
 ```
+
+The `/home/dune/.dune/bin` directory must exist before `setup.sh` reaches its helper-link step. If it is missing, setup can print errors like `ln: failed to create symbolic link '/home/dune/.dune/bin/battlegroup': No such file or directory`.
 
 Follow the prompts from the vendor script. When asked, provide:
 
