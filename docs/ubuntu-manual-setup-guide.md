@@ -144,6 +144,28 @@ Verify it starts:
 sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh +quit
 ```
 
+Add a host `steamcmd` wrapper so every call to `steamcmd` starts in a predictable environment. This avoids failures where the command runs from an arbitrary working directory and fails to resolve paths used by vendor automation.
+
+```sh
+sudo mkdir -p /home/dune/.local/bin
+sudo tee /home/dune/.local/bin/steamcmd >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+export HOME=/home/dune
+cd /home/dune/.dune/download
+exec /home/dune/Steam/steamcmd.sh "$@"
+EOF
+
+sudo chown dune:dune /home/dune/.local/bin/steamcmd
+sudo chmod 0755 /home/dune/.local/bin/steamcmd
+
+sudo -u dune ln -sfn /home/dune/.local/bin/steamcmd /home/dune/.dune/bin/steamcmd
+sudo ln -sfn /home/dune/.local/bin/steamcmd /usr/local/bin/steamcmd
+```
+
+If you use `steamcmd` from scripts or non-interactive shells, make sure they invoke `/home/dune/.local/bin/steamcmd` (or a symlink to it).
+
 ## 7. Download the Dune server package
 
 The Dune dedicated server Steam app id is `4754530`.
@@ -164,7 +186,7 @@ fi
 > **Important:** SteamCMD may print `ERROR! Failed to install app '4754530' (Missing configuration)` on the first download attempt. This is usually transient. Run the exact same command below again before changing anything else.
 
 ```sh
-sudo -u dune env HOME=/home/dune /home/dune/Steam/steamcmd.sh \
+sudo -u dune env HOME=/home/dune /home/dune/.local/bin/steamcmd \
   +@ShutdownOnFailedCommand 1 \
   +@NoPromptForPassword 1 \
   +set_spew_level 1 1 \
