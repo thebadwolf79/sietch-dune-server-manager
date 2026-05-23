@@ -5,19 +5,31 @@
 - Rust stable
 - Node.js 22
 - npm
-- Windows with WebView2 runtime
 - Git
 
-## Install dependencies
+Platform-specific desktop dependencies:
 
-```powershell
+- Windows: WebView2 runtime
+- Linux: WebKitGTK 4.1, AppIndicator, librsvg, patchelf, pkg-config, and OpenSSL development headers
+- macOS: Xcode Command Line Tools
+
+On Ubuntu 22.04, install the Linux desktop build dependencies with:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf pkg-config libssl-dev
+```
+
+## Install Frontend Dependencies
+
+```bash
 cd app
 npm ci
 ```
 
-## Run checks
+## Run Checks
 
-```powershell
+```bash
 cargo check --workspace
 cargo test --workspace
 cargo doc -p dune-manager-core --no-deps
@@ -25,18 +37,38 @@ cd app
 npm run build
 ```
 
-## Run the desktop app in development
+## Run In Development
 
-```powershell
+```bash
 cd app
 npm run tauri -- dev
 ```
 
-## Build the Windows installer
+## Build A Local Production App
 
-```powershell
+For a local production executable without updater signing or release bundling:
+
+```bash
 cd app
-npm run tauri -- build
+npm run tauri -- build --no-bundle
 ```
 
-The unsigned local build creates the application executable and NSIS installer under `target/release`.
+The executable is written under the workspace `target/release` directory.
+
+## Build Installers
+
+Release packaging is normally handled by GitHub Actions when a version tag is
+pushed. Local full packaging may require platform-specific signing or installer
+setup.
+
+Common local bundle commands:
+
+```bash
+cd app
+npm run tauri -- build --bundles nsis
+npm run tauri -- build --bundles appimage,deb
+npm run tauri -- build --bundles dmg
+```
+
+The app manages already-provisioned servers only. Building from source does not
+add any server setup, provisioning, Hyper-V, or installer workflow to the app.

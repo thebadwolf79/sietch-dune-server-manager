@@ -227,7 +227,7 @@ sudo kubectl wait --for=condition=Ready node --all --timeout=180s
 
 ## 9. Bootstrap Kubernetes images and operators
 
-On the bundled Hyper-V VM, the vendor scripts can rely on the VM image's prepared Kubernetes resources. On a fresh Ubuntu host, bootstrap the k3s cluster first. This mirrors the Ubuntu setup path used by Dune Dedicated Server Manager: import the packaged images, install cert-manager, apply the Funcom CRDs, create the operator deployments, create webhook secrets and RBAC, then wait for the operators.
+On the bundled Hyper-V VM, the vendor scripts can rely on the VM image's prepared Kubernetes resources. On a fresh Ubuntu host, bootstrap the k3s cluster first: import the packaged images, install cert-manager, apply the Funcom CRDs, create the operator deployments, create webhook secrets and RBAC, then wait for the operators.
 
 Create the bootstrap script:
 
@@ -835,7 +835,7 @@ if [ "$PATCH" != "[]" ]; then
 fi
 ```
 
-Remove any custom scheduler references from the created BattleGroup. The Ubuntu setup path in the manager does this because fresh k3s hosts should use the default Kubernetes scheduler.
+Remove any custom scheduler references from the created BattleGroup. Fresh k3s hosts should use the default Kubernetes scheduler.
 
 ```sh
 PATCH="$(

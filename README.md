@@ -1,39 +1,49 @@
 # Dune Dedicated Server Manager
 
-A Windows-first manager for the Dune Awakening Playtest dedicated server.
+A desktop manager for existing Dune Awakening dedicated servers.
 
 ![Dune Dedicated Server Manager](images/screenshot.png)
 
-The app manages existing Dune dedicated servers over SSH and Kubernetes control commands.
+The app manages already-provisioned Dune dedicated servers over SSH and
+Kubernetes control commands. It does not install the game server, create VMs,
+configure Hyper-V, provision Ubuntu, or manage external tools such as SteamCMD.
 
 ## Features
 
-- Remote server profile management over SSH
+- Remote server profile management with SSH private-key authentication
 - BattleGroup status, start, stop, and update controls
 - Component diagnostics, log viewing, and safe restart actions
 - Secure Director, File Browser, PostgreSQL, and PgHero access through local SSH tunnels
+- Compact desktop UI for day-to-day operations against an existing server
 
 More management features coming soon.
 
-## Installation Guide
+## Install
 
-1. Download the latest Windows installer from GitHub Releases.
-2. Run the installer.
-3. Start Dune Dedicated Server Manager from the Start menu or installed shortcut.
-4. Add an existing remote server profile with its host and SSH private key path.
-5. Refresh the server to detect BattleGroups and management endpoints.
+Download the latest release for your operating system from GitHub Releases.
 
-If you found a bug or are having other issues, please create an issue here:
-https://github.com/adainrivers/dune-dedicated-server-manager/issues
+- Windows: run the NSIS installer.
+- Linux: use the AppImage or Debian package.
+- macOS: use the DMG for your Mac architecture.
 
-## Server Setup References
+After launching the app, add an existing server profile with its host, SSH user,
+and private key path, then refresh it to detect BattleGroups and management
+endpoints.
 
-- [Manual Ubuntu setup guide](docs/ubuntu-manual-setup-guide.md)
+## Managed Server Assumptions
 
-Required game ports:
+The target server must already be installed and reachable over SSH. The app
+expects the Dune Kubernetes resources and vendor management scripts to exist on
+the server before you add it.
+
+Required player-facing/server ports depend on your own server deployment. A
+typical dedicated-server deployment uses:
 
 - UDP 7777-7810 for game servers
 - TCP 31982 for RMQ
+
+If you found a bug or are having other issues, please create an issue here:
+https://github.com/adainrivers/dune-dedicated-server-manager/issues
 
 ## Building From Source
 

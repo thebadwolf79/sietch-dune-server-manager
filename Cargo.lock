@@ -1031,10 +1031,9 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dune-dedicated-server-manager-app"
-version = "0.1.33"
+version = "0.2.0"
 dependencies = [
  "dune-manager-core",
- "keyring",
  "serde",
  "serde_json",
  "tauri",
@@ -2336,18 +2335,6 @@ dependencies = [
  "bitflags 2.11.1",
  "serde",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "keyring"
-version = "3.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
-dependencies = [
- "byteorder",
- "log",
- "windows-sys 0.60.2",
- "zeroize",
 ]
 
 [[package]]

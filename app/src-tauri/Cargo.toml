@@ -1,6 +1,6 @@
 [package]
 name = "dune-dedicated-server-manager-app"
-version = "0.1.33"
+version = "0.2.0"
 description = "Desktop shell for Dune Dedicated Server Manager"
 authors = ["Dune Dedicated Server Manager"]
 edition = "2021"
@@ -14,7 +14,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 dune-manager-core = { path = "../../crates/dune-manager-core" }
-keyring = { version = "3", default-features = false, features = ["windows-native"] }
 tauri = { version = "2", features = ["devtools"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

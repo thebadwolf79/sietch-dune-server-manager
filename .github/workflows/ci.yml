@@ -8,8 +8,12 @@ env:
 
 jobs:
   checks:
-    name: Workspace checks
-    runs-on: windows-latest
+    name: Workspace checks (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, ubuntu-22.04, macos-latest]
 
     steps:
       - name: Checkout
@@ -24,6 +28,12 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
+
+      - name: Install Linux Tauri dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf pkg-config libssl-dev
 
       - name: Install frontend dependencies
         working-directory: app
@@ -49,6 +59,7 @@ jobs:
         run: cargo check -p dune-dedicated-server-manager-app
 
       - name: Secret and machine-constant scan
+        if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           rg -n -S "I:|AutoUpdate|192\.168\.2\.|menna|dune-awakening|C:\\WINDOWS\\System32\\OpenSSH|C:\\Windows\\System32\\OpenSSH|change-me-before-exposing|c05564d|d177d3bbc40be761|qRmQx|FuncomLiveServices__ServiceAuthToken" . -g "!app/**/target/**" -g "!crates/**/target/**" -g "!target/**" -g "!app/node_modules/**" -g "!app/dist/**" -g "!*.md" -g "!app/steamcmd/**" -g "!app/dune-server/**" -g "!app/vm/**" -g "!app/vm-*/**" -g "!vm/**" -g "!.tmp/**"
