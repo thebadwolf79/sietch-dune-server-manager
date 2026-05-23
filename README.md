@@ -4,13 +4,14 @@ A Windows-first manager for the Dune Awakening Playtest dedicated server.
 
 ![Dune Dedicated Server Manager](images/screenshot.png)
 
-The app provisions and manages Dune dedicated servers through a Rust core library, managed local tools, Hyper-V or remote Ubuntu setup, SSH bootstrap, and Kubernetes control commands.
+The app manages existing Dune dedicated servers over SSH and Kubernetes control commands.
 
 ## Features
 
-- Local Hyper-V based server provisioning
-- Remote Ubuntu server provisioning via SSH
-- Basic server management capabilities such as log viewer, secure Director and File Browser access via SSH
+- Remote server profile management over SSH
+- BattleGroup status, start, stop, and update controls
+- Component diagnostics, log viewing, and safe restart actions
+- Secure Director, File Browser, PostgreSQL, and PgHero access through local SSH tunnels
 
 More management features coming soon.
 
@@ -19,19 +20,15 @@ More management features coming soon.
 1. Download the latest Windows installer from GitHub Releases.
 2. Run the installer.
 3. Start Dune Dedicated Server Manager from the Start menu or installed shortcut.
-4. Approve the Windows administrator prompt when using local Hyper-V setup.
-5. Create a new server from the app.
-
-The app guides you through detecting the host, choosing a server layout, entering your Self-Host Service Token, and starting provisioning.
+4. Add an existing remote server profile with its host and SSH private key path.
+5. Refresh the server to detect BattleGroups and management endpoints.
 
 If you found a bug or are having other issues, please create an issue here:
 https://github.com/adainrivers/dune-dedicated-server-manager/issues
 
-## Server Setup Guides
+## Server Setup References
 
-- [Remote Ubuntu setup guide](docs/ubuntu-setup-guide.md)
 - [Manual Ubuntu setup guide](docs/ubuntu-manual-setup-guide.md)
-- [Local Hyper-V setup guide](docs/hyper-v-setup-guide.md)
 
 Required game ports:
 
