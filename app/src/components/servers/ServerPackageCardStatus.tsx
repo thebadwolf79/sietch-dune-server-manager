@@ -1,7 +1,5 @@
-import { Grid } from "@radix-ui/themes";
-
 import type { RemoteServerPackageStatus } from "../../types/server";
-import Metric from "../ui/Metric";
+import Metric, { type MetricTone } from "../ui/Metric";
 
 export type ServerPackageCardStatusProps = {
   guestPackage?: RemoteServerPackageStatus;
@@ -9,12 +7,15 @@ export type ServerPackageCardStatusProps = {
 
 export default function ServerPackageCardStatus({ guestPackage }: ServerPackageCardStatusProps) {
   if (!guestPackage) return null;
+  const downloaded = guestPackage.battlegroupVersion ?? "";
+  const live = guestPackage.liveBattlegroupVersion ?? "";
+  const liveTone: MetricTone = downloaded && live && downloaded !== live ? "warn" : "default";
   return (
-    <Grid columns="4" gap="3" mt="3">
-      <Metric label="Installed Build" value={guestPackage.installedBuildId || "unknown"} />
-      <Metric label="BattleGroup Version" value={guestPackage.battlegroupVersion || "unknown"} />
-      <Metric label="Live Version" value={guestPackage.liveBattlegroupVersion || "unknown"} />
-      <Metric label="Operator" value={guestPackage.operatorVersion || "unknown"} />
-    </Grid>
+    <div className="metric-grid">
+      <Metric label="Installed build" value={guestPackage.installedBuildId ?? ""} />
+      <Metric label="Downloaded" value={downloaded} />
+      <Metric label="Running" value={live} tone={liveTone} />
+      <Metric label="Operator" value={guestPackage.operatorVersion ?? ""} />
+    </div>
   );
 }

@@ -55,7 +55,7 @@ export function App() {
   remoteServersHook.bindStopTunnelsForServer(tunnels.stopTunnelsForServer);
 
   return (
-    <Theme accentColor="bronze" grayColor="sand" radius="medium" scaling="100%">
+    <Theme appearance="dark" accentColor="bronze" grayColor="sand" radius="medium" scaling="100%" panelBackground="solid">
       <Flex direction="column" height="100vh" className="app-shell">
         <Header
           activePage={activePage}

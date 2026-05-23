@@ -1,4 +1,4 @@
-import { Box, Button, Card, Flex, Heading, Text } from "@radix-ui/themes";
+import { Box, Flex, Heading, Text } from "@radix-ui/themes";
 
 import type {
   RemoteServerComponent,
@@ -6,6 +6,7 @@ import type {
   RemoteServerStatus,
 } from "../../types/server";
 import type { ServerTunnelStartRequest, ServerTunnelStatus } from "../../types/tunnel";
+import ActionButton from "../ui/ActionButton";
 import EmptyState from "../ui/EmptyState";
 import RemoteServerCard from "./RemoteServerCard";
 
@@ -57,53 +58,63 @@ export default function ServersPage({
   onRestartRemoteComponent,
 }: ServersPageProps) {
   return (
-    <Card size="3" variant="surface" className="pane page-pane">
-      <Flex direction="column" gap="4" height="100%" minHeight="0">
+    <Box className="pane page-pane">
+      <Flex direction="column" gap="4" height="100%" minHeight="0" p="4">
         <Flex align="center" justify="between" gap="3">
           <Box>
-            <Heading size="5">Servers</Heading>
-            <Text as="p" size="2" color="gray" mb="0">
-              Manage existing remote Dune servers over SSH and Kubernetes.
+            <Heading size="6" className="h-display">
+              Servers
+            </Heading>
+            <Text as="p" size="2" mt="1" style={{ color: "var(--color-text-muted)" }}>
+              Manage remote Dune battlegroups over the vendor wrapper.
             </Text>
           </Box>
-          <Button type="button" variant="surface" onClick={onAddRemoteServer}>
-            Add remote server
-          </Button>
+          <ActionButton onClick={onAddRemoteServer} tone="accent">
+            + Add server
+          </ActionButton>
         </Flex>
         <Box className="page-scroll">
           <Flex direction="column" gap="3">
             {remoteServers.length > 0 ? (
-              remoteServers.map((server) => (
-                <RemoteServerCard
+              remoteServers.map((server, index) => (
+                <div
                   key={server.id}
-                  server={server}
-                  status={remoteStatuses[server.id]}
-                  components={remoteComponents[server.id] ?? []}
-                  componentLogs={remoteComponentLogs}
-                  componentLogBusy={remoteComponentLogBusy}
-                  componentRestartBusy={remoteComponentRestartBusy}
-                  statusError={remoteStatusErrors[server.id]}
-                  busyLabel={remoteBusy[server.id]}
-                  tunnels={tunnels}
-                  tunnelBusy={tunnelBusy}
-                  onRemove={() => onRemoveRemoteServer(server)}
-                  onRefresh={() => onRefreshRemoteStatus(server)}
-                  onStartBattlegroup={() => onStartRemoteBattlegroup(server)}
-                  onStopBattlegroup={() => onStopRemoteBattlegroup(server)}
-                  onUpdateBattlegroup={() => onUpdateRemoteBattlegroup(server)}
-                  onStartTunnel={onStartTunnel}
-                  onStopTunnel={onStopTunnel}
-                  onOpenTunnel={onOpenTunnel}
-                  onRefreshComponentLog={(component) => onRefreshRemoteComponentLog(server, component)}
-                  onRestartComponent={(component) => onRestartRemoteComponent(server, component)}
-                />
+                  style={{ animationDelay: `${index * 40}ms` }}
+                  className="server-card-stagger"
+                >
+                  <RemoteServerCard
+                    server={server}
+                    status={remoteStatuses[server.id]}
+                    components={remoteComponents[server.id] ?? []}
+                    componentLogs={remoteComponentLogs}
+                    componentLogBusy={remoteComponentLogBusy}
+                    componentRestartBusy={remoteComponentRestartBusy}
+                    statusError={remoteStatusErrors[server.id]}
+                    busyLabel={remoteBusy[server.id]}
+                    tunnels={tunnels}
+                    tunnelBusy={tunnelBusy}
+                    onRemove={() => onRemoveRemoteServer(server)}
+                    onRefresh={() => onRefreshRemoteStatus(server)}
+                    onStartBattlegroup={() => onStartRemoteBattlegroup(server)}
+                    onStopBattlegroup={() => onStopRemoteBattlegroup(server)}
+                    onUpdateBattlegroup={() => onUpdateRemoteBattlegroup(server)}
+                    onStartTunnel={onStartTunnel}
+                    onStopTunnel={onStopTunnel}
+                    onOpenTunnel={onOpenTunnel}
+                    onRefreshComponentLog={(component) => onRefreshRemoteComponentLog(server, component)}
+                    onRestartComponent={(component) => onRestartRemoteComponent(server, component)}
+                  />
+                </div>
               ))
             ) : (
-              <EmptyState title="No remote servers" body="Add a remote Ubuntu host that already has a Dune battlegroup." />
+              <EmptyState
+                title="No remote servers attached"
+                body="Add a remote Ubuntu host that already has a Dune battlegroup running."
+              />
             )}
           </Flex>
         </Box>
       </Flex>
-    </Card>
+    </Box>
   );
 }

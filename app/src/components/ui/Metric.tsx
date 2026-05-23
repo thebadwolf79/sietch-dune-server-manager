@@ -1,19 +1,20 @@
-import { Box, Text } from "@radix-ui/themes";
+import type { StatusTone } from "./StatusPill";
+
+export type MetricTone = StatusTone | "muted" | "default";
 
 export type MetricProps = {
   label: string;
   value: string;
+  tone?: MetricTone;
 };
 
-export default function Metric({ label, value }: MetricProps) {
+export default function Metric({ label, value, tone = "default" }: MetricProps) {
   return (
-    <Box className="metric">
-      <Text as="div" size="1" color="gray">
-        {label}
-      </Text>
-      <Text as="div" size="2" className="mono metric-value">
-        {value}
-      </Text>
-    </Box>
+    <div className="metric">
+      <div className="metric-label">{label}</div>
+      <div className="metric-value" data-tone={tone === "default" ? undefined : tone}>
+        {value || "—"}
+      </div>
+    </div>
   );
 }

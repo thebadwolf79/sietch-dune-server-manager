@@ -1,4 +1,4 @@
-import { Badge, Box, Button, Flex, Grid, Heading, Text } from "@radix-ui/themes";
+import { Box, Flex } from "@radix-ui/themes";
 
 import type {
   RemoteServerComponent,
@@ -12,11 +12,12 @@ import {
   isDirectorReadyPhase,
   remoteServerDefaultUser,
 } from "../../utils/remote-server";
-import { remoteStatusLabel, remoteStatusTone } from "../../utils/formatting";
-import BusySpinner from "../ui/BusySpinner";
+import ActionButton from "../ui/ActionButton";
 import Metric from "../ui/Metric";
+import StatusPill, { type StatusTone } from "../ui/StatusPill";
 import ComponentHealthList from "./ComponentHealthList";
 import ServerPackageCardStatus from "./ServerPackageCardStatus";
+import ServerStatsTable from "./ServerStatsTable";
 import ServerTunnelControls from "./ServerTunnelControls";
 
 export type RemoteServerCardProps = {
@@ -41,6 +42,36 @@ export type RemoteServerCardProps = {
   onRefreshComponentLog: (component: RemoteServerComponent) => void;
   onRestartComponent: (component: RemoteServerComponent) => void;
 };
+
+type ResolvedStatus = {
+  tone: StatusTone;
+  label: string;
+  pulse: boolean;
+};
+
+function resolveStatus(
+  statusError: string | undefined,
+  liveStatus: RemoteServerStatus | undefined,
+  busy: boolean,
+  battlegroupStarted: boolean,
+  battlegroupStartRequested: boolean,
+  battlegroupStopped: boolean,
+): ResolvedStatus {
+  if (statusError) return { tone: "err", label: "Check failed", pulse: false };
+  if (!liveStatus) return { tone: "gray", label: busy ? "Checking" : "Unknown", pulse: busy };
+  if (battlegroupStarted) return { tone: "ok", label: "Started", pulse: false };
+  if (battlegroupStartRequested) return { tone: "warn", label: "Starting", pulse: true };
+  if (battlegroupStopped) return { tone: "gray", label: "Stopped", pulse: false };
+  return { tone: "warn", label: liveStatus.battlegroup.phase || "Pending", pulse: true };
+}
+
+function phaseTone(phase: string): StatusTone {
+  const v = phase.trim().toLowerCase();
+  if (["running", "ready", "healthy", "available", "reconciling"].includes(v)) return "ok";
+  if (["pending", "starting", "deploying", "scheduling", "creating"].includes(v)) return "warn";
+  if (["failed", "error", "crashloop", "crashloopbackoff", "unhealthy"].includes(v)) return "err";
+  return "gray";
+}
 
 export default function RemoteServerCard({
   server,
@@ -71,92 +102,112 @@ export default function RemoteServerCard({
   const battlegroupStopped = liveStatus ? liveStatus.battlegroup.stop : false;
   const updateAvailable = hasBattlegroupUpdateAvailable(liveStatus?.package);
   const busy = !!busyLabel;
+  const resolved = resolveStatus(
+    statusError,
+    liveStatus,
+    busy,
+    battlegroupStarted,
+    battlegroupStartRequested,
+    battlegroupStopped,
+  );
+  const directorReady = !!liveStatus && isDirectorReadyPhase(liveStatus.battlegroup.directorPhase);
+  const battlegroup = liveStatus?.battlegroup;
 
   return (
-    <Box className="server-card">
-      <Flex align="start" justify="between" gap="3">
-        <Box>
-          <Flex align="center" gap="2">
-            <Heading size="3">{server.name}</Heading>
-            <Badge color="bronze" variant="soft">
-              Ubuntu SSH
-            </Badge>
+    <Box className="server-card" data-tone={resolved.tone}>
+      <div className="server-card-hero">
+        <div className="server-card-rail" />
+        <Flex direction="column" gap="1" minWidth="0">
+          <Flex align="center" gap="3" wrap="wrap">
+            <span className="server-name">{server.name}</span>
+            <StatusPill label={resolved.label} tone={resolved.tone} pulse={resolved.pulse} />
+            {busyLabel ? <span className="app-title-sub">{busyLabel}</span> : null}
           </Flex>
-          <Text as="div" size="2" color="gray">
-            {server.host} · {server.battlegroupName || "unknown battlegroup"}
-          </Text>
-        </Box>
+          <span className="server-host">
+            {server.user || remoteServerDefaultUser(server.type)}@{server.host}
+            {server.battlegroupName ? ` · ${server.battlegroupName}` : ""}
+            {battlegroup?.uptime ? ` · up ${battlegroup.uptime}` : ""}
+          </span>
+        </Flex>
         <Flex align="center" gap="2">
-          <Button type="button" size="1" variant="surface" disabled={busy} onClick={onRefresh}>
+          <ActionButton onClick={onRefresh} busy={busy} pendingLabel="Refreshing">
             Refresh
-          </Button>
-          <Badge
-            color={remoteStatusTone(
-              statusError,
-              liveStatus,
-              battlegroupStarted,
-              battlegroupStartRequested,
-              battlegroupStopped,
-              server,
-            )}
-            variant="surface"
-          >
-            {remoteStatusLabel(statusError, liveStatus, busyLabel, battlegroupStarted, battlegroupStartRequested, server)}
-          </Badge>
-          <Button type="button" size="1" color="red" variant="soft" onClick={onRemove}>
+          </ActionButton>
+          <ActionButton onClick={onRemove} tone="danger" disabled={busy}>
             Forget
-          </Button>
+          </ActionButton>
         </Flex>
-      </Flex>
+      </div>
 
-      <Grid columns="4" gap="3" mt="3">
-        <Metric label="Namespace" value={server.namespace || "pending"} />
-        <Metric label="BattleGroup" value={server.battlegroupName || "pending"} />
-        <Metric label="Type" value="Remote Ubuntu" />
-        <Metric label="World" value={server.worldUniqueName || "unknown"} />
-      </Grid>
-      <ServerPackageCardStatus guestPackage={liveStatus?.package} />
-      {busyLabel ? (
-        <Flex align="center" gap="2" mt="3">
-          <BusySpinner />
-          <Text size="2" color="gray">
-            {busyLabel}
-          </Text>
-        </Flex>
-      ) : null}
-      {statusError ? (
-        <Box className="server-error" mt="3">
-          <Text size="2">{statusError}</Text>
-        </Box>
-      ) : null}
-      <Box className="server-state" mt="3">
-        <Grid columns="3" gap="3">
+      <div className="server-card-body">
+        <div className="metric-grid">
+          <Metric label="Namespace" value={server.namespace || ""} />
+          <Metric label="BattleGroup" value={server.battlegroupName || ""} />
           <Metric
-            label="BattleGroup State"
-            value={
-              liveStatus
-                ? `${liveStatus.battlegroup.phase || "unknown"}; stop=${liveStatus.battlegroup.stop ? "true" : "false"}`
-                : statusError || "Checking"
-            }
+            label="Database"
+            value={battlegroup?.databasePhase ?? ""}
+            tone={battlegroup ? phaseTone(battlegroup.databasePhase ?? "") : "muted"}
+          />
+          <Metric
+            label="Gateway"
+            value={battlegroup?.serverGroupPhase ?? ""}
+            tone={battlegroup ? phaseTone(battlegroup.serverGroupPhase) : "muted"}
           />
           <Metric
             label="Director"
-            value={liveStatus ? liveStatus.battlegroup.directorPhase || "unknown" : statusError || "Checking"}
+            value={battlegroup?.directorPhase ?? ""}
+            tone={battlegroup ? phaseTone(battlegroup.directorPhase) : "muted"}
           />
-          <Metric
-            label="Server Group"
-            value={liveStatus ? liveStatus.battlegroup.serverGroupPhase || "unknown" : statusError || "Checking"}
-          />
-        </Grid>
-        <ComponentHealthList
-          serverKey={server.id}
-          components={liveComponents}
-          logs={componentLogs}
-          logBusy={componentLogBusy}
-          restartBusy={componentRestartBusy}
-          onRefreshLog={onRefreshComponentLog}
-          onRestart={onRestartComponent}
-        />
+          <Metric label="Uptime" value={battlegroup?.uptime ?? ""} />
+        </div>
+
+        <ServerPackageCardStatus guestPackage={liveStatus?.package} />
+
+        {battlegroup?.serverStats && battlegroup.serverStats.length > 0 ? (
+          <ServerStatsTable rows={battlegroup.serverStats} />
+        ) : null}
+
+        {statusError ? (
+          <div className="server-error">{statusError}</div>
+        ) : null}
+
+        <div className="action-row">
+          {battlegroupStopped || !liveStatus ? (
+            <ActionButton
+              onClick={onStartBattlegroup}
+              busy={busy && !battlegroupStarted}
+              disabled={busy || !liveStatus || !battlegroupStopped}
+              tone="accent"
+              pendingLabel="Starting"
+            >
+              Start BattleGroup
+            </ActionButton>
+          ) : null}
+          {battlegroupStartRequested ? (
+            <ActionButton
+              onClick={onStopBattlegroup}
+              busy={busy && battlegroupStartRequested && !battlegroupStopped}
+              disabled={busy || !liveStatus}
+              tone="danger"
+              pendingLabel="Stopping"
+            >
+              Stop BattleGroup
+            </ActionButton>
+          ) : null}
+          {updateAvailable ? (
+            <ActionButton
+              onClick={onUpdateBattlegroup}
+              busy={busy}
+              disabled={busy || !liveStatus}
+              tone="accent"
+              pendingLabel="Updating"
+              title="Run vendor update (steamcmd + operators + maps + images)"
+            >
+              Update Server
+            </ActionButton>
+          ) : null}
+        </div>
+
         <ServerTunnelControls
           serverKey={server.id}
           namespace={server.namespace}
@@ -164,9 +215,7 @@ export default function RemoteServerCard({
           serverKind={server.type}
           user={server.user || remoteServerDefaultUser(server.type)}
           keyPath={server.keyPath}
-          canStartDirectorTunnel={
-            !!liveStatus && !liveStatus.battlegroup.stop && isDirectorReadyPhase(liveStatus.battlegroup.directorPhase)
-          }
+          canStartDirectorTunnel={!!liveStatus && !liveStatus.battlegroup.stop && directorReady}
           canStartFileBrowserTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
           canStartDatabaseTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
           canStartPgHeroTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
@@ -176,46 +225,19 @@ export default function RemoteServerCard({
           onStopTunnel={onStopTunnel}
           onOpenTunnel={onOpenTunnel}
         />
-        <Flex align="center" justify="between" gap="2" mt="3" wrap="wrap">
-          <Flex gap="2" wrap="wrap">
-            <Button size="1" variant="surface" disabled={busy} onClick={onRefresh}>
-              Refresh
-            </Button>
-            <Button
-              size="1"
-              variant="surface"
-              disabled={busy || !liveStatus || !battlegroupStopped}
-              onClick={onStartBattlegroup}
-            >
-              Start BattleGroup
-            </Button>
-            <Button
-              size="1"
-              variant="surface"
-              disabled={busy || !liveStatus || !battlegroupStartRequested}
-              onClick={onStopBattlegroup}
-            >
-              Stop BattleGroup
-            </Button>
-            {updateAvailable ? (
-              <Button
-                size="2"
-                color="amber"
-                variant="solid"
-                disabled={busy || !liveStatus}
-                onClick={onUpdateBattlegroup}
-              >
-                Update Server
-              </Button>
-            ) : null}
-          </Flex>
-          {busyLabel ? (
-            <Text size="1" color="gray" className="mono">
-              {busyLabel}
-            </Text>
-          ) : null}
-        </Flex>
-      </Box>
+
+        {liveComponents.length > 0 ? (
+          <ComponentHealthList
+            serverKey={server.id}
+            components={liveComponents}
+            logs={componentLogs}
+            logBusy={componentLogBusy}
+            restartBusy={componentRestartBusy}
+            onRefreshLog={onRefreshComponentLog}
+            onRestart={onRestartComponent}
+          />
+        ) : null}
+      </div>
     </Box>
   );
 }
