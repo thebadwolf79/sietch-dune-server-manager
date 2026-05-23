@@ -6,18 +6,6 @@ use serde::Serialize;
 
 use crate::{errors::failure, models::CommandResult};
 
-/// Result of installing or validating the host-side server package.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServerPackageInstallResult {
-    /// Directory where the server package was installed.
-    pub install_dir: PathBuf,
-    /// Steam app id used for the package.
-    pub app_id: String,
-    /// Whether SteamCMD reported the app fully installed.
-    pub installed: bool,
-}
-
 /// Vendor package layout detected on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,10 +93,6 @@ pub fn detect_server_package_layout(
         "Vendor bootstrap files were not found in supported layouts under {}",
         install_dir.display()
     )))
-}
-
-pub(super) fn server_package_exists(install_dir: &Path) -> bool {
-    detect_server_package_layout(install_dir).is_ok()
 }
 
 fn find_packaged_vmcx(install_dir: &Path) -> Option<PathBuf> {

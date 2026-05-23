@@ -1,5 +1,5 @@
 use dune_manager_core::models::CommandResult;
-use dune_manager_core::orchestration::{OpenSshRunner, RemoteCommandRunner};
+use dune_manager_core::orchestration::{RemoteCommandRunner, RusshRunner};
 use dune_manager_core::security::redact_text;
 
 use crate::commands::shared::{command_error_message, runner_for_remote_kind, sh_single_quoted};
@@ -50,7 +50,7 @@ pub async fn restart_remote_component(
 }
 
 fn read_remote_component_log_tail(
-    runner: &OpenSshRunner,
+    runner: &RusshRunner,
     namespace: &str,
     component: &str,
     tail: u32,
@@ -98,7 +98,7 @@ done
 }
 
 fn restart_remote_component_inner(
-    runner: &OpenSshRunner,
+    runner: &RusshRunner,
     namespace: &str,
     component: &str,
 ) -> CommandResult<RemoteComponentRestartResult> {

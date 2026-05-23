@@ -1,10 +1,10 @@
 //! VM lifecycle and import provider trait.
 
-use crate::{errors::failure, models::CommandResult};
 use crate::orchestration::providers::shared_types::{
     EnsureSwitchRequest, ExternalSwitch, ImportedVm, VmCompatibilityReport, VmImportRequest,
     VmInventoryRecord,
 };
+use crate::{errors::failure, models::CommandResult};
 
 /// VM lifecycle and import provider.
 pub trait VmProvider {

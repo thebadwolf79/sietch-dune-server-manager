@@ -21,8 +21,8 @@ pub use instance_map::InstanceMap;
 pub use orchestrator::MapInstanceOrchestrator;
 
 #[cfg(test)]
-mod tests_fixtures;
-#[cfg(test)]
 mod tests_display_name;
+#[cfg(test)]
+mod tests_fixtures;
 #[cfg(test)]
 mod tests_instance_count;

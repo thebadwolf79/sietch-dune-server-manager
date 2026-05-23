@@ -55,10 +55,7 @@ impl VmProvider for MockVm {
         Ok(self.existing.clone())
     }
 
-    fn compare_import(
-        &self,
-        _request: &VmImportRequest,
-    ) -> CommandResult<VmCompatibilityReport> {
+    fn compare_import(&self, _request: &VmImportRequest) -> CommandResult<VmCompatibilityReport> {
         self.calls.borrow_mut().push("compare_import");
         Ok(VmCompatibilityReport {
             compatible: true,

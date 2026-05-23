@@ -17,8 +17,6 @@ pub mod experimental_swap;
 pub mod guest_bootstrap;
 /// SSH implementation of the guest bootstrap provider.
 pub mod guest_bootstrap_ssh;
-/// SSH implementation of guest setup operations.
-pub mod guest_ssh;
 /// Strict PowerShell implementation of Hyper-V provider traits.
 pub mod hyperv_bridge;
 /// End-to-end Hyper-V initial setup orchestration.
@@ -31,10 +29,12 @@ pub mod hyperv_setup;
 pub mod instance_management;
 /// SSH-backed Kubernetes provider.
 pub mod kubernetes_ssh;
-/// OpenSSH command runner and shell command construction.
-pub mod openssh_runner;
 /// Provider traits and shared provider data models.
 pub mod providers;
+/// Pure-Rust SSH runner backed by russh.
+pub mod russh_runner;
+/// Pure-Rust local SSH port forwarder backed by russh.
+pub mod russh_tunnel;
 /// Strict command execution and strict JSON parsing.
 pub mod strict_command;
 /// Ubuntu-over-SSH remote setup phases.
@@ -50,15 +50,15 @@ pub use dune_vm_detection::*;
 pub use experimental_swap::*;
 pub use guest_bootstrap::*;
 pub use guest_bootstrap_ssh::*;
-pub use guest_ssh::*;
 pub use hyperv_bridge::*;
 pub use hyperv_initial_setup::*;
 pub use hyperv_lifecycle::*;
 pub use hyperv_setup::*;
 pub use instance_management::*;
 pub use kubernetes_ssh::*;
-pub use openssh_runner::*;
 pub use providers::*;
+pub use russh_runner::*;
+pub use russh_tunnel::*;
 pub use strict_command::*;
 pub use ubuntu_ssh_setup::*;
 pub use vendor_flows::*;

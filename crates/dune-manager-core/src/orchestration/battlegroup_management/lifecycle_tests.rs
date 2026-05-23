@@ -17,23 +17,14 @@ impl KubernetesProvider for MockKubernetes {
         Ok(self.namespaces.clone())
     }
 
-    fn patch_battlegroup_stop(
-        &self,
-        namespace: &str,
-        name: &str,
-        stop: bool,
-    ) -> CommandResult<()> {
+    fn patch_battlegroup_stop(&self, namespace: &str, name: &str, stop: bool) -> CommandResult<()> {
         self.calls
             .borrow_mut()
             .push(format!("{namespace}/{name}:{stop}"));
         Ok(())
     }
 
-    fn battlegroup_state(
-        &self,
-        _namespace: &str,
-        _name: &str,
-    ) -> CommandResult<BattlegroupState> {
+    fn battlegroup_state(&self, _namespace: &str, _name: &str) -> CommandResult<BattlegroupState> {
         Ok(self
             .battlegroup_states
             .borrow_mut()

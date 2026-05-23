@@ -5,9 +5,7 @@ use serde::Serialize;
 use crate::{
     errors::failure,
     models::CommandResult,
-    orchestration::{
-        instance_management::instance_map::InstanceMap, BattlegroupRef,
-    },
+    orchestration::{instance_management::instance_map::InstanceMap, BattlegroupRef},
 };
 
 /// Request for changing one map dimension's player-facing display name.

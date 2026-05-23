@@ -1,6 +1,6 @@
 use dune_manager_core::models::CommandResult;
 use dune_manager_core::orchestration::{
-    KubernetesProvider, OpenSshRunner, RemoteCommandRunner, StructuredKubectl,
+    KubernetesProvider, RemoteCommandRunner, RusshRunner, StructuredKubectl,
 };
 use serde_json::Value;
 
@@ -11,7 +11,7 @@ use crate::dto::{
 };
 
 pub fn read_remote_server_status(
-    runner: &OpenSshRunner,
+    runner: &RusshRunner,
     namespace: &str,
     battlegroup_name: &str,
 ) -> CommandResult<RemoteServerStatus> {
@@ -30,7 +30,7 @@ pub fn read_remote_server_status(
 }
 
 fn read_guest_package_status(
-    runner: &OpenSshRunner,
+    runner: &RusshRunner,
     namespace: &str,
     battlegroup_name: &str,
 ) -> CommandResult<RemoteServerPackageStatus> {
@@ -75,7 +75,7 @@ printf 'liveBattlegroupVersion=%s\n' "$live_image"
 }
 
 pub fn read_remote_server_components(
-    runner: &OpenSshRunner,
+    runner: &RusshRunner,
     namespace: &str,
 ) -> CommandResult<Vec<RemoteServerComponent>> {
     let pods = runner.run_json(

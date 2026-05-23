@@ -1,9 +1,7 @@
 use serde::Serialize;
 
 use crate::{
-    errors::failure,
-    models::CommandResult,
-    orchestration::BattlegroupState,
+    errors::failure, models::CommandResult, orchestration::BattlegroupState,
     validation::validate_kube_arg,
 };
 

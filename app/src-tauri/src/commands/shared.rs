@@ -1,25 +1,12 @@
 use std::path::PathBuf;
 
 use dune_manager_core::models::CommandFailure;
-use dune_manager_core::orchestration::{OpenSshRunner, OpenSshTarget};
-use dune_manager_core::toolchain::{ManagedTool, Toolchain};
+use dune_manager_core::orchestration::{RusshRunner, RusshTarget};
 
-pub fn remote_runner(
-    host: String,
-    user: String,
-    key_path: String,
-) -> Result<OpenSshRunner, String> {
-    let toolchain = Toolchain::from_default_root().map_err(|err| err.message)?;
-    toolchain
-        .install(ManagedTool::OpenSsh, false, None)
-        .map_err(|err| err.message)?;
-    let ssh_path = toolchain.status(ManagedTool::OpenSsh).executable;
-    Ok(OpenSshRunner::new(OpenSshTarget::new(
-        ssh_path,
-        PathBuf::from(key_path),
-        user,
-        host,
-    )))
+pub fn remote_runner(host: String, user: String, key_path: String) -> Result<RusshRunner, String> {
+    let target = RusshTarget::new(PathBuf::from(key_path), user, host);
+    target.validate().map_err(|err| err.message)?;
+    Ok(RusshRunner::new(target))
 }
 
 pub fn runner_for_remote_kind(
@@ -27,7 +14,7 @@ pub fn runner_for_remote_kind(
     host: String,
     user: String,
     key_path: Option<String>,
-) -> Result<OpenSshRunner, String> {
+) -> Result<RusshRunner, String> {
     let key_path = key_path
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

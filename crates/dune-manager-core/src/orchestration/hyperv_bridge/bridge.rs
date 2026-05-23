@@ -3,7 +3,9 @@ use serde::Deserialize;
 use crate::{
     errors::failure,
     models::CommandResult,
-    orchestration::{powershell_json_command, StrictCommandRunner, VmInventoryRecord, VmPowerState},
+    orchestration::{
+        powershell_json_command, StrictCommandRunner, VmInventoryRecord, VmPowerState,
+    },
 };
 
 /// Hyper-V provider implemented through strict JSON PowerShell commands.

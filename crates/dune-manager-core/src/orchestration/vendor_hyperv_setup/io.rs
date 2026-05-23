@@ -1,12 +1,6 @@
 //! Background readers, line buffering, redaction, and sink helpers for the vendor flow.
 
-use std::{
-    fs,
-    io::Read,
-    path::Path,
-    sync::mpsc,
-    thread,
-};
+use std::{fs, io::Read, path::Path, sync::mpsc, thread};
 
 use sha2::{Digest, Sha256};
 
@@ -73,7 +67,11 @@ pub(super) fn flush_line(sink: &mut impl OperationSink, scope: &'static str, pen
     pending.clear();
 }
 
-pub(super) fn emit(sink: &mut impl OperationSink, step_id: &'static str, message: impl Into<String>) {
+pub(super) fn emit(
+    sink: &mut impl OperationSink,
+    step_id: &'static str,
+    message: impl Into<String>,
+) {
     sink.emit(OrchestrationEvent {
         step_id,
         message: message.into(),

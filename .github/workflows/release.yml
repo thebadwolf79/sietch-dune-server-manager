@@ -67,6 +67,10 @@ jobs:
           $tauriConfigPath = "app/src-tauri/tauri.conf.json"
           $config = Get-Content $tauriConfigPath -Raw
           $config = $config -replace '"version":\s*"[^"]+"', ('"version": "' + $version + '"')
+          # Release builds publish signed updater artifacts; the checked-in
+          # default keeps this off so local debug builds do not require
+          # TAURI_SIGNING_PRIVATE_KEY.
+          $config = $config -replace '"createUpdaterArtifacts":\s*false', '"createUpdaterArtifacts": true'
           Set-Content -Path $tauriConfigPath -Value $config -NoNewline
 
       - name: Build and publish Tauri release

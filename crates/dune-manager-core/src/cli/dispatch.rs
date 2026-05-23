@@ -10,9 +10,9 @@ use crate::{
     models::CommandResult,
     orchestration::{
         battlegroup_command_catalog, BattlegroupManagementOrchestrator, BattlegroupRef,
-        BattlegroupUpdateOrchestrator, InstanceMap, MapInstanceOrchestrator, OpenSshRunner,
-        OpenSshTarget, SetMapDisplayNameRequest, SetMapInstancesRequest,
-        SshGuestBootstrapProvider, StructuredBattlegroupOps, StructuredKubectl, VecOperationSink,
+        BattlegroupUpdateOrchestrator, InstanceMap, MapInstanceOrchestrator, RusshRunner,
+        RusshTarget, SetMapDisplayNameRequest, SetMapInstancesRequest, SshGuestBootstrapProvider,
+        StructuredBattlegroupOps, StructuredKubectl, VecOperationSink,
     },
 };
 
@@ -32,10 +32,6 @@ pub(super) fn run_cli(args: Vec<String>) -> CommandResult<Value> {
         ["db", "world-partitions"] => {
             let map = args.optional("--map");
             to_json(DuneDatabase::new(db_config(&args)?).world_partitions(map.as_deref())?)
-        }
-        ["ssh", "shell-spec"] => {
-            let spec = ssh_runner(&args)?.interactive_shell_spec()?;
-            to_json(spec)
         }
         ["bg", "list"] => to_json(bg_ops(&args)?.list()?),
         ["bg", "status"] => {
@@ -187,7 +183,7 @@ fn bg_lifecycle(args: &CliArgs, action: &str) -> CommandResult<Value> {
     }))
 }
 
-fn bg_ops(args: &CliArgs) -> CommandResult<StructuredBattlegroupOps<OpenSshRunner>> {
+fn bg_ops(args: &CliArgs) -> CommandResult<StructuredBattlegroupOps<RusshRunner>> {
     Ok(StructuredBattlegroupOps::new(ssh_runner(args)?))
 }
 
@@ -252,21 +248,21 @@ fn battlegroup_ref(args: &CliArgs) -> CommandResult<BattlegroupRef> {
     })
 }
 
-fn ssh_runner(args: &CliArgs) -> CommandResult<OpenSshRunner> {
+fn ssh_runner(args: &CliArgs) -> CommandResult<RusshRunner> {
     ssh_runner_with_default_user(args, "dune")
 }
 
-fn ssh_runner_with_default_user(
-    args: &CliArgs,
-    default_user: &str,
-) -> CommandResult<OpenSshRunner> {
-    Ok(OpenSshRunner::new(OpenSshTarget::new(
-        args.required("--ssh")?,
+fn ssh_runner_with_default_user(args: &CliArgs, default_user: &str) -> CommandResult<RusshRunner> {
+    let mut target = RusshTarget::new(
         args.required("--key")?,
         args.optional("--user")
             .unwrap_or_else(|| default_user.to_string()),
         args.required("--host")?,
-    )))
+    );
+    if let Some(port) = args.optional_u64("--port")? {
+        target.port = u16::try_from(port).map_err(|_| failure("--port must fit in a TCP port"))?;
+    }
+    Ok(RusshRunner::new(target))
 }
 
 fn operation_ok(sink: VecOperationSink) -> CommandResult<Value> {

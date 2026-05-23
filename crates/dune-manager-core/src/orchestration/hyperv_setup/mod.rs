@@ -10,7 +10,5 @@ mod tests;
 
 pub(crate) use events::emit_hyperv_event;
 pub use events::{OperationSink, OrchestrationEvent, VecOperationSink};
-pub use models::{
-    HyperVVmSetupRequest, HyperVVmSetupResult, MemoryProfile, DEFAULT_VM_DISK_BYTES,
-};
+pub use models::{HyperVVmSetupRequest, HyperVVmSetupResult, MemoryProfile, DEFAULT_VM_DISK_BYTES};
 pub use orchestrator::HyperVVmSetupOrchestrator;

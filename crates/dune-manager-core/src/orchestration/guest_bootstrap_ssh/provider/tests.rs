@@ -1,11 +1,11 @@
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use super::SshGuestBootstrapProvider;
+use crate::orchestration::guest_bootstrap_ssh::scripts::download_script;
 use crate::{
     models::CommandResult,
     orchestration::{GuestBootstrapProvider, RemoteCommandRunner, WorldManifestRequest},
 };
-use crate::orchestration::guest_bootstrap_ssh::scripts::download_script;
 
 #[derive(Clone, Default)]
 struct MockRemote {
@@ -57,9 +57,7 @@ fn create_world_returns_structured_json_only() {
     assert!(script.contains("kubectl apply -n \"$NS\""));
     assert!(script.contains("DB_PASSWORD=$(openssl rand -hex 32)"));
     assert!(script.contains("s/{WORLD_DUNE_PASS}/$(escape_sed \"$DB_PASSWORD\")/g"));
-    assert!(script.contains(
-        "s/{WORLD_POSTGRES_PASS}/$(escape_sed \"$DB_SUPER_PASSWORD\")/g"
-    ));
+    assert!(script.contains("s/{WORLD_POSTGRES_PASS}/$(escape_sed \"$DB_SUPER_PASSWORD\")/g"));
     assert!(script.contains("s/{WORLD_IMAGE_TAG}/0-0-shipping/g"));
     assert!(script.contains("HOST_DATACENTER_IP_ADDRESS"));
     assert!(script.contains("PLAYER_IP=$(cat <<"));

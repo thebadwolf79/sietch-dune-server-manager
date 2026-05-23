@@ -15,8 +15,7 @@ use crate::orchestration::{
 #[test]
 fn preserves_single_deep_desert_partition_on_dimension_zero() {
     let update =
-        build_world_partition_update(&sample_battlegroup(), InstanceMap::DeepDesert, 1)
-            .unwrap();
+        build_world_partition_update(&sample_battlegroup(), InstanceMap::DeepDesert, 1).unwrap();
 
     assert_eq!(update.partition_ids, vec![8]);
     assert!(!update.patch_required);

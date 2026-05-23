@@ -2,9 +2,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
-    errors::failure,
-    models::CommandResult,
-    orchestration::WorldManifestRequest,
+    errors::failure, models::CommandResult, orchestration::WorldManifestRequest,
     validation::validate_kube_arg,
 };
 
@@ -17,9 +15,7 @@ pub(super) struct CreateWorldOutput {
     pub(super) battlegroup_name: String,
 }
 
-pub(super) fn validate_world_manifest_request(
-    request: &WorldManifestRequest,
-) -> CommandResult<()> {
+pub(super) fn validate_world_manifest_request(request: &WorldManifestRequest) -> CommandResult<()> {
     validate_kube_arg(&request.world_unique_name, "world unique name")?;
     validate_ipv4ish(&request.player_ip, "player-facing IP")?;
     if request.world_name.trim().is_empty()

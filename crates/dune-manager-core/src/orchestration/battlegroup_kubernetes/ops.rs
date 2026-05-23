@@ -9,9 +9,7 @@ use crate::{
     validation::validate_kube_arg,
 };
 
-use super::region_patch::{
-    region_patch_operations, sh_single_quoted, validate_region,
-};
+use super::region_patch::{region_patch_operations, sh_single_quoted, validate_region};
 use super::types::{BattlegroupStatusSnapshot, LogFile, PodContainerRef, PodShellSpec};
 
 const BATTLEGROUP_NAMESPACE_PREFIX: &str = "funcom-seabass-";

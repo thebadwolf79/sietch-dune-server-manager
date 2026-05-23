@@ -161,11 +161,7 @@ impl GuestProvider for MockGuest {
         Ok(())
     }
 
-    fn apply_static_network(
-        &self,
-        _ip: &str,
-        _config: &GuestNetworkConfig,
-    ) -> CommandResult<()> {
+    fn apply_static_network(&self, _ip: &str, _config: &GuestNetworkConfig) -> CommandResult<()> {
         self.calls.borrow_mut().push("apply_static_network");
         Ok(())
     }

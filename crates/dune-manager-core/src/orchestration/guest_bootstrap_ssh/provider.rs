@@ -10,17 +10,18 @@ use crate::{
 
 use super::image_patching::battlegroup_image_patch_operations;
 use super::scripts::{
-    download_script, shell_value, sh_single_quoted, with_guest_path, CONTAINER_IMAGE_HELPERS,
+    download_script, sh_single_quoted, shell_value, with_guest_path, CONTAINER_IMAGE_HELPERS,
     DISK_SCRIPT, IMPORT_CORE_IMAGES_SCRIPT, INSTALL_HELPER_SCRIPT, KUBECTL_HELPERS,
     SCALE_CORE_SCRIPT, START_K3S_SCRIPT,
 };
 use super::scripts_kubernetes::{
     APPLY_DEFAULT_SETTINGS_SCRIPT, IMPORT_BATTLEGROUP_IMAGES_SCRIPT,
-    PATCH_DATABASE_OPERATOR_SCRIPT, PATCH_OPERATOR_IMAGES_SCRIPT,
-    READ_BATTLEGROUP_VERSION_SCRIPT, SCALE_OPERATOR_SCRIPT,
-    SYNC_POSTGRES_SUPERUSER_PASSWORD_SCRIPT, UPDATE_OPERATOR_CRDS_SCRIPT,
+    PATCH_DATABASE_OPERATOR_SCRIPT, PATCH_OPERATOR_IMAGES_SCRIPT, READ_BATTLEGROUP_VERSION_SCRIPT,
+    SCALE_OPERATOR_SCRIPT, SYNC_POSTGRES_SUPERUSER_PASSWORD_SCRIPT, UPDATE_OPERATOR_CRDS_SCRIPT,
 };
-use super::world_creation::{create_world_script, validate_world_manifest_request, CreateWorldOutput};
+use super::world_creation::{
+    create_world_script, validate_world_manifest_request, CreateWorldOutput,
+};
 
 /// SSH-backed implementation of the guest bootstrap phases.
 #[derive(Debug, Clone)]

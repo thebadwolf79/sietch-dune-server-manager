@@ -1,8 +1,6 @@
 use std::path::Path;
 
-use crate::{
-    errors::failure, models::CommandResult, orchestration::packaged_vmcx_candidates,
-};
+use crate::{errors::failure, models::CommandResult, orchestration::packaged_vmcx_candidates};
 
 pub(super) fn single_vmcx(install_path: &Path) -> CommandResult<String> {
     let candidates = packaged_vmcx_candidates(install_path)?;

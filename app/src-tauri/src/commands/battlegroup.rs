@@ -1,7 +1,7 @@
 use dune_manager_core::models::CommandResult;
 use dune_manager_core::orchestration::{
     is_started_state, BattlegroupManagementOrchestrator, BattlegroupRef,
-    BattlegroupUpdateOrchestrator, KubernetesProvider, OpenSshRunner, SshGuestBootstrapProvider,
+    BattlegroupUpdateOrchestrator, KubernetesProvider, RusshRunner, SshGuestBootstrapProvider,
     StructuredKubectl, UbuntuSshPrepareRequest, UbuntuSshSetup,
 };
 
@@ -80,7 +80,7 @@ pub async fn run_remote_battlegroup_action(
 }
 
 fn run_battlegroup_action_with_runner(
-    runner: &OpenSshRunner,
+    runner: &RusshRunner,
     sink: &mut TauriOperationSink,
     namespace: String,
     battlegroup_name: String,
@@ -120,7 +120,7 @@ fn run_battlegroup_action_with_runner(
 }
 
 fn wait_for_battlegroup_fully_stopped(
-    kubernetes: &StructuredKubectl<OpenSshRunner>,
+    kubernetes: &StructuredKubectl<RusshRunner>,
     battlegroup: &BattlegroupRef,
     timeout_seconds: u64,
     sink: &mut TauriOperationSink,
@@ -175,7 +175,7 @@ fn director_running_phase(phase: &str) -> bool {
 }
 
 fn run_battlegroup_update_with_runner(
-    runner: &OpenSshRunner,
+    runner: &RusshRunner,
     sink: &mut TauriOperationSink,
     namespace: String,
     battlegroup_name: String,

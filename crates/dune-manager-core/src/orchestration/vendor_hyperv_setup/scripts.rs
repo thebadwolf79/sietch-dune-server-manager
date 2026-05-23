@@ -26,10 +26,21 @@ pub(super) fn vendor_powershell_wrapper(
     request: &VendorHyperVSetupRequest,
     script_dir: &Path,
 ) -> String {
-    let static_network = if request.static_network { "$true" } else { "$false" };
-    let enable_swap = if request.enable_swap { "$true" } else { "$false" };
+    let static_network = if request.static_network {
+        "$true"
+    } else {
+        "$false"
+    };
+    let enable_swap = if request.enable_swap {
+        "$true"
+    } else {
+        "$false"
+    };
     WRAPPER_TEMPLATE
-        .replace("__SCRIPT_DIR__", &ps_single_quoted(&script_dir.to_string_lossy()))
+        .replace(
+            "__SCRIPT_DIR__",
+            &ps_single_quoted(&script_dir.to_string_lossy()),
+        )
         .replace(
             "__DRIVE__",
             &ps_single_quoted(

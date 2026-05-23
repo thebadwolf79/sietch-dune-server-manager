@@ -9,9 +9,7 @@ use std::{
 };
 
 use crate::{
-    errors::failure,
-    models::CommandResult,
-    orchestration::OperationSink,
+    errors::failure, models::CommandResult, orchestration::OperationSink,
     shell::suppress_console_window,
 };
 
@@ -176,4 +174,3 @@ impl VendorHyperVSetupRunner {
             })
     }
 }
-

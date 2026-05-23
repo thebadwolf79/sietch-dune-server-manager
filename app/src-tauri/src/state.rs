@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
-    process::Child,
     sync::{Arc, Mutex},
 };
+
+use dune_manager_core::orchestration::LocalForwarder;
 
 use crate::dto::ServerTunnelStatus;
 
@@ -12,7 +13,7 @@ pub struct TunnelRegistry {
 }
 
 pub struct ManagedTunnel {
-    pub child: Child,
+    pub forwarder: LocalForwarder,
     pub status: ServerTunnelStatus,
 }
 
@@ -21,9 +22,8 @@ impl TunnelRegistry {
         let Ok(mut tunnels) = self.tunnels.lock() else {
             return;
         };
-        for (_, mut tunnel) in tunnels.drain() {
-            let _ = tunnel.child.kill();
-            let _ = tunnel.child.wait();
+        for (_, tunnel) in tunnels.drain() {
+            tunnel.forwarder.stop();
         }
     }
 }

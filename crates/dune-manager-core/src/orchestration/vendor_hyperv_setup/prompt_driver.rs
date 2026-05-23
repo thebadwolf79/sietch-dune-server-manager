@@ -11,7 +11,10 @@ pub(super) struct VendorPromptDriver {
 
 impl VendorPromptDriver {
     pub(super) fn new(request: VendorHyperVSetupRequest) -> Self {
-        Self { request, answered: Vec::new() }
+        Self {
+            request,
+            answered: Vec::new(),
+        }
     }
 
     pub(super) fn observe(&mut self, stdout: &str, stderr: &str) -> Vec<VendorPromptAnswer> {
@@ -20,50 +23,166 @@ impl VendorPromptDriver {
         let stdout_tail = tail(stdout, 8_000);
         let req = self.request.clone();
         let static_choice = if req.static_network { "2" } else { "1" };
-        let player_choice = if req.player_ip.trim().is_empty() { "1" } else { "3" };
+        let player_choice = if req.player_ip.trim().is_empty() {
+            "1"
+        } else {
+            "3"
+        };
         let swap_choice = if req.enable_swap { "Y" } else { "N" };
-        self.maybe_answer(&combined, "drive", "select drive (1-",
-            drive_answer(&stdout_tail, req.preferred_drive_name().as_deref()), &mut answers);
-        self.maybe_answer(&combined, "remove-existing-vm",
-            "do you want to remove it and continue? [y/n]", "N", &mut answers);
-        self.maybe_answer(&combined, "turn-off-existing-vm",
-            "turn off the vm now? [y/n]", "N", &mut answers);
-        self.maybe_answer(&combined, "continue-incompatible-vm",
-            "incompatibilities detected. continue anyway? [y/n]", "N", &mut answers);
-        self.maybe_answer(&combined, "external-switch",
-            "add external switch? [y/n]", "Y", &mut answers);
-        self.maybe_answer(&combined, "adapter", "select adapter (1-",
-            adapter_answer(&stdout_tail, &req.adapter_name), &mut answers);
-        self.maybe_answer(&combined, "memory-choice", "enter choice [1/2/3/4/5]",
-            memory_choice(req.memory_gb), &mut answers);
-        self.maybe_answer(&combined, "manual-memory", "enter memory in gb",
-            req.memory_gb.max(1).to_string(), &mut answers);
-        self.maybe_answer(&combined, "change-password",
-            "would you like to change the default password? [y/n]", "N", &mut answers);
-        self.maybe_answer(&combined, "network-mode", "choice [1/2]", static_choice, &mut answers);
-        self.maybe_answer(&combined, "static-mode", "static ip configuration:",
-            static_choice, &mut answers);
-        self.maybe_answer(&combined, "static-ip", "enter the static ip for the vm",
-            non_empty_or(&req.static_ip, ""), &mut answers);
-        self.maybe_answer(&combined, "cidr", "enter the cidr suffix", "/24", &mut answers);
-        self.maybe_answer(&combined, "gateway", "enter the gateway ip",
-            non_empty_or(&req.gateway, ""), &mut answers);
-        self.maybe_answer(&combined, "dns", "enter the dns server",
-            non_empty_or(&req.dns, "1.1.1.1"), &mut answers);
-        self.maybe_answer(&combined, "player-ip-choice",
-            "select the ip that players will connect to", player_choice, &mut answers);
-        self.maybe_answer(&combined, "player-ip-manual", "enter ip",
-            non_empty_or(&req.player_ip, ""), &mut answers);
-        self.maybe_answer(&combined, "steam-retry",
-            "steam download failed. retry? [y/n]", "N", &mut answers);
-        self.maybe_answer(&combined, "world-name", "world name",
-            non_empty_or(&req.world_name, "Arrakis"), &mut answers);
-        self.maybe_answer(&combined, "region", "region",
-            vendor_region_choice(&req.region), &mut answers);
-        self.maybe_answer(&combined, "self-host-token", "self-host",
-            req.self_host_token.clone(), &mut answers);
-        self.maybe_answer(&combined, "experimental-swap",
-            "enable experimental swap memory now? [y/n]", swap_choice, &mut answers);
+        self.maybe_answer(
+            &combined,
+            "drive",
+            "select drive (1-",
+            drive_answer(&stdout_tail, req.preferred_drive_name().as_deref()),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "remove-existing-vm",
+            "do you want to remove it and continue? [y/n]",
+            "N",
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "turn-off-existing-vm",
+            "turn off the vm now? [y/n]",
+            "N",
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "continue-incompatible-vm",
+            "incompatibilities detected. continue anyway? [y/n]",
+            "N",
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "external-switch",
+            "add external switch? [y/n]",
+            "Y",
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "adapter",
+            "select adapter (1-",
+            adapter_answer(&stdout_tail, &req.adapter_name),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "memory-choice",
+            "enter choice [1/2/3/4/5]",
+            memory_choice(req.memory_gb),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "manual-memory",
+            "enter memory in gb",
+            req.memory_gb.max(1).to_string(),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "change-password",
+            "would you like to change the default password? [y/n]",
+            "N",
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "network-mode",
+            "choice [1/2]",
+            static_choice,
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "static-mode",
+            "static ip configuration:",
+            static_choice,
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "static-ip",
+            "enter the static ip for the vm",
+            non_empty_or(&req.static_ip, ""),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "cidr",
+            "enter the cidr suffix",
+            "/24",
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "gateway",
+            "enter the gateway ip",
+            non_empty_or(&req.gateway, ""),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "dns",
+            "enter the dns server",
+            non_empty_or(&req.dns, "1.1.1.1"),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "player-ip-choice",
+            "select the ip that players will connect to",
+            player_choice,
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "player-ip-manual",
+            "enter ip",
+            non_empty_or(&req.player_ip, ""),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "steam-retry",
+            "steam download failed. retry? [y/n]",
+            "N",
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "world-name",
+            "world name",
+            non_empty_or(&req.world_name, "Arrakis"),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "region",
+            "region",
+            vendor_region_choice(&req.region),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "self-host-token",
+            "self-host",
+            req.self_host_token.clone(),
+            &mut answers,
+        );
+        self.maybe_answer(
+            &combined,
+            "experimental-swap",
+            "enable experimental swap memory now? [y/n]",
+            swap_choice,
+            &mut answers,
+        );
         answers
     }
 
@@ -79,7 +198,10 @@ impl VendorPromptDriver {
             return;
         }
         self.answered.push(id);
-        answers.push(VendorPromptAnswer { prompt_id: id, answer: answer.into() });
+        answers.push(VendorPromptAnswer {
+            prompt_id: id,
+            answer: answer.into(),
+        });
     }
 }
 

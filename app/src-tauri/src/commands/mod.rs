@@ -15,6 +15,4 @@ pub use battlegroup::{
 pub use component::{remote_component_log_tail, restart_remote_component};
 pub use discovery::detect_remote_ubuntu_servers;
 pub use status::{remote_server_components, remote_server_status};
-pub use tunnel::{
-    server_tunnel_status, start_server_tunnel, stop_all_tunnels, stop_server_tunnel,
-};
+pub use tunnel::{server_tunnel_status, start_server_tunnel, stop_all_tunnels, stop_server_tunnel};
