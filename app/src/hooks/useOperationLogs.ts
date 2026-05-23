@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { listenToEvent } from "../services/tauri";
+import { listenToEvent, recordOperationLog } from "../services/tauri";
+import { readLogSidebar, writeLogSidebar } from "../services/storage";
 import type { LogLevelFilter, LogRow, OperationLogPayload } from "../types/log";
 import {
   filterLogRows,
@@ -10,12 +11,30 @@ import {
 } from "../utils/logging";
 
 export function useOperationLogs() {
+  const persisted = useMemo(readLogSidebar, []);
   const [logRows, setLogRows] = useState<LogRow[]>([]);
   const [logLevelFilter, setLogLevelFilter] = useState<LogLevelFilter>("info");
-  const [logPanelCollapsed, setLogPanelCollapsed] = useState(false);
+  const [logPanelCollapsed, setLogPanelCollapsedState] = useState<boolean>(persisted.collapsed ?? false);
+  const [scopeToActiveServer, setScopeToActiveServerState] = useState<boolean>(
+    persisted.scopeToActiveServer ?? true,
+  );
+
+  const setLogPanelCollapsed = (next: boolean | ((current: boolean) => boolean)) => {
+    setLogPanelCollapsedState((current) => {
+      const resolved = typeof next === "function" ? next(current) : next;
+      writeLogSidebar({ collapsed: resolved, scopeToActiveServer });
+      return resolved;
+    });
+  };
+
+  const setScopeToActiveServer = (next: boolean) => {
+    setScopeToActiveServerState(next);
+    writeLogSidebar({ collapsed: logPanelCollapsed, scopeToActiveServer: next });
+  };
 
   const appendLogRow = (row: LogRow) => {
     setLogRows((rows) => limitLogRows([...rows, row]));
+    void recordOperationLog(row.level, row.scope, row.message).catch(() => undefined);
   };
 
   const clearLogRows = () => {
@@ -24,7 +43,12 @@ export function useOperationLogs() {
 
   useEffect(() => {
     const unlisten = listenToEvent<OperationLogPayload>("operation-log", (payload) => {
-      appendLogRow(logEntry(payload.level, payload.scope, payload.message));
+      setLogRows((rows) =>
+        limitLogRows([
+          ...rows,
+          logEntry(payload.level, payload.scope, payload.message, payload.serverId),
+        ]),
+      );
     });
     return () => {
       void unlisten.then((dispose) => dispose());
@@ -39,6 +63,8 @@ export function useOperationLogs() {
     setLogLevelFilter,
     logPanelCollapsed,
     setLogPanelCollapsed,
+    scopeToActiveServer,
+    setScopeToActiveServer,
     appendLogRow,
     clearLogRows,
     renderedLogRows,

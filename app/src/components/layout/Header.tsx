@@ -1,15 +1,21 @@
 import { Flex } from "@radix-ui/themes";
 
 import type { Update } from "../../services/updater";
-import type { PageId } from "../../types/ui";
+import type { RemoteServerRecord, RemoteServerStatus } from "../../types/server";
+import type { ActivePage } from "../../types/ui";
 import type { UpdateStatus } from "../../types/update";
 import TopNav from "./TopNav";
 import UpdateHeaderControl from "./UpdateHeaderControl";
 
 export type HeaderProps = {
-  activePage: PageId;
-  onNavigate: (page: PageId) => void;
-  serverCount: number;
+  activePage: ActivePage;
+  servers: RemoteServerRecord[];
+  statuses: Record<string, RemoteServerStatus>;
+  statusErrors: Record<string, string>;
+  busyMap: Record<string, string>;
+  onOpenServersList: () => void;
+  onOpenServer: (serverId: string) => void;
+  onAddServer: () => void;
   updateStatus: UpdateStatus;
   update: Update | null;
   updateProgress: string | null;
@@ -19,8 +25,13 @@ export type HeaderProps = {
 
 export default function Header({
   activePage,
-  onNavigate,
-  serverCount,
+  servers,
+  statuses,
+  statusErrors,
+  busyMap,
+  onOpenServersList,
+  onOpenServer,
+  onAddServer,
   updateStatus,
   update,
   updateProgress,
@@ -40,7 +51,16 @@ export default function Header({
               <span className="app-title-sub">Operator console</span>
             </Flex>
           </Flex>
-          <TopNav activePage={activePage} onNavigate={onNavigate} serverCount={serverCount} />
+          <TopNav
+            activePage={activePage}
+            servers={servers}
+            statuses={statuses}
+            statusErrors={statusErrors}
+            busyMap={busyMap}
+            onOpenServersList={onOpenServersList}
+            onOpenServer={onOpenServer}
+            onAddServer={onAddServer}
+          />
         </Flex>
         <UpdateHeaderControl
           status={updateStatus}

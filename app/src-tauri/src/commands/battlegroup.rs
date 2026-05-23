@@ -36,13 +36,44 @@ pub async fn stop_remote_battlegroup(
 }
 
 #[tauri::command]
+pub async fn restart_remote_battlegroup(
+    app: tauri::AppHandle,
+    request: RemoteServerActionRequest,
+) -> Result<RemoteServerStatus, String> {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut sink = TauriOperationSink::new(worker_app);
+        sink.info("bg.restart", "Restarting remote battlegroup.");
+        let runner = runner_for_remote_kind(
+            request.server_type.as_deref(),
+            request.host,
+            request.user,
+            request.key_path,
+        )?;
+        let battlegroup = BattlegroupRef {
+            namespace: request.namespace,
+            name: request.battlegroup_name,
+        };
+        let manager = manager_from_runner(&runner);
+        manager
+            .restart_and_wait_director(&battlegroup, 240, &mut sink)
+            .map_err(command_error_message)?;
+        sink.info("bg.restart", "Refreshing battlegroup state.");
+        read_remote_server_status(&runner, &battlegroup.namespace, &battlegroup.name)
+            .map_err(command_error_message)
+    })
+    .await
+    .map_err(|err| format!("Remote battlegroup restart worker failed: {err}"))?
+}
+
+#[tauri::command]
 pub async fn update_remote_battlegroup(
     app: tauri::AppHandle,
     request: RemoteServerActionRequest,
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app: worker_app };
+        let mut sink = TauriOperationSink::new(worker_app);
         sink.info("bg.update", "Running vendor wrapper update.");
         let runner = runner_for_remote_kind(
             request.server_type.as_deref(),
@@ -68,7 +99,7 @@ pub async fn run_remote_battlegroup_action(
 ) -> Result<RemoteServerStatus, String> {
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut sink = TauriOperationSink { app: worker_app };
+        let mut sink = TauriOperationSink::new(worker_app);
         sink.info("bg.check", "Checking remote battlegroup state.");
         let runner = runner_for_remote_kind(
             request.server_type.as_deref(),

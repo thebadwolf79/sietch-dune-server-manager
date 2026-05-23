@@ -4,11 +4,13 @@ import type {
   RemoteServerKind,
   RemoteServerPackageStatus,
   RemoteServerRecord,
+  RemoteServerStatus,
 } from "../types/server";
 import type { TunnelService } from "../types/tunnel";
+import type { StatusTone } from "../components/ui/StatusPill";
 
-export function remoteServerDefaultUser(kind: RemoteServerKind): string {
-  return kind === "ubuntu" ? "root" : "root";
+export function remoteServerDefaultUser(_kind: RemoteServerKind): string {
+  return "dune";
 }
 
 export function remoteServerActionRequest(server: RemoteServerRecord) {
@@ -90,4 +92,44 @@ export function omitKey<T>(record: Record<string, T>, key: string): Record<strin
 
 export function omitPrefix<T>(record: Record<string, T>, prefix: string): Record<string, T> {
   return Object.fromEntries(Object.entries(record).filter(([key]) => !key.startsWith(prefix)));
+}
+
+export type ResolvedServerStatus = {
+  tone: StatusTone;
+  label: string;
+  pulse: boolean;
+};
+
+/**
+ * Reduces an attached server's various status signals (live status, error,
+ * busy label, persisted record phase) into a single tone + label + pulse
+ * triple. Shared by RemoteServer detail pages, the top tab strip, and the
+ * compact list view.
+ */
+export function resolveServerStatus(
+  statusError: string | undefined,
+  liveStatus: RemoteServerStatus | undefined,
+  busy: boolean,
+  server: RemoteServerRecord,
+): ResolvedServerStatus {
+  if (statusError) return { tone: "err", label: "Check failed", pulse: false };
+  if (!liveStatus) return { tone: "gray", label: busy ? "Checking" : "Unknown", pulse: busy };
+  const battlegroup = liveStatus.battlegroup;
+  if (isBattlegroupStarted(battlegroup)) return { tone: "ok", label: "Started", pulse: false };
+  if (!battlegroup.stop) return { tone: "warn", label: battlegroup.phase || "Starting", pulse: true };
+  if (battlegroup.stop) return { tone: "gray", label: "Stopped", pulse: false };
+  if (server.phase === "Setup running") return { tone: "warn", label: "Setup running", pulse: true };
+  return { tone: "gray", label: server.phase || "Unknown", pulse: false };
+}
+
+/**
+ * Maps a Kubernetes/operator phase string onto the shared status tone
+ * vocabulary used by metric tiles and per-map server-stats rows.
+ */
+export function phaseTone(phase: string): StatusTone {
+  const v = phase.trim().toLowerCase();
+  if (["running", "ready", "healthy", "available", "reconciling"].includes(v)) return "ok";
+  if (["pending", "starting", "deploying", "scheduling", "creating"].includes(v)) return "warn";
+  if (["failed", "error", "crashloop", "crashloopbackoff", "unhealthy"].includes(v)) return "err";
+  return "gray";
 }

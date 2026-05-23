@@ -1,0 +1,141 @@
+import { Flex } from "@radix-ui/themes";
+
+import type { RemoteServerRecord, RemoteServerStatus } from "../../types/server";
+import type { ServerTunnelStartRequest, ServerTunnelStatus } from "../../types/tunnel";
+import {
+  isBattlegroupStarted,
+  isDirectorReadyPhase,
+  phaseTone,
+  remoteServerDefaultUser,
+} from "../../utils/remote-server";
+import ActionButton from "../ui/ActionButton";
+import Metric from "../ui/Metric";
+import ServerStatsTable from "./ServerStatsTable";
+import ServerTunnelControls from "./ServerTunnelControls";
+
+export type ServerDashboardProps = {
+  server: RemoteServerRecord;
+  status?: RemoteServerStatus;
+  statusError?: string;
+  busyLabel?: string;
+  tunnels: Record<string, ServerTunnelStatus>;
+  tunnelBusy: Record<string, boolean>;
+  onStartBattlegroup: () => void;
+  onStopBattlegroup: () => void;
+  onRestartBattlegroup: () => void;
+  onStartTunnel: (request: ServerTunnelStartRequest) => void;
+  onStopTunnel: (tunnelId: string) => void;
+  onOpenTunnel: (tunnel: ServerTunnelStatus) => void;
+};
+
+/**
+ * Per-server Dashboard sub-tab: status hero metrics, per-map server-stats
+ * table, lifecycle action row (start/stop/restart), and tunnel controls.
+ */
+export default function ServerDashboard({
+  server,
+  status,
+  statusError,
+  busyLabel,
+  tunnels,
+  tunnelBusy,
+  onStartBattlegroup,
+  onStopBattlegroup,
+  onRestartBattlegroup,
+  onStartTunnel,
+  onStopTunnel,
+  onOpenTunnel,
+}: ServerDashboardProps) {
+  const liveStatus = statusError ? undefined : status;
+  const battlegroup = liveStatus?.battlegroup;
+  const battlegroupStarted = liveStatus ? isBattlegroupStarted(liveStatus.battlegroup) : false;
+  const battlegroupStartRequested = liveStatus ? !liveStatus.battlegroup.stop : false;
+  const battlegroupStopped = liveStatus ? liveStatus.battlegroup.stop : false;
+  const directorReady = !!liveStatus && isDirectorReadyPhase(liveStatus.battlegroup.directorPhase);
+  const busy = !!busyLabel;
+
+  return (
+    <Flex direction="column" gap="4">
+      <div className="metric-grid">
+        <Metric label="Namespace" value={server.namespace || ""} />
+        <Metric label="BattleGroup" value={server.battlegroupName || ""} />
+        <Metric
+          label="Database"
+          value={battlegroup?.databasePhase ?? ""}
+          tone={battlegroup ? phaseTone(battlegroup.databasePhase ?? "") : "muted"}
+        />
+        <Metric
+          label="Gateway"
+          value={battlegroup?.serverGroupPhase ?? ""}
+          tone={battlegroup ? phaseTone(battlegroup.serverGroupPhase) : "muted"}
+        />
+        <Metric
+          label="Director"
+          value={battlegroup?.directorPhase ?? ""}
+          tone={battlegroup ? phaseTone(battlegroup.directorPhase) : "muted"}
+        />
+        <Metric label="Uptime" value={battlegroup?.uptime ?? ""} />
+      </div>
+
+      {battlegroup?.serverStats && battlegroup.serverStats.length > 0 ? (
+        <ServerStatsTable rows={battlegroup.serverStats} />
+      ) : null}
+
+      {statusError ? <div className="server-error">{statusError}</div> : null}
+
+      <div className="action-row">
+        {battlegroupStopped || !liveStatus ? (
+          <ActionButton
+            onClick={onStartBattlegroup}
+            busy={busy && !battlegroupStarted}
+            disabled={busy || !liveStatus || !battlegroupStopped}
+            tone="accent"
+            pendingLabel="Starting"
+          >
+            Start BattleGroup
+          </ActionButton>
+        ) : null}
+        {battlegroupStartRequested ? (
+          <>
+            <ActionButton
+              onClick={onRestartBattlegroup}
+              busy={busy}
+              disabled={busy || !liveStatus}
+              tone="default"
+              pendingLabel="Restarting"
+            >
+              Restart
+            </ActionButton>
+            <ActionButton
+              onClick={onStopBattlegroup}
+              busy={busy && battlegroupStartRequested && !battlegroupStopped}
+              disabled={busy || !liveStatus}
+              tone="danger"
+              pendingLabel="Stopping"
+            >
+              Stop BattleGroup
+            </ActionButton>
+          </>
+        ) : null}
+      </div>
+
+      <ServerTunnelControls
+        serverKey={server.id}
+        namespace={server.namespace}
+        host={server.host}
+        serverKind={server.type}
+        user={server.user || remoteServerDefaultUser(server.type)}
+        keyPath={server.keyPath}
+        canStartDirectorTunnel={!!liveStatus && !liveStatus.battlegroup.stop && directorReady}
+        canStartFileBrowserTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
+        canStartDatabaseTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
+        canStartPgHeroTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
+        tunnels={tunnels}
+        tunnelBusy={tunnelBusy}
+        onStartTunnel={onStartTunnel}
+        onStopTunnel={onStopTunnel}
+        onOpenTunnel={onOpenTunnel}
+      />
+    </Flex>
+  );
+}

@@ -12,4 +12,7 @@ mod status_parser;
 mod wrapper;
 
 pub use status_parser::parse_wrapper_status;
-pub use wrapper::{BattlegroupWrapperOps, VendorBattlegroupWrapper, WrapperAction, WrapperOutcome};
+pub use wrapper::{
+    BattlegroupWrapperOps, VendorBattlegroupWrapper, WrapperAction, WrapperOutcome,
+    VENDOR_EFFECTIVE_USER, VENDOR_WRAPPER_PATH,
+};

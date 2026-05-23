@@ -201,9 +201,10 @@ fn bg_manager(
     >,
 > {
     let runner = ssh_runner(args)?;
+    let ssh_user = runner.target().user.clone();
     Ok(BattlegroupManagementOrchestrator::new(
         StructuredKubectl::new(runner.clone()),
-        VendorBattlegroupWrapper::new(runner),
+        VendorBattlegroupWrapper::with_ssh_user(runner, ssh_user),
     ))
 }
 

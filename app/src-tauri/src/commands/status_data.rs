@@ -17,9 +17,10 @@ pub fn read_remote_server_status(
     namespace: &str,
     battlegroup_name: &str,
 ) -> CommandResult<RemoteServerStatus> {
+    let ssh_user = runner.target().user.clone();
     let manager = BattlegroupManagementOrchestrator::new(
         StructuredKubectl::new(runner.clone()),
-        VendorBattlegroupWrapper::new(runner.clone()),
+        VendorBattlegroupWrapper::with_ssh_user(runner.clone(), ssh_user),
     );
     let bg_ref = BattlegroupRef {
         namespace: namespace.to_string(),

@@ -12,7 +12,12 @@ export function sanitizeLogMessage(message: string): string {
   );
 }
 
-export function logEntry(level: LogLevel, scope: string, message: string): LogRow {
+export function logEntry(
+  level: LogLevel,
+  scope: string,
+  message: string,
+  serverId?: string,
+): LogRow {
   return {
     id: nextLogRowId++,
     timestamp: new Date().toLocaleTimeString([], {
@@ -23,6 +28,7 @@ export function logEntry(level: LogLevel, scope: string, message: string): LogRo
     level,
     scope,
     message: sanitizeLogMessage(message),
+    serverId,
   };
 }
 
@@ -37,8 +43,12 @@ export function limitLogRows(rows: LogRow[]): LogRow[] {
 }
 
 export const log = {
-  debug: (scope: string, message: string): LogRow => logEntry("debug", scope, message),
-  info: (scope: string, message: string): LogRow => logEntry("info", scope, message),
-  warn: (scope: string, message: string): LogRow => logEntry("warn", scope, message),
-  error: (scope: string, message: string): LogRow => logEntry("error", scope, message),
+  debug: (scope: string, message: string, serverId?: string): LogRow =>
+    logEntry("debug", scope, message, serverId),
+  info: (scope: string, message: string, serverId?: string): LogRow =>
+    logEntry("info", scope, message, serverId),
+  warn: (scope: string, message: string, serverId?: string): LogRow =>
+    logEntry("warn", scope, message, serverId),
+  error: (scope: string, message: string, serverId?: string): LogRow =>
+    logEntry("error", scope, message, serverId),
 };

@@ -4,6 +4,7 @@ import {
   detectRemoteUbuntuServers,
   getRemoteServerComponents,
   getRemoteServerStatus,
+  restartRemoteBattlegroup,
   startRemoteBattlegroup,
   stopRemoteBattlegroup,
   updateRemoteBattlegroup,
@@ -83,6 +84,7 @@ export function useRemoteServerStatus({ appendLogRow, setRemoteServers }: UseRem
           `${liveServer.battlegroupName}: ${status.battlegroup.phase || "unknown"}, server group ${
             status.battlegroup.serverGroupPhase || "unknown"
           }, Director ${status.battlegroup.directorPhase || "unknown"}.`,
+          liveServer.id,
         ),
       );
     } catch (err) {
@@ -91,7 +93,7 @@ export function useRemoteServerStatus({ appendLogRow, setRemoteServers }: UseRem
       setRemoteServerComponents((components) => omitKey(components, server.id));
       setRemoteComponentLogs((logs) => omitPrefix(logs, `${server.id}:`));
       setRemoteServerStatusErrors((errors) => ({ ...errors, [server.id]: message }));
-      appendLogRow(log.warn("remote.status", message));
+      appendLogRow(log.warn("remote.status", message, server.id));
     } finally {
       setRemoteServerBusy((busy) => omitKey(busy, server.id));
     }
@@ -99,13 +101,17 @@ export function useRemoteServerStatus({ appendLogRow, setRemoteServers }: UseRem
 
   const runRemoteBattlegroupAction = async (
     server: RemoteServerRecord,
-    action: "start" | "stop" | "update",
+    action: "start" | "stop" | "restart" | "update",
   ) => {
-    const busyText =
-      action === "start" ? "Starting battlegroup" : action === "stop" ? "Stopping battlegroup" : "Updating battlegroup";
-    const verb = action === "start" ? "Starting" : action === "stop" ? "Stopping" : "Updating";
+    const verbs: Record<typeof action, [busy: string, log: string]> = {
+      start: ["Starting battlegroup", "Starting"],
+      stop: ["Stopping battlegroup", "Stopping"],
+      restart: ["Restarting battlegroup", "Restarting"],
+      update: ["Updating battlegroup", "Updating"],
+    };
+    const [busyText, verb] = verbs[action];
     setRemoteServerBusy((busy) => ({ ...busy, [server.id]: busyText }));
-    appendLogRow(log.info("bg", `${verb} remote battlegroup.`));
+    appendLogRow(log.info("bg", `${verb} remote battlegroup.`, server.id));
     try {
       const liveServer =
         server.namespace && server.battlegroupName ? server : await detectRemoteServerDetails(server);
@@ -116,7 +122,9 @@ export function useRemoteServerStatus({ appendLogRow, setRemoteServers }: UseRem
           ? await startRemoteBattlegroup(request)
           : action === "stop"
             ? await stopRemoteBattlegroup(request)
-            : await updateRemoteBattlegroup(request);
+            : action === "restart"
+              ? await restartRemoteBattlegroup(request)
+              : await updateRemoteBattlegroup(request);
       const components = await getRemoteServerComponents(request);
       setRemoteServerStatuses((statuses) => ({ ...statuses, [liveServer.id]: status }));
       setRemoteServerComponents((current) => ({ ...current, [liveServer.id]: components }));
@@ -133,7 +141,7 @@ export function useRemoteServerStatus({ appendLogRow, setRemoteServers }: UseRem
     } catch (err) {
       const message = errorMessage(err);
       setRemoteServerStatusErrors((errors) => ({ ...errors, [server.id]: message }));
-      appendLogRow(log.error("bg", message));
+      appendLogRow(log.error("bg", message, server.id));
     } finally {
       setRemoteServerBusy((busy) => omitKey(busy, server.id));
     }

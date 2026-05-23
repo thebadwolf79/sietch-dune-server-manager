@@ -29,6 +29,12 @@ pub trait BattlegroupWrapperOps {
 /// Path to the vendor wrapper script on the guest.
 pub const VENDOR_WRAPPER_PATH: &str = "/home/dune/.dune/bin/battlegroup";
 
+/// The user the vendor wrapper expects to be invoked as. When the SSH
+/// session logs in as a different account (typically `root`), the wrapper
+/// is re-launched under `sudo -u dune -H bash -lc ...` so file ownership
+/// under `/home/dune` stays correct.
+pub const VENDOR_EFFECTIVE_USER: &str = "dune";
+
 /// One of the vendor wrapper actions this driver supports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WrapperAction {
@@ -70,20 +76,37 @@ pub struct WrapperOutcome {
 #[derive(Debug, Clone)]
 pub struct VendorBattlegroupWrapper<R> {
     runner: R,
+    ssh_user: String,
 }
 
 impl<R> VendorBattlegroupWrapper<R>
 where
     R: RemoteCommandRunner,
 {
-    /// Creates a wrapper driver around a remote command runner.
+    /// Creates a wrapper that assumes the SSH session is already logged in
+    /// as the vendor's expected user (`dune`).
     pub fn new(runner: R) -> Self {
-        Self { runner }
+        Self::with_ssh_user(runner, VENDOR_EFFECTIVE_USER)
+    }
+
+    /// Creates a wrapper driver around a remote command runner, recording
+    /// the SSH login user so the script can drop to `dune` via `sudo -u`
+    /// when the operator logged in as a different account.
+    pub fn with_ssh_user(runner: R, ssh_user: impl Into<String>) -> Self {
+        Self {
+            runner,
+            ssh_user: ssh_user.into(),
+        }
     }
 
     /// Borrows the underlying runner.
     pub fn runner(&self) -> &R {
         &self.runner
+    }
+
+    /// Returns the SSH login user the wrapper was configured for.
+    pub fn ssh_user(&self) -> &str {
+        &self.ssh_user
     }
 
     /// Invokes the vendor wrapper for the given action against a specific
@@ -94,7 +117,7 @@ where
         action: WrapperAction,
     ) -> CommandResult<WrapperOutcome> {
         battlegroup.validate()?;
-        let script = build_wrapper_script(&battlegroup.namespace, action);
+        let script = build_wrapper_script(&battlegroup.namespace, action, &self.ssh_user);
         let stdout = self.runner.run_script(&script)?;
         Ok(WrapperOutcome { action, stdout })
     }
@@ -144,9 +167,25 @@ where
 /// The launcher is intentionally POSIX-sh (no bash arrays / process
 /// substitution) because [`crate::orchestration::RemoteCommandRunner::run_script`]
 /// pipes scripts to `sh -s`, which is `dash` on Ubuntu.
-fn build_wrapper_script(target_ns: &str, action: WrapperAction) -> String {
+fn build_wrapper_script(target_ns: &str, action: WrapperAction, ssh_user: &str) -> String {
     let ns_literal = sh_single_quoted(target_ns);
     let action_literal = sh_single_quoted(action.as_str());
+    let needs_impersonation = ssh_user != VENDOR_EFFECTIVE_USER;
+    // When the SSH login user is not `dune`, re-launch the wrapper inside
+    // `sudo -n -u dune -H bash -lc '...'` so writes under /home/dune stay
+    // owned by dune. The inner bash payload reads `$1` and `$2` (idx +
+    // action) so we don't have to wrestle with nested single-quote
+    // escaping when the wrapper path or action ever contain shell
+    // metacharacters.
+    let invocation = if needs_impersonation {
+        format!(
+            r#"sudo -n -u {target} -H bash -lc 'printf "%s\nN\n" "$1" | "{wrapper}" "$2"' _ "$idx" "$ACTION""#,
+            target = VENDOR_EFFECTIVE_USER,
+            wrapper = VENDOR_WRAPPER_PATH,
+        )
+    } else {
+        r#"printf '%s\nN\n' "$idx" | "$WRAPPER" "$ACTION""#.to_string()
+    };
     format!(
         r#"set -eu
 TARGET_NS={ns_literal}
@@ -163,11 +202,12 @@ if [ -z "$idx" ]; then
   echo "Battlegroup namespace $TARGET_NS not found in funcom-seabass-* listing" >&2
   exit 1
 fi
-printf '%s\nN\n' "$idx" | "$WRAPPER" "$ACTION"
+{invocation}
 "#,
         ns_literal = ns_literal,
         action_literal = action_literal,
         wrapper_literal = sh_single_quoted(VENDOR_WRAPPER_PATH),
+        invocation = invocation,
     )
 }
 
@@ -190,7 +230,7 @@ mod tests {
 
     #[test]
     fn build_wrapper_script_quotes_namespace_and_action() {
-        let script = build_wrapper_script("funcom-seabass-it's", WrapperAction::Status);
+        let script = build_wrapper_script("funcom-seabass-it's", WrapperAction::Status, "dune");
         assert!(script.contains("'funcom-seabass-it'\"'\"'s'"));
         assert!(script.contains("'status'"));
         assert!(script.contains("/home/dune/.dune/bin/battlegroup"));
@@ -199,12 +239,26 @@ mod tests {
 
     #[test]
     fn build_wrapper_script_is_posix_sh_safe() {
-        let script = build_wrapper_script("funcom-seabass-foo", WrapperAction::Status);
+        let script = build_wrapper_script("funcom-seabass-foo", WrapperAction::Status, "dune");
         // Bash arrays and process substitution must not appear; the script is
         // sent to `sh -s`, which is dash on Ubuntu.
         assert!(!script.contains("namespaces=()"));
         assert!(!script.contains("namespaces+=("));
         assert!(!script.contains("${!namespaces"));
         assert!(!script.contains("<("));
+    }
+
+    #[test]
+    fn build_wrapper_script_impersonates_dune_when_ssh_user_is_root() {
+        let script = build_wrapper_script("funcom-seabass-foo", WrapperAction::Status, "root");
+        assert!(script.contains("sudo -n -u dune -H bash -lc"));
+        assert!(script.contains("\"/home/dune/.dune/bin/battlegroup\""));
+        assert!(script.contains("_ \"$idx\" \"$ACTION\""));
+    }
+
+    #[test]
+    fn build_wrapper_script_skips_impersonation_when_ssh_user_is_dune() {
+        let script = build_wrapper_script("funcom-seabass-foo", WrapperAction::Start, "dune");
+        assert!(!script.contains("sudo -n -u dune"));
     }
 }

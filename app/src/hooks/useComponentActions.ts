@@ -40,7 +40,7 @@ export function useComponentActions({
   ) => {
     const key = componentLogStateKey(server.id, component);
     setRemoteComponentLogBusy((busy) => ({ ...busy, [key]: true }));
-    appendLogRow(log.info("remote.logs", `Refreshing ${component.name} logs.`));
+    appendLogRow(log.info("remote.logs", `Refreshing ${component.name} logs.`, server.id));
     try {
       const liveServer = server.namespace ? server : await detectRemoteServerDetails(server);
       const result = await remoteComponentLogTail({
@@ -59,7 +59,7 @@ export function useComponentActions({
     } catch (err) {
       const message = errorMessage(err);
       setRemoteComponentLogs((logs) => ({ ...logs, [key]: sanitizeLogMessage(message) }));
-      appendLogRow(log.warn("remote.logs", message));
+      appendLogRow(log.warn("remote.logs", message, server.id));
     } finally {
       setRemoteComponentLogBusy((busy) => omitKey(busy, key));
     }
@@ -77,7 +77,7 @@ export function useComponentActions({
     }
     const key = componentLogStateKey(server.id, component);
     setRemoteComponentRestartBusy((busy) => ({ ...busy, [key]: true }));
-    appendLogRow(log.warn("remote.restart", `Restarting ${component.name}.`));
+    appendLogRow(log.warn("remote.restart", `Restarting ${component.name}.`, server.id));
     try {
       const liveServer = server.namespace ? server : await detectRemoteServerDetails(server);
       const result = await restartRemoteComponentCmd({
@@ -97,7 +97,7 @@ export function useComponentActions({
     } catch (err) {
       const message = errorMessage(err);
       setRemoteComponentLogs((logs) => ({ ...logs, [key]: sanitizeLogMessage(message) }));
-      appendLogRow(log.error("remote.restart", message));
+      appendLogRow(log.error("remote.restart", message, server.id));
     } finally {
       setRemoteComponentRestartBusy((busy) => omitKey(busy, key));
     }

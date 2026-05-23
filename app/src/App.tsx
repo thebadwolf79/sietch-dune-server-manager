@@ -6,7 +6,8 @@ import LogWindow from "./components/logs/LogWindow";
 import RemoteAttachDialog from "./components/dialogs/RemoteAttachDialog";
 import RemoveRemoteServerDialog from "./components/dialogs/RemoveRemoteServerDialog";
 import UpdateDialog from "./components/dialogs/UpdateDialog";
-import ServersPage from "./components/servers/ServersPage";
+import ServerDetailPage from "./components/servers/ServerDetailPage";
+import ServersListPage from "./components/servers/ServersListPage";
 import { useAppUpdates } from "./hooks/useAppUpdates";
 import { useComponentActions } from "./hooks/useComponentActions";
 import { useOperationLogs } from "./hooks/useOperationLogs";
@@ -17,13 +18,13 @@ import { useActivePage } from "./hooks/useActivePage";
 import { log } from "./utils/logging";
 
 export function App() {
-  const { activePage, setActivePage } = useActivePage();
-
   const {
     logLevelFilter,
     setLogLevelFilter,
     logPanelCollapsed,
     setLogPanelCollapsed,
+    scopeToActiveServer,
+    setScopeToActiveServer,
     appendLogRow,
     clearLogRows,
     renderedLogRows,
@@ -54,13 +55,40 @@ export function App() {
   remoteServersHook.bindClearStatusForServer(status.clearStatusForServer);
   remoteServersHook.bindStopTunnelsForServer(tunnels.stopTunnelsForServer);
 
+  const { activePage, openServer, openServersList, setSub } = useActivePage({
+    remoteServers: remoteServersHook.remoteServers,
+  });
+
+  const scopeServerId = activePage.kind === "server" ? activePage.serverId : undefined;
+  const visibleLogRows =
+    scopeServerId && scopeToActiveServer
+      ? renderedLogRows.filter((row) => !row.serverId || row.serverId === scopeServerId)
+      : renderedLogRows;
+
+  const activeServer =
+    activePage.kind === "server"
+      ? remoteServersHook.remoteServers.find((server) => server.id === activePage.serverId)
+      : undefined;
+
   return (
-    <Theme appearance="dark" accentColor="bronze" grayColor="sand" radius="medium" scaling="100%" panelBackground="solid">
+    <Theme
+      appearance="dark"
+      accentColor="bronze"
+      grayColor="sand"
+      radius="medium"
+      scaling="100%"
+      panelBackground="solid"
+    >
       <Flex direction="column" height="100vh" className="app-shell">
         <Header
           activePage={activePage}
-          onNavigate={setActivePage}
-          serverCount={remoteServersHook.remoteServers.length}
+          servers={remoteServersHook.remoteServers}
+          statuses={status.remoteServerStatuses}
+          statusErrors={status.remoteServerStatusErrors}
+          busyMap={status.remoteServerBusy}
+          onOpenServersList={openServersList}
+          onOpenServer={openServer}
+          onAddServer={() => remoteServersHook.setRemoteAttachOpen(true)}
           updateStatus={updates.updateStatus}
           update={updates.availableUpdate}
           updateProgress={updates.updateProgress}
@@ -70,45 +98,72 @@ export function App() {
         <Flex className="content-shell" gap="3" p="4" pt="0" minHeight="0">
           <Box className="main-pane">
             <AppErrorBoundary onError={(message) => appendLogRow(log.error("ui", message))}>
-              <ServersPage
-                remoteServers={remoteServersHook.remoteServers}
-                remoteStatuses={status.remoteServerStatuses}
-                remoteComponents={status.remoteServerComponents}
-                remoteComponentLogs={status.remoteComponentLogs}
-                remoteComponentLogBusy={status.remoteComponentLogBusy}
-                remoteComponentRestartBusy={status.remoteComponentRestartBusy}
-                remoteStatusErrors={status.remoteServerStatusErrors}
-                remoteBusy={status.remoteServerBusy}
-                tunnels={tunnels.serverTunnels}
-                tunnelBusy={tunnels.serverTunnelBusy}
-                onAddRemoteServer={() => remoteServersHook.setRemoteAttachOpen(true)}
-                onRemoveRemoteServer={(server) => remoteServersHook.setRemoteServerToRemove(server)}
-                onRefreshRemoteStatus={status.refreshRemoteServerStatus}
-                onStartRemoteBattlegroup={(server) => status.runRemoteBattlegroupAction(server, "start")}
-                onStopRemoteBattlegroup={(server) => status.runRemoteBattlegroupAction(server, "stop")}
-                onUpdateRemoteBattlegroup={(server) => status.runRemoteBattlegroupAction(server, "update")}
-                onStartTunnel={tunnels.startServerTunnel}
-                onStopTunnel={tunnels.stopServerTunnel}
-                onOpenTunnel={tunnels.openServerTunnel}
-                onRefreshRemoteComponentLog={componentActions.refreshRemoteComponentLog}
-                onRestartRemoteComponent={componentActions.restartRemoteComponent}
-              />
+              {activePage.kind === "servers" || !activeServer ? (
+                <ServersListPage
+                  servers={remoteServersHook.remoteServers}
+                  statuses={status.remoteServerStatuses}
+                  statusErrors={status.remoteServerStatusErrors}
+                  busyMap={status.remoteServerBusy}
+                  onOpenServer={openServer}
+                  onAddServer={() => remoteServersHook.setRemoteAttachOpen(true)}
+                />
+              ) : (
+                <ServerDetailPage
+                  server={activeServer}
+                  sub={activePage.sub}
+                  onSubChange={setSub}
+                  status={status.remoteServerStatuses[activeServer.id]}
+                  statusError={status.remoteServerStatusErrors[activeServer.id]}
+                  busyLabel={status.remoteServerBusy[activeServer.id]}
+                  components={status.remoteServerComponents[activeServer.id] ?? []}
+                  componentLogs={status.remoteComponentLogs}
+                  componentLogBusy={status.remoteComponentLogBusy}
+                  componentRestartBusy={status.remoteComponentRestartBusy}
+                  tunnels={tunnels.serverTunnels}
+                  tunnelBusy={tunnels.serverTunnelBusy}
+                  onRefresh={() => status.refreshRemoteServerStatus(activeServer)}
+                  onRemove={() => remoteServersHook.setRemoteServerToRemove(activeServer)}
+                  onStartBattlegroup={() => status.runRemoteBattlegroupAction(activeServer, "start")}
+                  onStopBattlegroup={() => status.runRemoteBattlegroupAction(activeServer, "stop")}
+                  onRestartBattlegroup={() =>
+                    status.runRemoteBattlegroupAction(activeServer, "restart")
+                  }
+                  onUpdateBattlegroup={() => status.runRemoteBattlegroupAction(activeServer, "update")}
+                  onStartTunnel={tunnels.startServerTunnel}
+                  onStopTunnel={tunnels.stopServerTunnel}
+                  onOpenTunnel={tunnels.openServerTunnel}
+                  onRefreshComponentLog={(component) =>
+                    componentActions.refreshRemoteComponentLog(activeServer, component)
+                  }
+                  onRestartComponent={(component) =>
+                    componentActions.restartRemoteComponent(activeServer, component)
+                  }
+                />
+              )}
             </AppErrorBoundary>
           </Box>
           <LogWindow
-            rows={renderedLogRows}
+            rows={visibleLogRows}
             level={logLevelFilter}
             collapsed={logPanelCollapsed}
+            scopedToServer={scopeToActiveServer}
+            canScopeToServer={!!scopeServerId}
             onLevelChange={setLogLevelFilter}
             onClear={clearLogRows}
             onToggleCollapsed={() => setLogPanelCollapsed((collapsed) => !collapsed)}
+            onToggleScope={setScopeToActiveServer}
           />
         </Flex>
         <RemoteAttachDialog
           open={remoteServersHook.remoteAttachOpen}
           form={remoteServersHook.remoteAttachForm}
           running={remoteServersHook.remoteAttachRunning}
-          onOpenChange={remoteServersHook.setRemoteAttachOpen}
+          errorMessage={remoteServersHook.remoteAttachError}
+          preflight={remoteServersHook.remoteAttachPreflight}
+          onOpenChange={(open) => {
+            remoteServersHook.setRemoteAttachOpen(open);
+            if (!open) remoteServersHook.setRemoteAttachError(null);
+          }}
           onChange={remoteServersHook.setRemoteAttachForm}
           onAttach={remoteServersHook.addRemoteServer}
         />
