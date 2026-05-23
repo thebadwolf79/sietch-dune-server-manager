@@ -30,6 +30,7 @@ pnpm-debug.log*
 !README.md
 !docs/
 !docs/*.md
+docs/rabbitmq-protocol.md
 
 # Editor and OS noise
 .idea/
