@@ -190,16 +190,44 @@ pub struct GuestNetworkConfig {
 }
 
 /// Minimal BattleGroup lifecycle state used by start/restart waits.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The phase fields mirror the columns shown by the vendor
+/// `/home/dune/.dune/bin/battlegroup status` wrapper. `stop` is read separately
+/// from `.spec.stop` because the wrapper does not surface it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BattlegroupState {
     /// Vendor stop flag from `spec.stop`.
     pub stop: bool,
-    /// Top-level BattleGroup status phase.
+    /// Top-level BattleGroup status phase (the wrapper's `Status` column).
     pub phase: String,
-    /// ServerGroup status phase, when reported.
+    /// Database phase from the wrapper's `Database` column.
+    pub database_phase: String,
+    /// Gateway phase from the wrapper's `Gateway` column.
+    ///
+    /// Kept under the old `server_group_phase` name in the struct for
+    /// backwards compatibility with existing callers.
     pub server_group_phase: String,
-    /// Director status phase, when reported.
+    /// Director phase from the wrapper's `Director` column.
     pub director_phase: String,
+    /// Optional uptime string from the wrapper's `Uptime` column.
+    pub uptime: String,
+    /// Per-map server stats parsed from the wrapper's `Game Servers` table.
+    pub server_stats: Vec<ServerStatRow>,
+}
+
+/// One row of the vendor wrapper's `Game Servers` table.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ServerStatRow {
+    /// Map name (e.g. `Survival_1`, `DeepDesert_1`, `SH_Arrakeen`).
+    pub map: String,
+    /// Server pod phase.
+    pub phase: String,
+    /// Pod readiness as reported by the wrapper.
+    pub ready: String,
+    /// Connected players count.
+    pub players: String,
+    /// Pod age.
+    pub age: String,
 }
 
 /// Request to render and create a world manifest.

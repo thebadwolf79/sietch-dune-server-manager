@@ -12,8 +12,20 @@ export type RemoteServerPackageStatus = {
 export type RemoteBattlegroupStatus = {
   stop: boolean;
   phase: string;
+  databasePhase?: string;
+  /** Gateway phase column from the vendor wrapper. */
   serverGroupPhase: string;
   directorPhase: string;
+  uptime?: string;
+  serverStats?: RemoteBattlegroupServerStat[];
+};
+
+export type RemoteBattlegroupServerStat = {
+  map: string;
+  phase: string;
+  ready: string;
+  players: string;
+  age: string;
 };
 
 export type RemoteServerStatus = {

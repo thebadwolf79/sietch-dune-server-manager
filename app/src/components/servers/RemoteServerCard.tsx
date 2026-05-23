@@ -7,6 +7,7 @@ import type {
 } from "../../types/server";
 import type { ServerTunnelStartRequest, ServerTunnelStatus } from "../../types/tunnel";
 import {
+  hasBattlegroupUpdateAvailable,
   isBattlegroupStarted,
   isDirectorReadyPhase,
   remoteServerDefaultUser,
@@ -68,6 +69,7 @@ export default function RemoteServerCard({
   const battlegroupStarted = liveStatus ? isBattlegroupStarted(liveStatus.battlegroup) : false;
   const battlegroupStartRequested = liveStatus ? !liveStatus.battlegroup.stop : false;
   const battlegroupStopped = liveStatus ? liveStatus.battlegroup.stop : false;
+  const updateAvailable = hasBattlegroupUpdateAvailable(liveStatus?.package);
   const busy = !!busyLabel;
 
   return (
@@ -195,9 +197,17 @@ export default function RemoteServerCard({
             >
               Stop BattleGroup
             </Button>
-            <Button size="2" color="amber" variant="solid" disabled={busy || !liveStatus} onClick={onUpdateBattlegroup}>
-              Update Server
-            </Button>
+            {updateAvailable ? (
+              <Button
+                size="2"
+                color="amber"
+                variant="solid"
+                disabled={busy || !liveStatus}
+                onClick={onUpdateBattlegroup}
+              >
+                Update Server
+              </Button>
+            ) : null}
           </Flex>
           {busyLabel ? (
             <Text size="1" color="gray" className="mono">

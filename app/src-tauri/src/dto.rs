@@ -53,8 +53,25 @@ pub struct ServerTunnelStatus {
 pub struct RemoteBattlegroupStatus {
     pub stop: bool,
     pub phase: String,
+    #[serde(default)]
+    pub database_phase: String,
+    /// Wrapper's `Gateway` column. Kept under the old name for UI compatibility.
     pub server_group_phase: String,
     pub director_phase: String,
+    #[serde(default)]
+    pub uptime: String,
+    #[serde(default)]
+    pub server_stats: Vec<RemoteBattlegroupServerStat>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteBattlegroupServerStat {
+    pub map: String,
+    pub phase: String,
+    pub ready: String,
+    pub players: String,
+    pub age: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

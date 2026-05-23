@@ -1,13 +1,15 @@
 use dune_manager_core::models::CommandResult;
 use dune_manager_core::orchestration::{
-    KubernetesProvider, RemoteCommandRunner, RusshRunner, StructuredKubectl,
+    BattlegroupManagementOrchestrator, BattlegroupRef, RemoteCommandRunner, RusshRunner,
+    StructuredKubectl, VendorBattlegroupWrapper,
 };
 use serde_json::Value;
 
 use crate::commands::shared::sh_single_quoted;
 use crate::commands::status_helpers::{pod_component, server_resource_components};
 use crate::dto::{
-    RemoteBattlegroupStatus, RemoteServerComponent, RemoteServerPackageStatus, RemoteServerStatus,
+    RemoteBattlegroupServerStat, RemoteBattlegroupStatus, RemoteServerComponent,
+    RemoteServerPackageStatus, RemoteServerStatus,
 };
 
 pub fn read_remote_server_status(
@@ -15,15 +17,35 @@ pub fn read_remote_server_status(
     namespace: &str,
     battlegroup_name: &str,
 ) -> CommandResult<RemoteServerStatus> {
-    let kubernetes = StructuredKubectl::new(runner.clone());
-    let battlegroup = kubernetes.battlegroup_state(namespace, battlegroup_name)?;
+    let manager = BattlegroupManagementOrchestrator::new(
+        StructuredKubectl::new(runner.clone()),
+        VendorBattlegroupWrapper::new(runner.clone()),
+    );
+    let bg_ref = BattlegroupRef {
+        namespace: namespace.to_string(),
+        name: battlegroup_name.to_string(),
+    };
+    let state = manager.status(&bg_ref)?;
     let package = read_guest_package_status(runner, namespace, battlegroup_name)?;
     Ok(RemoteServerStatus {
         battlegroup: RemoteBattlegroupStatus {
-            stop: battlegroup.stop,
-            phase: battlegroup.phase,
-            server_group_phase: battlegroup.server_group_phase,
-            director_phase: battlegroup.director_phase,
+            stop: state.stop,
+            phase: state.phase,
+            database_phase: state.database_phase,
+            server_group_phase: state.server_group_phase,
+            director_phase: state.director_phase,
+            uptime: state.uptime,
+            server_stats: state
+                .server_stats
+                .into_iter()
+                .map(|row| RemoteBattlegroupServerStat {
+                    map: row.map,
+                    phase: row.phase,
+                    ready: row.ready,
+                    players: row.players,
+                    age: row.age,
+                })
+                .collect(),
         },
         package,
     })

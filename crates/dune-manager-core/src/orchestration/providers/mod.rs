@@ -14,6 +14,7 @@ pub use kubernetes_provider::KubernetesProvider;
 pub use shared_types::{
     packaged_vmcx_candidates, BattlegroupState, CreatedWorld, DriveCandidate, EnsureSwitchRequest,
     ExternalSwitch, GuestNetworkConfig, HostReadiness, ImportedVm, NetworkAdapterCandidate,
-    VmCompatibilityReport, VmImportRequest, VmInventoryRecord, VmPowerState, WorldManifestRequest,
+    ServerStatRow, VmCompatibilityReport, VmImportRequest, VmInventoryRecord, VmPowerState,
+    WorldManifestRequest,
 };
 pub use vm_provider::VmProvider;

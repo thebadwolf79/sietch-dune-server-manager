@@ -91,6 +91,7 @@ where
                 .as_str()
                 .unwrap_or_default()
                 .to_string(),
+            database_phase: String::new(),
             server_group_phase: string_at_paths(
                 &value,
                 &[
@@ -105,6 +106,8 @@ where
                     &["status", "utilities", "director", "phase"],
                 ],
             ),
+            uptime: String::new(),
+            server_stats: Vec::new(),
         })
     }
 

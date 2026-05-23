@@ -2,6 +2,7 @@ import type {
   RemoteBattlegroupStatus,
   RemoteServerComponent,
   RemoteServerKind,
+  RemoteServerPackageStatus,
   RemoteServerRecord,
 } from "../types/server";
 import type { TunnelService } from "../types/tunnel";
@@ -32,13 +33,46 @@ export function isCriticalRestartComponent(component: RemoteServerComponent): bo
   );
 }
 
+const STARTED_PHASES = new Set([
+  "running",
+  "ready",
+  "healthy",
+  "available",
+  "reconciling",
+]);
+
+function isStartedPhase(phase: string): boolean {
+  return STARTED_PHASES.has(phase.trim().toLowerCase());
+}
+
 export function isBattlegroupStarted(status: RemoteBattlegroupStatus): boolean {
-  return !status.stop && status.phase.toLowerCase() === "running";
+  if (status.stop) return false;
+  if (!isStartedPhase(status.phase)) return false;
+  if (status.serverGroupPhase && !isStartedPhase(status.serverGroupPhase)) return false;
+  if (status.directorPhase && !isDirectorReadyPhase(status.directorPhase)) return false;
+  return true;
+}
+
+/**
+ * Returns true when the downloaded battlegroup version differs from the
+ * version currently running in Kubernetes. Both versions must be known; if
+ * either is missing we treat the state as "no actionable update" so the
+ * Update Server button stays hidden.
+ */
+export function hasBattlegroupUpdateAvailable(
+  pkg: RemoteServerPackageStatus | undefined,
+): boolean {
+  if (!pkg) return false;
+  const downloaded = pkg.battlegroupVersion?.trim();
+  const live = pkg.liveBattlegroupVersion?.trim();
+  if (!downloaded || !live) return false;
+  return downloaded !== live;
 }
 
 export function isDirectorReadyPhase(phase: string): boolean {
-  const normalized = phase.toLowerCase();
-  return normalized.includes("ready") || normalized.includes("running") || normalized === "true";
+  const normalized = phase.trim().toLowerCase();
+  if (normalized === "" || normalized === "true") return true;
+  return isStartedPhase(normalized);
 }
 
 export function serverTunnelKey(serverKey: string, service: TunnelService): string {

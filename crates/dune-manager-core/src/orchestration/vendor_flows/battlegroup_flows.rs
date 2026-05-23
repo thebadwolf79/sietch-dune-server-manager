@@ -146,7 +146,7 @@ mod tests {
             "StructuredBattlegroupOps::list",
             "StructuredBattlegroupOps::status",
             "BattlegroupManagementOrchestrator::start_and_wait_director",
-            "BattlegroupUpdateOrchestrator::update_from_downloads",
+            "BattlegroupManagementOrchestrator::update",
             "StructuredBattlegroupOps::patch_region",
             "StructuredBattlegroupOps::export_namespace_logs",
             "StructuredBattlegroupOps::export_operator_logs",

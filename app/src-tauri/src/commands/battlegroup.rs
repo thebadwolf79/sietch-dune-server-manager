@@ -1,14 +1,23 @@
-use dune_manager_core::models::CommandResult;
 use dune_manager_core::orchestration::{
-    is_started_state, BattlegroupManagementOrchestrator, BattlegroupRef,
-    BattlegroupUpdateOrchestrator, KubernetesProvider, RusshRunner, SshGuestBootstrapProvider,
-    StructuredKubectl, UbuntuSshPrepareRequest, UbuntuSshSetup,
+    is_started_state, BattlegroupManagementOrchestrator, BattlegroupRef, RusshRunner,
+    StructuredKubectl, VendorBattlegroupWrapper,
 };
 
 use crate::commands::shared::{command_error_message, runner_for_remote_kind};
 use crate::commands::status_data::read_remote_server_status;
 use crate::dto::{RemoteServerActionRequest, RemoteServerStatus};
 use crate::logging::TauriOperationSink;
+
+type Manager = BattlegroupManagementOrchestrator<
+    StructuredKubectl<RusshRunner>,
+    VendorBattlegroupWrapper<RusshRunner>,
+>;
+
+fn manager_from_runner(runner: &RusshRunner) -> Manager {
+    let kubernetes = StructuredKubectl::new(runner.clone());
+    let wrapper = VendorBattlegroupWrapper::new(runner.clone());
+    BattlegroupManagementOrchestrator::new(kubernetes, wrapper)
+}
 
 #[tauri::command]
 pub async fn start_remote_battlegroup(
@@ -34,7 +43,7 @@ pub async fn update_remote_battlegroup(
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut sink = TauriOperationSink { app: worker_app };
-        sink.info("bg.update", "Checking remote battlegroup update.");
+        sink.info("bg.update", "Running vendor wrapper update.");
         let runner = runner_for_remote_kind(
             request.server_type.as_deref(),
             request.host,
@@ -86,25 +95,28 @@ fn run_battlegroup_action_with_runner(
     battlegroup_name: String,
     stop: bool,
 ) -> Result<RemoteServerStatus, String> {
-    let kubernetes = StructuredKubectl::new(runner.clone());
-    let before = kubernetes
-        .battlegroup_state(&namespace, &battlegroup_name)
+    let battlegroup = BattlegroupRef {
+        namespace,
+        name: battlegroup_name,
+    };
+    let manager = manager_from_runner(runner);
+    let before = manager
+        .status(&battlegroup)
         .map_err(command_error_message)?;
     let before_started = is_started_state(&before);
     if stop && !before_started {
         return Err(format!(
-            "Battlegroup is not running (phase={}, stop={}, serverGroup={}, director={}).",
-            before.phase, before.stop, before.server_group_phase, before.director_phase
+            "Battlegroup is not running (status={}, stop={}, database={}, gateway={}, director={}).",
+            before.phase,
+            before.stop,
+            before.database_phase,
+            before.server_group_phase,
+            before.director_phase
         ));
     }
     if !stop && before_started {
         return Err("Battlegroup is already started.".to_string());
     }
-    let battlegroup = BattlegroupRef {
-        namespace,
-        name: battlegroup_name,
-    };
-    let manager = BattlegroupManagementOrchestrator::new(kubernetes);
     if stop {
         manager
             .stop(&battlegroup, sink)
@@ -119,61 +131,6 @@ fn run_battlegroup_action_with_runner(
         .map_err(command_error_message)
 }
 
-fn wait_for_battlegroup_fully_stopped(
-    kubernetes: &StructuredKubectl<RusshRunner>,
-    battlegroup: &BattlegroupRef,
-    timeout_seconds: u64,
-    sink: &mut TauriOperationSink,
-) -> CommandResult<()> {
-    sink.info("bg.update", "Verifying BattleGroup is fully stopped.");
-    let mut elapsed = 0;
-    let mut last = None;
-    while elapsed <= timeout_seconds {
-        let state = kubernetes.battlegroup_state(&battlegroup.namespace, &battlegroup.name)?;
-        if is_fully_stopped_state(&state) {
-            return Ok(());
-        }
-        last = Some(state);
-        std::thread::sleep(std::time::Duration::from_secs(5));
-        elapsed += 5;
-    }
-    let detail = last
-        .map(|state| {
-            format!(
-                "last phase={}, stop={}, serverGroup={}, director={}",
-                state.phase, state.stop, state.server_group_phase, state.director_phase
-            )
-        })
-        .unwrap_or_else(|| "no BattleGroup state was read".to_string());
-    Err(dune_manager_core::errors::failure(format!(
-        "BattleGroup did not fully stop within {timeout_seconds}s ({detail})"
-    )))
-}
-
-fn is_fully_stopped_state(state: &dune_manager_core::orchestration::BattlegroupState) -> bool {
-    state.stop
-        && stoppedish_phase(&state.phase)
-        && stoppedish_phase(&state.server_group_phase)
-        && !director_running_phase(&state.director_phase)
-}
-
-fn stoppedish_phase(phase: &str) -> bool {
-    let normalized = phase.trim().to_ascii_lowercase();
-    normalized.is_empty()
-        || matches!(
-            normalized.as_str(),
-            "stopped" | "suspended" | "notready" | "not_ready" | "unknown"
-        )
-}
-
-fn director_running_phase(phase: &str) -> bool {
-    let normalized = phase.trim().to_ascii_lowercase();
-    matches!(
-        normalized.as_str(),
-        "running" | "ready" | "healthy" | "available" | "reconciling"
-    )
-}
-
 fn run_battlegroup_update_with_runner(
     runner: &RusshRunner,
     sink: &mut TauriOperationSink,
@@ -184,31 +141,17 @@ fn run_battlegroup_update_with_runner(
         namespace,
         name: battlegroup_name,
     };
-    let kubernetes = StructuredKubectl::new(runner.clone());
-    let manager = BattlegroupManagementOrchestrator::new(kubernetes);
+    let manager = manager_from_runner(runner);
     sink.warn(
         "bg.update",
-        "Stopping BattleGroup before applying the server update.",
+        "Running vendor `battlegroup update` (steamcmd + operators + maps + images).",
     );
-    manager
-        .stop(&battlegroup, sink)
+    let stdout = manager
+        .update(&battlegroup, sink)
         .map_err(command_error_message)?;
-    let verifier = StructuredKubectl::new(runner.clone());
-    wait_for_battlegroup_fully_stopped(&verifier, &battlegroup, 600, sink)
-        .map_err(command_error_message)?;
-    let provider = SshGuestBootstrapProvider::new(runner.clone());
-    let ubuntu = UbuntuSshSetup::new(runner.clone());
-    let prepare = UbuntuSshPrepareRequest::default();
-    ubuntu
-        .install_server_payload(&prepare, sink)
-        .map_err(command_error_message)?;
-    BattlegroupUpdateOrchestrator::new(provider)
-        .update_from_downloads(&battlegroup, sink)
-        .map_err(command_error_message)?;
-    sink.warn("bg.update", "Starting BattleGroup after update.");
-    manager
-        .start_and_wait_director(&battlegroup, 600, sink)
-        .map_err(command_error_message)?;
+    if !stdout.trim().is_empty() {
+        sink.info("bg.update", stdout.trim().to_string());
+    }
     sink.info("bg.update", "Refreshing battlegroup state.");
     read_remote_server_status(runner, &battlegroup.namespace, &battlegroup.name)
         .map_err(command_error_message)

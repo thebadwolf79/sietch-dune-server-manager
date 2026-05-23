@@ -98,24 +98,13 @@ pub(super) fn core_command_specs() -> Vec<BattlegroupCommandSpec> {
             BattlegroupCommand::Update,
             "update",
             "Checks for new versions and applies them",
-            vec![
-                step(
-                    "bg.command.update.import-images",
-                    "Import downloaded battlegroup images",
-                    StepDomain::Guest,
-                    StepAction::Import,
-                    "ctr -n k8s.io images import downloaded battlegroup tars",
-                    "BattlegroupUpdateOrchestrator::update_from_downloads",
-                    StepFlags::new(false, false),
-                ),
-                battlegroup_kubernetes_step(
-                    "bg.command.update.patch-images",
-                    "Patch battlegroup image revisions",
-                    StepAction::Patch,
-                    "kubectl patch battlegroup image tags",
-                    "BattlegroupUpdateOrchestrator::update_from_downloads",
-                ),
-            ],
+            vec![battlegroup_kubernetes_step(
+                "bg.command.update.wrapper",
+                "Run vendor `battlegroup update` (steamcmd + operators + maps + image patch)",
+                StepAction::Patch,
+                "/home/dune/.dune/bin/battlegroup update",
+                "BattlegroupManagementOrchestrator::update",
+            )],
         ),
         BattlegroupCommandSpec::new(
             BattlegroupCommand::EditBattlegroup,

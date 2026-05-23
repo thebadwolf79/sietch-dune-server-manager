@@ -10,9 +10,9 @@ use crate::{
     models::CommandResult,
     orchestration::{
         battlegroup_command_catalog, BattlegroupManagementOrchestrator, BattlegroupRef,
-        BattlegroupUpdateOrchestrator, InstanceMap, MapInstanceOrchestrator, RusshRunner,
-        RusshTarget, SetMapDisplayNameRequest, SetMapInstancesRequest, SshGuestBootstrapProvider,
-        StructuredBattlegroupOps, StructuredKubectl, VecOperationSink,
+        InstanceMap, MapInstanceOrchestrator, RusshRunner, RusshTarget, SetMapDisplayNameRequest,
+        SetMapInstancesRequest, StructuredBattlegroupOps, StructuredKubectl, VecOperationSink,
+        VendorBattlegroupWrapper,
     },
 };
 
@@ -34,10 +34,6 @@ pub(super) fn run_cli(args: Vec<String>) -> CommandResult<Value> {
             to_json(DuneDatabase::new(db_config(&args)?).world_partitions(map.as_deref())?)
         }
         ["bg", "list"] => to_json(bg_ops(&args)?.list()?),
-        ["bg", "status"] => {
-            let bg = battlegroup_ref(&args)?;
-            to_json(bg_ops(&args)?.status(&bg)?)
-        }
         ["bg", "patch-region"] => {
             let bg = battlegroup_ref(&args)?;
             let region = args.required("--region")?;
@@ -124,31 +120,45 @@ pub(super) fn run_cli(args: Vec<String>) -> CommandResult<Value> {
         ["bg", "export-operator-logs"] => to_json(bg_ops(&args)?.export_operator_logs()?),
         ["bg", "file-browser-url"] => {
             let vm_ip = args.required("--vm-ip")?;
-            let kube = StructuredKubectl::new(ssh_runner(&args)?);
-            to_json(BattlegroupManagementOrchestrator::new(kube).file_browser_url(&vm_ip)?)
+            to_json(bg_manager(&args)?.file_browser_url(&vm_ip)?)
         }
         ["bg", "director-url"] => {
             let bg = battlegroup_ref(&args)?;
             let vm_ip = args.required("--vm-ip")?;
-            let kube = StructuredKubectl::new(ssh_runner(&args)?);
-            to_json(BattlegroupManagementOrchestrator::new(kube).director_url(&bg, &vm_ip)?)
+            to_json(bg_manager(&args)?.director_url(&bg, &vm_ip)?)
         }
         ["bg", "start"] => bg_lifecycle(&args, "start"),
         ["bg", "stop"] => bg_lifecycle(&args, "stop"),
         ["bg", "restart"] => bg_lifecycle(&args, "restart"),
         ["bg", "update"] => {
             let bg = battlegroup_ref(&args)?;
-            let provider = SshGuestBootstrapProvider::new(ssh_runner(&args)?);
             let mut sink = VecOperationSink::default();
-            BattlegroupUpdateOrchestrator::new(provider).update_from_steam(&bg, &mut sink)?;
-            operation_ok(sink)
+            let stdout = bg_manager(&args)?.update(&bg, &mut sink)?;
+            Ok(json!({
+                "ok": true,
+                "events": sink.events,
+                "wrapperStdout": stdout,
+            }))
         }
-        ["bg", "apply-downloaded-update"] => {
+        ["bg", "status"] => {
             let bg = battlegroup_ref(&args)?;
-            let provider = SshGuestBootstrapProvider::new(ssh_runner(&args)?);
-            let mut sink = VecOperationSink::default();
-            BattlegroupUpdateOrchestrator::new(provider).update_from_downloads(&bg, &mut sink)?;
-            operation_ok(sink)
+            let state = bg_manager(&args)?.status(&bg)?;
+            Ok(json!({
+                "ok": true,
+                "stop": state.stop,
+                "status": state.phase,
+                "database": state.database_phase,
+                "gateway": state.server_group_phase,
+                "director": state.director_phase,
+                "uptime": state.uptime,
+                "servers": state.server_stats.iter().map(|row| json!({
+                    "map": row.map,
+                    "phase": row.phase,
+                    "ready": row.ready,
+                    "players": row.players,
+                    "age": row.age,
+                })).collect::<Vec<_>>(),
+            }))
         }
         other => Err(failure(format!(
             "Unknown command: {}",
@@ -164,8 +174,7 @@ pub(super) fn run_cli(args: Vec<String>) -> CommandResult<Value> {
 fn bg_lifecycle(args: &CliArgs, action: &str) -> CommandResult<Value> {
     let bg = battlegroup_ref(args)?;
     let timeout = args.optional_u64("--director-timeout")?.unwrap_or(60);
-    let kube = StructuredKubectl::new(ssh_runner(args)?);
-    let orchestrator = BattlegroupManagementOrchestrator::new(kube);
+    let orchestrator = bg_manager(args)?;
     let mut sink = VecOperationSink::default();
     let director_port = match action {
         "start" => orchestrator.start_and_wait_director(&bg, timeout, &mut sink)?,
@@ -181,6 +190,21 @@ fn bg_lifecycle(args: &CliArgs, action: &str) -> CommandResult<Value> {
         "directorNodePort": director_port,
         "events": sink.events,
     }))
+}
+
+fn bg_manager(
+    args: &CliArgs,
+) -> CommandResult<
+    BattlegroupManagementOrchestrator<
+        StructuredKubectl<RusshRunner>,
+        VendorBattlegroupWrapper<RusshRunner>,
+    >,
+> {
+    let runner = ssh_runner(args)?;
+    Ok(BattlegroupManagementOrchestrator::new(
+        StructuredKubectl::new(runner.clone()),
+        VendorBattlegroupWrapper::new(runner),
+    ))
 }
 
 fn bg_ops(args: &CliArgs) -> CommandResult<StructuredBattlegroupOps<RusshRunner>> {
@@ -263,13 +287,6 @@ fn ssh_runner_with_default_user(args: &CliArgs, default_user: &str) -> CommandRe
         target.port = u16::try_from(port).map_err(|_| failure("--port must fit in a TCP port"))?;
     }
     Ok(RusshRunner::new(target))
-}
-
-fn operation_ok(sink: VecOperationSink) -> CommandResult<Value> {
-    Ok(json!({
-        "ok": true,
-        "events": sink.events,
-    }))
 }
 
 fn to_json(value: impl Serialize) -> CommandResult<Value> {

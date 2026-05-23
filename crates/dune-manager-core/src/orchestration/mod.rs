@@ -9,6 +9,8 @@
 pub mod battlegroup_kubernetes;
 /// High-level battlegroup lifecycle orchestration.
 pub mod battlegroup_management;
+/// Vendor `/home/dune/.dune/bin/battlegroup` wrapper driver.
+pub mod battlegroup_wrapper;
 /// Host-side Dune VM detection from Hyper-V inventory.
 pub mod dune_vm_detection;
 /// Guest experimental swap and low-memory BattleGroup profile support.
@@ -46,6 +48,7 @@ pub mod vendor_hyperv_setup;
 
 pub use battlegroup_kubernetes::*;
 pub use battlegroup_management::*;
+pub use battlegroup_wrapper::*;
 pub use dune_vm_detection::*;
 pub use experimental_swap::*;
 pub use guest_bootstrap::*;
