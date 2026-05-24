@@ -14,8 +14,8 @@ use crate::commands::{
     check_remote_sudo, detect_remote_ubuntu_servers, get_logs_folder, record_operation_log,
     remote_component_log_tail, remote_server_components, remote_server_status,
     restart_remote_battlegroup, restart_remote_component, server_tunnel_status,
-    start_remote_battlegroup, start_server_tunnel, stop_all_tunnels, stop_remote_battlegroup,
-    stop_server_tunnel, update_remote_battlegroup,
+    start_custom_tunnel, start_remote_battlegroup, start_server_tunnel, stop_all_tunnels,
+    stop_remote_battlegroup, stop_server_tunnel, update_remote_battlegroup,
 };
 use crate::state::TunnelRegistry;
 
@@ -42,6 +42,7 @@ pub fn run() {
             remote_server_status,
             remote_server_components,
             start_server_tunnel,
+            start_custom_tunnel,
             stop_server_tunnel,
             server_tunnel_status,
             stop_all_tunnels,

@@ -3,12 +3,13 @@ import { useEffect, useState } from "react";
 import {
   openExternal,
   serverTunnelStatus,
+  startCustomTunnel as startCustomTunnelCmd,
   startServerTunnel as startServerTunnelCmd,
   stopAllTunnels,
   stopServerTunnel as stopServerTunnelCmd,
 } from "../services/tauri";
 import type { LogRow } from "../types/log";
-import type { ServerTunnelStartRequest, ServerTunnelStatus } from "../types/tunnel";
+import type { CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus } from "../types/tunnel";
 import { copyTextToClipboard } from "../utils/clipboard";
 import { errorMessage } from "../utils/errors";
 import { tunnelServiceLabel } from "../utils/formatting";
@@ -46,14 +47,28 @@ export function useServerTunnels({ appendLogRow }: UseServerTunnelsArgs) {
         return;
       }
       setServerTunnels((tunnels) => ({ ...tunnels, [status.tunnelId]: status }));
-      if (status.service === "database") {
+      if (status.service === "database" || status.url.startsWith("postgresql://")) {
         await copyTextToClipboard(status.url);
-        appendLogRow(log.info("tunnel", `Copied Postgres connection URI ${status.url}`));
+        appendLogRow(log.info("tunnel", `Copied connection URI ${status.url}`));
         return;
       }
       await openExternal(status.url);
     } catch (err) {
       appendLogRow(log.error("tunnel", errorMessage(err)));
+    }
+  };
+
+  const startCustomTunnel = async (request: CustomTunnelStartRequest, name: string) => {
+    setServerTunnelBusy((busy) => ({ ...busy, [request.tunnelId]: true }));
+    appendLogRow(log.info("tunnel", `Starting ${name} tunnel.`));
+    try {
+      const status = await startCustomTunnelCmd(request);
+      setServerTunnels((tunnels) => ({ ...tunnels, [status.tunnelId]: status }));
+      appendLogRow(log.info("tunnel", `${name} tunnel is ready at ${status.url}`));
+    } catch (err) {
+      appendLogRow(log.error("tunnel", errorMessage(err)));
+    } finally {
+      setServerTunnelBusy((busy) => omitKey(busy, request.tunnelId));
     }
   };
 
@@ -86,6 +101,7 @@ export function useServerTunnels({ appendLogRow }: UseServerTunnelsArgs) {
     serverTunnels,
     serverTunnelBusy,
     startServerTunnel,
+    startCustomTunnel,
     openServerTunnel,
     stopServerTunnel,
     stopTunnelsForServer,

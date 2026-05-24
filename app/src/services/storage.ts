@@ -1,4 +1,5 @@
 import type { RemoteServerRecord } from "../types/server";
+import type { CustomTunnelDef } from "../types/tunnel";
 import type { ActivePage, ServerSubPage } from "../types/ui";
 import { SERVER_SUB_PAGES } from "../types/ui";
 
@@ -105,4 +106,37 @@ export function readLogSidebar(): PersistedLogSidebar {
 
 export function writeLogSidebar(state: PersistedLogSidebar): void {
   window.localStorage.setItem(logSidebarStorageKey, JSON.stringify(state));
+}
+
+function customTunnelsKey(serverId: string): string {
+  return `dune-manager.custom-tunnels.${serverId}`;
+}
+
+function isCustomTunnelDef(value: unknown): value is CustomTunnelDef {
+  if (!value || typeof value !== "object") return false;
+  const d = value as Partial<CustomTunnelDef>;
+  return (
+    typeof d.id === "string" &&
+    typeof d.name === "string" &&
+    (d.protocol === "http" || d.protocol === "https" || d.protocol === "postgresql") &&
+    typeof d.remotePort === "number" &&
+    typeof d.localPort === "number"
+  );
+}
+
+export function readCustomTunnels(serverId: string): CustomTunnelDef[] {
+  const text = window.localStorage.getItem(customTunnelsKey(serverId));
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isCustomTunnelDef);
+  } catch {
+    window.localStorage.removeItem(customTunnelsKey(serverId));
+    return [];
+  }
+}
+
+export function writeCustomTunnels(serverId: string, defs: CustomTunnelDef[]): void {
+  window.localStorage.setItem(customTunnelsKey(serverId), JSON.stringify(defs));
 }

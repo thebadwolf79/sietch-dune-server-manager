@@ -130,6 +130,7 @@ export function App() {
                   }
                   onUpdateBattlegroup={() => status.runRemoteBattlegroupAction(activeServer, "update")}
                   onStartTunnel={tunnels.startServerTunnel}
+                  onStartCustomTunnel={tunnels.startCustomTunnel}
                   onStopTunnel={tunnels.stopServerTunnel}
                   onOpenTunnel={tunnels.openServerTunnel}
                   onRefreshComponentLog={(component) =>

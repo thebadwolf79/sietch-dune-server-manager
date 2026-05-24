@@ -5,7 +5,7 @@ import type {
   RemoteServerRecord,
   RemoteServerStatus,
 } from "../../types/server";
-import type { ServerTunnelStartRequest, ServerTunnelStatus } from "../../types/tunnel";
+import type { CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus } from "../../types/tunnel";
 import type { ServerSubPage } from "../../types/ui";
 import { remoteServerDefaultUser, resolveServerStatus } from "../../utils/remote-server";
 import ActionButton from "../ui/ActionButton";
@@ -34,6 +34,7 @@ export type ServerDetailPageProps = {
   onRestartBattlegroup: () => void;
   onUpdateBattlegroup: () => void;
   onStartTunnel: (request: ServerTunnelStartRequest) => void;
+  onStartCustomTunnel: (request: CustomTunnelStartRequest, name: string) => void;
   onStopTunnel: (tunnelId: string) => void;
   onOpenTunnel: (tunnel: ServerTunnelStatus) => void;
   onRefreshComponentLog: (component: RemoteServerComponent) => void;
@@ -61,6 +62,7 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
     onRestartBattlegroup,
     onUpdateBattlegroup,
     onStartTunnel,
+    onStartCustomTunnel,
     onStopTunnel,
     onOpenTunnel,
     onRefreshComponentLog,
@@ -120,6 +122,7 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
               onStopBattlegroup={onStopBattlegroup}
               onRestartBattlegroup={onRestartBattlegroup}
               onStartTunnel={onStartTunnel}
+              onStartCustomTunnel={onStartCustomTunnel}
               onStopTunnel={onStopTunnel}
               onOpenTunnel={onOpenTunnel}
             />

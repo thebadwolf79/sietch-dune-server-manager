@@ -48,6 +48,21 @@ pub struct ServerTunnelStopRequest {
     pub tunnel_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomTunnelStartRequest {
+    pub tunnel_id: String,
+    pub server_kind: String,
+    pub host: String,
+    pub user: String,
+    pub key_path: Option<String>,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    pub protocol: String,
+    pub remote_port: u16,
+    pub local_port: u16,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerTunnelStatus {

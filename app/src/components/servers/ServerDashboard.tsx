@@ -1,7 +1,7 @@
 import { Flex } from "@radix-ui/themes";
 
 import type { RemoteServerRecord, RemoteServerStatus } from "../../types/server";
-import type { ServerTunnelStartRequest, ServerTunnelStatus } from "../../types/tunnel";
+import type { CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus } from "../../types/tunnel";
 import {
   isBattlegroupStarted,
   isDirectorReadyPhase,
@@ -12,6 +12,7 @@ import ActionButton from "../ui/ActionButton";
 import Metric from "../ui/Metric";
 import ServerStatsTable from "./ServerStatsTable";
 import ServerTunnelControls from "./ServerTunnelControls";
+import CustomTunnelControls from "./CustomTunnelControls";
 
 export type ServerDashboardProps = {
   server: RemoteServerRecord;
@@ -24,6 +25,7 @@ export type ServerDashboardProps = {
   onStopBattlegroup: () => void;
   onRestartBattlegroup: () => void;
   onStartTunnel: (request: ServerTunnelStartRequest) => void;
+  onStartCustomTunnel: (request: CustomTunnelStartRequest, name: string) => void;
   onStopTunnel: (tunnelId: string) => void;
   onOpenTunnel: (tunnel: ServerTunnelStatus) => void;
 };
@@ -43,6 +45,7 @@ export default function ServerDashboard({
   onStopBattlegroup,
   onRestartBattlegroup,
   onStartTunnel,
+  onStartCustomTunnel,
   onStopTunnel,
   onOpenTunnel,
 }: ServerDashboardProps) {
@@ -134,6 +137,20 @@ export default function ServerDashboard({
         tunnels={tunnels}
         tunnelBusy={tunnelBusy}
         onStartTunnel={onStartTunnel}
+        onStopTunnel={onStopTunnel}
+        onOpenTunnel={onOpenTunnel}
+      />
+      <CustomTunnelControls
+        key={server.id}
+        serverKey={server.id}
+        host={server.host}
+        serverKind={server.type}
+        user={server.user || remoteServerDefaultUser(server.type)}
+        keyPath={server.keyPath}
+        port={server.port}
+        tunnels={tunnels}
+        tunnelBusy={tunnelBusy}
+        onStartCustomTunnel={onStartCustomTunnel}
         onStopTunnel={onStopTunnel}
         onOpenTunnel={onOpenTunnel}
       />

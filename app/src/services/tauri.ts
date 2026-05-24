@@ -14,7 +14,7 @@ import type {
   RemoteServerRecord,
   RemoteServerStatus,
 } from "../types/server";
-import type { ServerTunnelStartRequest, ServerTunnelStatus } from "../types/tunnel";
+import type { CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus } from "../types/tunnel";
 
 type RemoteActionRequest = {
   serverType: RemoteServerKind;
@@ -89,6 +89,10 @@ export async function restartRemoteBattlegroup(request: RemoteActionRequest): Pr
 
 export async function startServerTunnel(request: ServerTunnelStartRequest): Promise<ServerTunnelStatus> {
   return invoke<ServerTunnelStatus>("start_server_tunnel", { request });
+}
+
+export async function startCustomTunnel(request: CustomTunnelStartRequest): Promise<ServerTunnelStatus> {
+  return invoke<ServerTunnelStatus>("start_custom_tunnel", { request });
 }
 
 export async function stopServerTunnel(tunnelId: string): Promise<void> {
