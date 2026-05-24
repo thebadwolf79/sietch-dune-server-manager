@@ -44,6 +44,10 @@ cd app
 npm run tauri -- dev
 ```
 
+On Linux the app sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` automatically to avoid
+a WebKitGTK 4.1 crash on GNOME Wayland (`Error 71 dispatching to Wayland
+display`). Export the variable yourself with a different value to override.
+
 ## Build A Local Production App
 
 For a local production executable without updater signing or release bundling:
