@@ -19,6 +19,7 @@ pub async fn detect_remote_ubuntu_servers(
             request.host.clone(),
             user,
             request.key_path.clone(),
+            Some(request.port),
         )?;
         let value = runner
             .run_json(

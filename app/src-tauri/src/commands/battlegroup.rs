@@ -49,6 +49,7 @@ pub async fn restart_remote_battlegroup(
             request.host,
             request.user,
             request.key_path,
+            Some(request.port),
         )?;
         let battlegroup = BattlegroupRef {
             namespace: request.namespace,
@@ -80,6 +81,7 @@ pub async fn update_remote_battlegroup(
             request.host,
             request.user,
             request.key_path,
+            Some(request.port),
         )?;
         run_battlegroup_update_with_runner(
             &runner,
@@ -106,6 +108,7 @@ pub async fn run_remote_battlegroup_action(
             request.host,
             request.user,
             request.key_path,
+            Some(request.port),
         )?;
         run_battlegroup_action_with_runner(
             &runner,

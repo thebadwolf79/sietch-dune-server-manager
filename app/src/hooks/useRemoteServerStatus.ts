@@ -46,6 +46,7 @@ export function useRemoteServerStatus({ appendLogRow, setRemoteServers }: UseRem
       keyPath: server.keyPath,
       serverType: "ubuntu",
       user: server.user || remoteServerDefaultUser(server.type),
+      port: server.port,
     });
     if (detected.length === 0) {
       throw new Error("No Dune battlegroups were detected on the remote server.");

@@ -126,6 +126,7 @@ export default function ServerDashboard({
         serverKind={server.type}
         user={server.user || remoteServerDefaultUser(server.type)}
         keyPath={server.keyPath}
+        port={server.port}
         canStartDirectorTunnel={!!liveStatus && !liveStatus.battlegroup.stop && directorReady}
         canStartFileBrowserTunnel={!!liveStatus && !liveStatus.battlegroup.stop}
         canStartDatabaseTunnel={!!liveStatus && !liveStatus.battlegroup.stop}

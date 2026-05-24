@@ -12,6 +12,7 @@ pub async fn remote_server_status(
             request.host,
             request.user,
             request.key_path,
+            Some(request.port),
         )?;
         read_remote_server_status(&runner, &request.namespace, &request.battlegroup_name)
             .map_err(command_error_message)
@@ -30,6 +31,7 @@ pub async fn remote_server_components(
             request.host,
             request.user,
             request.key_path,
+            Some(request.port),
         )?;
         read_remote_server_components(&runner, &request.namespace).map_err(command_error_message)
     })

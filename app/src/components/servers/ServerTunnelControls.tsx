@@ -16,6 +16,7 @@ export type ServerTunnelControlsProps = {
   serverKind: RemoteServerKind;
   user: string;
   keyPath?: string;
+  port?: number;
   canStartDirectorTunnel: boolean;
   canStartFileBrowserTunnel: boolean;
   canStartDatabaseTunnel: boolean;
@@ -34,6 +35,7 @@ export default function ServerTunnelControls({
   serverKind,
   user,
   keyPath,
+  port,
   canStartDirectorTunnel,
   canStartFileBrowserTunnel,
   canStartDatabaseTunnel,
@@ -102,7 +104,7 @@ export default function ServerTunnelControls({
                       onStopTunnel(tunnelId);
                       return;
                     }
-                    onStartTunnel({ tunnelId, serverKind, service, host, user, keyPath, namespace });
+                    onStartTunnel({ tunnelId, serverKind, service, host, user, keyPath, port, namespace });
                   }}
                 >
                   {busy ? (

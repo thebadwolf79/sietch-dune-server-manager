@@ -26,6 +26,7 @@ export function useRemoteServers({ appendLogRow }: UseRemoteServersArgs) {
     host: "",
     user: "dune",
     keyPath: "",
+    port: 22,
   });
   const [remoteServerToRemove, setRemoteServerToRemove] = useState<RemoteServerRecord | null>(null);
 
@@ -51,13 +52,14 @@ export function useRemoteServers({ appendLogRow }: UseRemoteServersArgs) {
     const host = remoteAttachForm.host.trim();
     const keyPath = remoteAttachForm.keyPath.trim();
     const user = remoteAttachForm.user.trim() || "dune";
+    const port = remoteAttachForm.port > 0 ? remoteAttachForm.port : 22;
     if (!host || !keyPath) return;
     setRemoteAttachRunning(true);
     setRemoteAttachError(null);
     setRemoteAttachPreflight(null);
-    appendLogRow(log.info("remote.attach", `Preflight check for ${user}@${host}.`));
+    appendLogRow(log.info("remote.attach", `Preflight check for ${user}@${host}:${port}.`));
     try {
-      const preflight = await checkRemoteSudo({ host, user, keyPath });
+      const preflight = await checkRemoteSudo({ host, user, keyPath, port });
       setRemoteAttachPreflight(preflight);
       if (!preflight.sshOk) {
         throw new Error("SSH connection or key authentication failed.");
@@ -80,6 +82,7 @@ export function useRemoteServers({ appendLogRow }: UseRemoteServersArgs) {
         keyPath,
         serverType: "ubuntu",
         user,
+        port,
       });
       if (detected.length === 0) {
         throw new Error("No Dune battlegroups were detected on the remote server.");
@@ -87,7 +90,7 @@ export function useRemoteServers({ appendLogRow }: UseRemoteServersArgs) {
       const nextServers = mergeRemoteServers(remoteServers, detected);
       setRemoteServers(persistRemoteServers(nextServers));
       setRemoteAttachOpen(false);
-      setRemoteAttachForm({ host: "", user: "dune", keyPath: "" });
+      setRemoteAttachForm({ host: "", user: "dune", keyPath: "", port: 22 });
       setRemoteAttachPreflight(null);
       appendLogRow(log.info("remote.attach", `Added ${detected.length} remote battlegroup profile(s).`));
       for (const server of detected) {

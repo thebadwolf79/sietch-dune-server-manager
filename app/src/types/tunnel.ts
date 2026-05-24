@@ -17,5 +17,6 @@ export type ServerTunnelStartRequest = {
   host: string;
   user: string;
   keyPath?: string;
+  port?: number;
   namespace: string;
 };

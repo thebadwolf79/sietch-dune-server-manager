@@ -8,7 +8,7 @@ use crate::dto::ServerTunnelStartRequest;
 pub fn tunnel_target(request: &ServerTunnelStartRequest) -> Result<RusshTarget, String> {
     match request.server_kind.trim() {
         "ubuntu" => {
-            let target = RusshTarget::new(
+            let mut target = RusshTarget::new(
                 PathBuf::from(
                     request
                         .key_path
@@ -20,6 +20,9 @@ pub fn tunnel_target(request: &ServerTunnelStartRequest) -> Result<RusshTarget, 
                 request.user.trim().to_string(),
                 request.host.trim().to_string(),
             );
+            if request.port != 0 {
+                target.port = request.port;
+            }
             target.validate().map_err(|err| err.message)?;
             Ok(target)
         }

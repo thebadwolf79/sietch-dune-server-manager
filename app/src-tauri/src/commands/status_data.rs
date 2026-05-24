@@ -206,6 +206,7 @@ fn remote_record_from_battlegroup(
         host: request.host.clone(),
         user,
         key_path: request.key_path.clone().unwrap_or_default(),
+        port: request.port,
         server_type,
         namespace,
         battlegroup_name: battlegroup_name.clone(),

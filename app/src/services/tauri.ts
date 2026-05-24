@@ -21,6 +21,7 @@ type RemoteActionRequest = {
   host: string;
   user: string;
   keyPath?: string;
+  port?: number;
   namespace: string;
   battlegroupName: string;
 };
@@ -30,6 +31,7 @@ type DetectRemoteServersRequest = {
   keyPath: string;
   serverType: RemoteServerKind;
   user: string;
+  port?: number;
 };
 
 type RemoteComponentLogRequest = {
@@ -37,6 +39,7 @@ type RemoteComponentLogRequest = {
   host: string;
   user: string;
   keyPath?: string;
+  port?: number;
   namespace: string;
   component: string;
   tail: number;
@@ -47,6 +50,7 @@ type RemoteComponentRestartRequest = {
   host: string;
   user: string;
   keyPath?: string;
+  port?: number;
   namespace: string;
   component: string;
 };
@@ -143,6 +147,7 @@ export async function checkRemoteSudo(request: {
   host: string;
   user: string;
   keyPath: string;
+  port?: number;
 }): Promise<PreflightCheck> {
   return invoke<PreflightCheck>("check_remote_sudo", { request });
 }

@@ -50,6 +50,7 @@ export type RemoteServerRecord = {
   host: string;
   user: string;
   keyPath: string;
+  port?: number;
   namespace: string;
   battlegroupName: string;
   worldUniqueName: string;

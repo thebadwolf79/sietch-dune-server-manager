@@ -14,4 +14,5 @@ export type RemoteAttachForm = {
   host: string;
   user: string;
   keyPath: string;
+  port: number;
 };

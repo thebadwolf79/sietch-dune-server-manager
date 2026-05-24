@@ -19,6 +19,7 @@ export function remoteServerActionRequest(server: RemoteServerRecord) {
     host: server.host,
     user: server.user || remoteServerDefaultUser(server.type),
     keyPath: server.keyPath || undefined,
+    port: server.port,
     namespace: server.namespace,
     battlegroupName: server.battlegroupName,
   };

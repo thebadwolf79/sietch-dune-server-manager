@@ -18,6 +18,7 @@ pub async fn remote_component_log_tail(
             request.host,
             request.user,
             request.key_path,
+            Some(request.port),
         )?;
         read_remote_component_log_tail(
             &runner,
@@ -41,6 +42,7 @@ pub async fn restart_remote_component(
             request.host,
             request.user,
             request.key_path,
+            Some(request.port),
         )?;
         restart_remote_component_inner(&runner, &request.namespace, &request.component)
             .map_err(command_error_message)

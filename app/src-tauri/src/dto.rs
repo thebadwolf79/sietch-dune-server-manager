@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+fn default_ssh_port() -> u16 {
+    22
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteConnectionRequest {
@@ -7,6 +11,8 @@ pub struct RemoteConnectionRequest {
     pub key_path: Option<String>,
     pub server_type: Option<String>,
     pub user: Option<String>,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -16,6 +22,8 @@ pub struct RemoteServerActionRequest {
     pub host: String,
     pub user: String,
     pub key_path: Option<String>,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
     pub namespace: String,
     pub battlegroup_name: String,
 }
@@ -29,6 +37,8 @@ pub struct ServerTunnelStartRequest {
     pub host: String,
     pub user: String,
     pub key_path: Option<String>,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
     pub namespace: String,
 }
 
@@ -109,6 +119,8 @@ pub struct RemoteComponentLogRequest {
     pub host: String,
     pub user: String,
     pub key_path: Option<String>,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
     pub namespace: String,
     pub component: String,
     pub tail: u32,
@@ -128,6 +140,8 @@ pub struct RemoteComponentRestartRequest {
     pub host: String,
     pub user: String,
     pub key_path: Option<String>,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
     pub namespace: String,
     pub component: String,
 }
@@ -149,6 +163,7 @@ pub struct RemoteServerRecord {
     pub host: String,
     pub user: String,
     pub key_path: String,
+    pub port: u16,
     pub namespace: String,
     pub battlegroup_name: String,
     pub world_unique_name: String,

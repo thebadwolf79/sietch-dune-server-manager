@@ -31,6 +31,7 @@ export default function RemoteAttachDialog({
     form.host.trim().length > 0 &&
     form.user.trim().length > 0 &&
     form.keyPath.trim().length > 0 &&
+    form.port > 0 &&
     !running;
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -50,14 +51,30 @@ export default function RemoteAttachDialog({
               onChange={(event) => onChange({ ...form, host: event.target.value })}
             />
           </Field>
-          <Field label="SSH User">
-            <TextField.Root
-              placeholder="dune"
-              disabled={running}
-              value={form.user}
-              onChange={(event) => onChange({ ...form, user: event.target.value })}
-            />
-          </Field>
+          <Grid columns="3fr 1fr" gap="3">
+            <Field label="SSH User">
+              <TextField.Root
+                placeholder="dune"
+                disabled={running}
+                value={form.user}
+                onChange={(event) => onChange({ ...form, user: event.target.value })}
+              />
+            </Field>
+            <Field label="SSH Port">
+              <TextField.Root
+                placeholder="22"
+                disabled={running}
+                type="number"
+                min={1}
+                max={65535}
+                value={String(form.port)}
+                onChange={(event) => {
+                  const parsed = parseInt(event.target.value, 10);
+                  onChange({ ...form, port: isNaN(parsed) ? 22 : parsed });
+                }}
+              />
+            </Field>
+          </Grid>
           <Field label="Private Key">
             <Grid columns="1fr auto" gap="2">
               <TextField.Root

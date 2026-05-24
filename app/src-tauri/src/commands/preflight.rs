@@ -28,6 +28,8 @@ pub struct PreflightRequest {
     pub host: String,
     pub user: String,
     pub key_path: String,
+    #[serde(default)]
+    pub port: Option<u16>,
 }
 
 /// Probes connectivity, SSH auth, and the various sudo capabilities we
@@ -38,16 +40,20 @@ pub async fn check_remote_sudo(request: PreflightRequest) -> Result<PreflightChe
     let host = request.host.trim().to_string();
     let user = request.user.trim().to_string();
     let key_path = request.key_path.trim().to_string();
+    let port = request.port;
     if host.is_empty() || user.is_empty() || key_path.is_empty() {
         return Err("Host, user, and SSH key path are required.".to_string());
     }
-    tauri::async_runtime::spawn_blocking(move || run_preflight(host, user, key_path))
+    tauri::async_runtime::spawn_blocking(move || run_preflight(host, user, key_path, port))
         .await
         .map_err(|err| format!("Preflight worker failed: {err}"))?
 }
 
-fn run_preflight(host: String, user: String, key_path: String) -> Result<PreflightCheck, String> {
-    let target = RusshTarget::new(PathBuf::from(&key_path), user.clone(), host.clone());
+fn run_preflight(host: String, user: String, key_path: String, port: Option<u16>) -> Result<PreflightCheck, String> {
+    let mut target = RusshTarget::new(PathBuf::from(&key_path), user.clone(), host.clone());
+    if let Some(p) = port {
+        target.port = p;
+    }
     target.validate().map_err(|err| err.message)?;
     let runner = RusshRunner::new(target);
     let probe = r#"set +e
