@@ -93,6 +93,8 @@ export default function UsersTab({ tunnelId, onSwitchToAdmin }: UsersTabProps) {
           <Table.Row>
             <Table.ColumnHeaderCell>Name</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell>FLS ID</Table.ColumnHeaderCell>
+            <Table.ColumnHeaderCell>Level</Table.ColumnHeaderCell>
+            <Table.ColumnHeaderCell>Partition</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell>Status</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell>Last seen (UTC)</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell></Table.ColumnHeaderCell>
@@ -104,6 +106,12 @@ export default function UsersTab({ tunnelId, onSwitchToAdmin }: UsersTabProps) {
               <Table.Cell>{user.name || <Text color="gray">—</Text>}</Table.Cell>
               <Table.Cell className="mono" style={{ fontSize: 11 }}>
                 {user.flsId}
+              </Table.Cell>
+              <Table.Cell className="mono" style={{ fontSize: 11 }}>
+                {user.level ?? <Text color="gray">—</Text>}
+              </Table.Cell>
+              <Table.Cell className="mono" style={{ fontSize: 11 }}>
+                {user.partitionId ?? <Text color="gray">—</Text>}
               </Table.Cell>
               <Table.Cell>
                 <Badge color={user.online.toLowerCase() === "online" ? "green" : "gray"}>
@@ -173,7 +181,7 @@ export default function UsersTab({ tunnelId, onSwitchToAdmin }: UsersTabProps) {
           ))}
           {visible.length === 0 && !busy ? (
             <Table.Row>
-              <Table.Cell colSpan={5}>
+              <Table.Cell colSpan={7}>
                 <Text color="gray">
                   No users{onlineOnly ? " online" : ""}.
                 </Text>

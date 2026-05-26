@@ -184,6 +184,8 @@ export type PlayerDto = {
   name: string;
   online: string;
   lastSeen: string;
+  level: number | null;
+  partitionId: number | null;
 };
 
 export type ClusterDto = {
