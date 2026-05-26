@@ -13,7 +13,7 @@ pub const BUILTIN_FALLBACK_TOKEN: &str = "Nu6VmPWUMvdPMeB7qErr";
 
 pub const DEFAULT_BIN_DIR: &str = "/home/dune/.dune/bin";
 pub const DEFAULT_DASHBOARD_HOST: &str = "127.0.0.1";
-pub const DEFAULT_DASHBOARD_PORT: u16 = 8787;
+pub const DEFAULT_DASHBOARD_PORT: u16 = 29187;
 pub const DEFAULT_TIME_ZONE: &str = "Europe/Amsterdam";
 pub const DEFAULT_COMMAND_AUTH_TOKEN_FILE: &str = "/home/dune/.dune/state/command-auth-token";
 pub const DEFAULT_DB_PATH_LINUX: &str = "/home/dune/.dune/state/dune-server-service.sqlite";
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn parse_port_validates_range() {
-        assert_eq!(parse_port("8787").unwrap(), 8787);
+        assert_eq!(parse_port("29187").unwrap(), 29187);
         assert!(parse_port("0").is_err());
         assert!(parse_port("99999").is_err());
         assert!(parse_port("abc").is_err());

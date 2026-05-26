@@ -6,8 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/opt/dune-server-service/dune-server-service
-EnvironmentFile=-/etc/dune-server-service.env
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/dune/.local/bin"
+Environment="DUNE_DASHBOARD_PORT=29187"
+EnvironmentFile=-/etc/dune-server-service.env
 Restart=on-failure
 RestartSec=10
 User=dune
@@ -23,9 +24,11 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 LockPersonality=true
-# MemoryDenyWriteExecute is intentionally NOT set: steamcmd's bundled 32-bit
-# steamclient.so requires writable text relocations (dlmopen → mprotect
-# PROT_WRITE), which MemoryDenyWriteExecute=true blocks.
+NoNewPrivileges=false
+MemoryDenyWriteExecute=false
+# steamcmd's bundled 32-bit steamclient.so requires writable text relocations
+# (dlmopen -> mprotect PROT_WRITE). Keep MemoryDenyWriteExecute explicitly
+# disabled so scheduled update checks can run under systemd.
 
 [Install]
 WantedBy=multi-user.target

@@ -289,7 +289,10 @@ fn install_inner(
          if command -v systemctl >/dev/null 2>&1; then\n  \
              echo SYSTEMD\n  \
              echo {unit_b64} | base64 -d | sudo install -m 0644 -o root -g root /dev/stdin {unit_dest}\n  \
+             sudo install -d -m 0755 /etc/systemd/system/dune-server-service.service.d\n  \
+             printf '%s\\n' '[Service]' 'NoNewPrivileges=false' 'MemoryDenyWriteExecute=false' | sudo install -m 0644 -o root -g root /dev/stdin /etc/systemd/system/dune-server-service.service.d/zz-dune-steamcmd-compat.conf\n\
              sudo systemctl daemon-reload\n\
+             sudo systemctl reset-failed dune-server-service.service >/dev/null 2>&1 || true\n\
          elif command -v rc-service >/dev/null 2>&1; then\n  \
              echo OPENRC\n  \
              echo {openrc_b64} | base64 -d | sudo install -m 0755 -o root -g root /dev/stdin {openrc_dest}\n  \

@@ -1,4 +1,7 @@
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use dune_manager_core::orchestration::{LocalForwarder, RusshTarget};
 
@@ -10,6 +13,9 @@ use crate::dto::{
     CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus, ServerTunnelStopRequest,
 };
 use crate::state::{ManagedTunnel, TunnelRegistry};
+
+const MANAGEMENT_API_PORT: u16 = 29187;
+const LEGACY_MANAGEMENT_API_PORT: u16 = 8787;
 
 #[tauri::command]
 pub async fn start_server_tunnel(
@@ -151,9 +157,13 @@ fn start_server_tunnel_inner(
         "fileBrowser" => 18888,
         "database" => discover_database_tunnel_port(&target, &request.namespace)?,
         "pgHero" => discover_pg_hero_tunnel_port(&target, &request.namespace)?,
-        "managementApi" => 8787,
+        "managementApi" => MANAGEMENT_API_PORT,
         _ => unreachable!(),
     };
+
+    if service == "managementApi" {
+        return start_management_api_tunnel(registry, tunnel_id, &target, &service);
+    }
 
     let forwarder =
         LocalForwarder::start(&target, 0, "127.0.0.1", remote_port).map_err(|err| err.message)?;
@@ -181,6 +191,78 @@ fn start_server_tunnel_inner(
         },
     );
     Ok(status)
+}
+
+fn start_management_api_tunnel(
+    registry: &TunnelRegistry,
+    tunnel_id: &str,
+    target: &RusshTarget,
+    service: &str,
+) -> Result<ServerTunnelStatus, String> {
+    let mut last_error = String::new();
+    for remote_port in [MANAGEMENT_API_PORT, LEGACY_MANAGEMENT_API_PORT] {
+        let forwarder = LocalForwarder::start(target, 0, "127.0.0.1", remote_port)
+            .map_err(|err| err.message)?;
+        let local_port = forwarder.local_port();
+        match probe_management_api(local_port) {
+            Ok(()) => {
+                let status = ServerTunnelStatus {
+                    tunnel_id: tunnel_id.to_string(),
+                    url: tunnel_url(service, local_port),
+                    service: service.to_string(),
+                    local_port,
+                    remote_port,
+                };
+                let mut tunnels = registry
+                    .tunnels
+                    .lock()
+                    .map_err(|_| "Tunnel registry is unavailable.".to_string())?;
+                if let Some(existing) = tunnels.remove(tunnel_id) {
+                    existing.forwarder.stop();
+                }
+                tunnels.insert(
+                    tunnel_id.to_string(),
+                    ManagedTunnel {
+                        forwarder,
+                        status: status.clone(),
+                    },
+                );
+                return Ok(status);
+            }
+            Err(err) => {
+                last_error = format!("127.0.0.1:{remote_port}: {err}");
+                forwarder.stop();
+            }
+        }
+    }
+
+    Err(format!(
+        "management service did not answer on port {MANAGEMENT_API_PORT} or legacy port {LEGACY_MANAGEMENT_API_PORT}; last probe: {last_error}"
+    ))
+}
+
+fn probe_management_api(local_port: u16) -> Result<(), String> {
+    let addr = format!("127.0.0.1:{local_port}");
+    let timeout = Duration::from_millis(1500);
+    let socket_addr: std::net::SocketAddr =
+        addr.parse().map_err(|err| format!("bad addr: {err}"))?;
+    let mut stream = TcpStream::connect_timeout(&socket_addr, timeout)
+        .map_err(|err| format!("connect failed: {err}"))?;
+    stream.set_read_timeout(Some(timeout)).ok();
+    stream.set_write_timeout(Some(timeout)).ok();
+    stream
+        .write_all(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .map_err(|err| format!("write failed: {err}"))?;
+    let mut buf = [0u8; 256];
+    let n = stream
+        .read(&mut buf)
+        .map_err(|err| format!("read failed: {err}"))?;
+    let head = String::from_utf8_lossy(&buf[..n]);
+    if head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200") {
+        Ok(())
+    } else {
+        Err(format!("unexpected health response: {}", head.trim()))
+    }
 }
 
 fn stop_server_tunnel_inner(registry: &TunnelRegistry, tunnel_id: &str) -> Result<(), String> {

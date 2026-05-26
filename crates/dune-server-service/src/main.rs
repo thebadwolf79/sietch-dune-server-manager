@@ -12,6 +12,7 @@ use dune_server_service::logger;
 use dune_server_service::postgres::{PgClient, PgConfig};
 use dune_server_service::scheduler::{Scheduler, TaskRunner};
 use dune_server_service::store::Store;
+use dune_server_service::systemd_compat;
 use dune_server_service::tasks::TaskEnv;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -55,6 +56,22 @@ fn main() -> ExitCode {
     }
 
     logger::init();
+
+    match systemd_compat::repair_on_startup_if_needed() {
+        Ok(true) => {
+            tracing::warn!(
+                "systemd sandbox blocked steamcmd text relocations; compatibility override installed, exiting for restart"
+            );
+            return ExitCode::SUCCESS;
+        }
+        Ok(false) => {}
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                "failed to verify systemd steamcmd compatibility; steam update checks may fail"
+            );
+        }
+    }
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()

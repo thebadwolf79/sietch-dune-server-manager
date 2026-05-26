@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 
+use crate::systemd_compat;
+
 use super::run_process;
 
 pub const DUNE_APP_ID: u32 = 4_754_530;
@@ -116,6 +118,26 @@ impl SteamCmd {
             last_exit = result.exit_code;
             last_stdout = result.stdout;
             last_stderr = result.stderr;
+            let combined = format!("{last_stdout}\n{last_stderr}");
+            if systemd_compat::steamcmd_relocation_blocked(&combined) {
+                match systemd_compat::repair_after_steamcmd_relocation_failure() {
+                    Ok(true) => {
+                        return Err(anyhow!(
+                            "steamcmd was blocked by systemd MemoryDenyWriteExecute; installed compatibility override and requested dune-server-service restart"
+                        ));
+                    }
+                    Ok(false) => {
+                        return Err(anyhow!(
+                            "steamcmd was blocked by systemd MemoryDenyWriteExecute, but no systemd repair was applied; reinstall or update the management service unit"
+                        ));
+                    }
+                    Err(repair_err) => {
+                        return Err(anyhow!(
+                            "steamcmd was blocked by systemd MemoryDenyWriteExecute and automatic repair failed: {repair_err:#}"
+                        ));
+                    }
+                }
+            }
             if let Some(buildid) = parse_buildid_from_app_info(&last_stdout)
                 .or_else(|| parse_buildid_from_app_info(&last_stderr))
             {
