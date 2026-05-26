@@ -180,7 +180,6 @@ jobs:
           projectPath: app
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "Dune Dedicated Server Manager ${{ env.RELEASE_TAG }}"
-          releaseBody: "Desktop installers and updater metadata."
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
