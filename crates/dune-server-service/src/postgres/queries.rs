@@ -158,10 +158,10 @@ pub async fn search_players(
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         out.push(Player {
-            fls_id: row.get::<_, String>(0),
-            name: row.get::<_, String>(1),
-            online: row.get::<_, String>(2),
-            last_seen: row.get::<_, String>(3),
+            fls_id: row.try_get::<_, String>(0).unwrap_or_default(),
+            name: row.try_get::<_, String>(1).unwrap_or_default(),
+            online: row.try_get::<_, String>(2).unwrap_or_default(),
+            last_seen: row.try_get::<_, String>(3).unwrap_or_default(),
             level: row.try_get::<_, Option<i32>>(4).ok().flatten(),
             partition_id: row.try_get::<_, Option<i64>>(5).ok().flatten(),
         });
@@ -176,7 +176,7 @@ async fn player_level_column(client: &tokio_postgres::Client) -> Result<Option<S
         .context("checking player level column")?;
     let available = rows
         .into_iter()
-        .map(|row| row.get::<_, String>(0))
+        .filter_map(|row| row.try_get::<_, String>(0).ok())
         .collect::<std::collections::HashSet<_>>();
     Ok(LEVEL_COLUMN_CANDIDATES
         .iter()

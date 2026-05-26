@@ -1,5 +1,6 @@
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json};
+use futures::FutureExt;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -55,7 +56,22 @@ pub async fn search_players(
 ) -> Result<impl IntoResponse, ApiError> {
     let query = q.q.unwrap_or_default();
     let limit = q.limit.unwrap_or(50);
-    let rows = players::search_players(&state.env.pg, &state.env.cluster, &query, limit).await?;
+    let result = std::panic::AssertUnwindSafe(players::search_players(
+        &state.env.pg,
+        &state.env.cluster,
+        &query,
+        limit,
+    ))
+    .catch_unwind()
+    .await;
+    let rows = match result {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(err)) => return Err(err.into()),
+        Err(_) => {
+            tracing::error!("admin players route panicked");
+            return Err(ApiError::internal("admin players route panicked"));
+        }
+    };
     Ok(Json(rows))
 }
 
