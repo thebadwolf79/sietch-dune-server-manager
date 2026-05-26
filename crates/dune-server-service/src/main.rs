@@ -19,6 +19,24 @@ const DEFAULT_PATH_EXTRAS: &str =
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/dune/.local/bin";
 
 fn main() -> ExitCode {
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--version" | "-V" | "version" => {
+                println!("dune-server-service {VERSION}");
+                return ExitCode::SUCCESS;
+            }
+            "--help" | "-h" => {
+                println!(
+                    "dune-server-service {VERSION}\n\
+                     usage: dune-server-service [--version] [--help]\n\
+                     With no flags, runs the daemon (see env vars + systemd unit)."
+                );
+                return ExitCode::SUCCESS;
+            }
+            _ => {}
+        }
+    }
+
     // SAFETY: set_var requires no other threads to be running. We are still
     // single-threaded here (before the tokio runtime is built below). Inject a
     // sane PATH that covers common kubectl / battlegroup / steamcmd locations
@@ -97,7 +115,11 @@ async fn run() -> Result<()> {
         tracing::warn!(error = %err, "could not ensure steamcmd wrapper; update-check will fail until resolved");
     }
 
-    let mq = Arc::new(MqPublisher::new(kubectl.clone(), cluster.clone(), token.clone()));
+    let mq = Arc::new(MqPublisher::new(
+        kubectl.clone(),
+        cluster.clone(),
+        token.clone(),
+    ));
     let pg = Arc::new(PgClient::new(
         kubectl.clone(),
         PgConfig {
@@ -106,6 +128,48 @@ async fn run() -> Result<()> {
             db_override: cfg.pg_db_override.clone(),
         },
     ));
+
+    // Defaults; operator can override any of these via POST /api/config which
+    // upserts into the `task_config` KV table. We apply them at startup only —
+    // a change to /api/config requires a service restart to take effect.
+    let mut update_lead_secs: i64 = 30 * 60;
+    let mut restart_hour: u32 = 5;
+    let mut restart_minute: u32 = 0;
+    let mut restart_warning_frequency_secs: u64 = 600;
+    let mut restart_warning_duration_secs: u64 = 1800;
+    if let Ok(Some(v)) = store.get_config_i64("update_lead_secs") {
+        update_lead_secs = v;
+    }
+    if let Ok(Some(v)) = store.get_config_i64("restart_hour") {
+        restart_hour = v as u32;
+    }
+    if let Ok(Some(v)) = store.get_config_i64("restart_minute") {
+        restart_minute = v as u32;
+    }
+    if let Ok(Some(v)) = store.get_config_i64("restart_warning_frequency_secs") {
+        restart_warning_frequency_secs = v as u64;
+    }
+    if let Ok(Some(v)) = store.get_config_i64("restart_warning_duration_secs") {
+        restart_warning_duration_secs = v as u64;
+    }
+    let mut effective_tz = cfg.time_zone;
+    if let Ok(Some(tz_name)) = store.get_config("restart_tz") {
+        match tz_name.parse::<chrono_tz::Tz>() {
+            Ok(tz) => effective_tz = tz,
+            Err(err) => {
+                tracing::warn!(stored = %tz_name, error = %err, "ignoring invalid stored restart_tz, falling back to env");
+            }
+        }
+    }
+    tracing::info!(
+        update_lead_secs,
+        restart_hour,
+        restart_minute,
+        restart_warning_frequency_secs,
+        restart_warning_duration_secs,
+        tz = %effective_tz.name(),
+        "task schedule resolved"
+    );
 
     let env = Arc::new(TaskEnv {
         kubectl: kubectl.clone(),
@@ -116,16 +180,16 @@ async fn run() -> Result<()> {
         pg,
         bin_dir: cfg.bin_dir.clone(),
         download_path,
-        update_lead_secs: 30 * 60,
-        restart_hour: 5,
-        restart_minute: 0,
-        restart_warning_frequency_secs: 600,
-        restart_warning_duration_secs: 1800,
-        restart_tz: cfg.time_zone,
+        update_lead_secs,
+        restart_hour,
+        restart_minute,
+        restart_warning_frequency_secs,
+        restart_warning_duration_secs,
+        restart_tz: effective_tz,
     });
 
     let runner = Arc::new(TaskRunner::new(store.clone(), env.clone()));
-    let mut scheduler = Scheduler::new(runner.clone(), cfg.time_zone);
+    let mut scheduler = Scheduler::new(runner.clone(), effective_tz);
     for task in dune_server_service::tasks::build_all(env.clone()) {
         scheduler.add(task);
     }

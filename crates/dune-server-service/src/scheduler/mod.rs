@@ -75,7 +75,10 @@ impl Scheduler {
                         _ = tokio::time::sleep(wait) => {}
                     }
 
-                    if let Err(err) = runner.run(task.clone(), TaskTrigger::Scheduled, false).await {
+                    if let Err(err) = runner
+                        .run(task.clone(), TaskTrigger::Scheduled, false, None)
+                        .await
+                    {
                         tracing::error!(task = task.id(), error = %err, "scheduled run failed");
                     }
                 }

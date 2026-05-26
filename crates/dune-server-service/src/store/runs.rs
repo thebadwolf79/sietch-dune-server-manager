@@ -319,7 +319,9 @@ mod tests {
     #[test]
     fn run_lifecycle_and_logging_roundtrip() {
         let s = open_store();
-        let id = s.start_run("backup", TaskTrigger::Scheduled, false).unwrap();
+        let id = s
+            .start_run("backup", TaskTrigger::Scheduled, false)
+            .unwrap();
         s.log(&NewLogEntry {
             level: LogLevel::Info,
             message: "starting",
@@ -362,7 +364,8 @@ mod tests {
         let r1 = s.start_run("a", TaskTrigger::Scheduled, false).unwrap();
         let r2 = s.start_run("b", TaskTrigger::Scheduled, false).unwrap();
         s.finish_run(r1, TaskRunStatus::Success, None).unwrap();
-        s.finish_run(r2, TaskRunStatus::Failed, Some("boom")).unwrap();
+        s.finish_run(r2, TaskRunStatus::Failed, Some("boom"))
+            .unwrap();
         let (total, succ, fail, running) = s.count_runs_by_status().unwrap();
         assert_eq!((total, succ, fail, running), (2, 1, 1, 0));
     }

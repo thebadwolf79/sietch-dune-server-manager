@@ -49,7 +49,12 @@ pub async fn check_remote_sudo(request: PreflightRequest) -> Result<PreflightChe
         .map_err(|err| format!("Preflight worker failed: {err}"))?
 }
 
-fn run_preflight(host: String, user: String, key_path: String, port: Option<u16>) -> Result<PreflightCheck, String> {
+fn run_preflight(
+    host: String,
+    user: String,
+    key_path: String,
+    port: Option<u16>,
+) -> Result<PreflightCheck, String> {
     let mut target = RusshTarget::new(PathBuf::from(&key_path), user.clone(), host.clone());
     if let Some(p) = port {
         target.port = p;

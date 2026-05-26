@@ -17,6 +17,7 @@ export type ManagementInstallResult = {
   installed: boolean;
   started: boolean;
   initSystem: string;
+  installedVersion: string | null;
   message: string;
 };
 
@@ -24,8 +25,25 @@ export type ManagementServiceStatus = {
   installed: boolean;
   active: boolean;
   initSystem: string;
+  installedVersion: string | null;
+  bundledVersion: string;
   journalTail: string;
 };
+
+export type InstallProgressEvent = {
+  step: string;
+  status: "pending" | "running" | "ok" | "error";
+  message: string | null;
+};
+
+export const INSTALL_STEPS: ReadonlyArray<{ id: string; label: string }> = [
+  { id: "stop-old", label: "Stop existing service" },
+  { id: "upload-binary", label: "Upload binary" },
+  { id: "write-token", label: "Write command-auth token" },
+  { id: "install-init", label: "Install init unit" },
+  { id: "start-service", label: "Start service" },
+  { id: "verify", label: "Verify" },
+];
 
 export type HealthDto = {
   ok: boolean;
@@ -102,6 +120,63 @@ export type VehicleDto = {
   id: string;
   actor_class: string;
   templates: string[];
+};
+
+export type SkillModuleDto = {
+  id: string;
+  name: string;
+  category: string;
+  maxLevel: number;
+};
+
+export type JourneyNodeDto = {
+  id: string;
+  label: string;
+  card: string;
+  category: string;
+};
+
+export type XpEventTagDto = {
+  id: string;
+  family: string;
+  constant: string;
+};
+
+export type ScheduleConfig = {
+  restartHour: number;
+  restartMinute: number;
+  restartWarningFrequencySecs: number;
+  restartWarningDurationSecs: number;
+  updateLeadSecs: number;
+  restartTz: string;
+  restartRequired: boolean;
+};
+
+export type ScheduleConfigUpdate = Partial<{
+  restartHour: number;
+  restartMinute: number;
+  restartWarningFrequencySecs: number;
+  restartWarningDurationSecs: number;
+  updateLeadSecs: number;
+  restartTz: string;
+}>;
+
+export type PlayerLocationDto = {
+  x: number;
+  y: number;
+  z: number;
+  dimensionIndex: number | null;
+  partitionId: number | null;
+  /// Pawn actor class — e.g. "…BP_DunePlayerCharacter_C". Useful sanity.
+  source: string;
+};
+
+export type RestartNoticeOptions = {
+  leadSecs?: number;
+  frequencySecs?: number;
+  durationSecs?: number;
+  title?: string;
+  body?: string;
 };
 
 export type PlayerDto = {

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -6,12 +7,22 @@ use async_trait::async_trait;
 use crate::kubectl::battlegroup as bg;
 use crate::kubectl::battlegroup_cli;
 use crate::scheduler::{Schedule, Task, TaskCtx, TaskOutcome};
+use crate::store::TaskTrigger;
+use crate::tasks::TaskEnv;
 
-/// Replaces `scripts/daily-battlegroup-restart`. Stops the BattleGroup, waits
-/// for clean shutdown, restarts it, and waits for full readiness. Schedule
-/// fires at the configured wall-clock hour:minute in the IANA timezone (default
-/// 05:00 Europe/Amsterdam).
-pub struct RestartTask;
+/// Replaces `scripts/daily-battlegroup-restart`. Delegates the restart itself
+/// to the vendor `battlegroup restart` helper, then waits for full readiness.
+/// Schedule fires at the configured wall-clock hour:minute in the IANA timezone
+/// supplied by `TaskEnv` (default 05:00 Europe/Amsterdam).
+pub struct RestartTask {
+    env: Arc<TaskEnv>,
+}
+
+impl RestartTask {
+    pub fn new(env: Arc<TaskEnv>) -> Self {
+        Self { env }
+    }
+}
 
 #[async_trait]
 impl Task for RestartTask {
@@ -20,34 +31,40 @@ impl Task for RestartTask {
     }
 
     fn schedule(&self) -> Schedule {
-        // Resolved against the env's tz at scheduler tick time.
-        Schedule::daily(5, 0)
+        Schedule::daily(self.env.restart_hour, self.env.restart_minute)
     }
 
     async fn run(&self, ctx: &TaskCtx) -> Result<TaskOutcome> {
         let cluster = ctx.env.cluster.get().await?;
         let bg_name = bg::bg_name(&ctx.env.kubectl, &cluster.namespace).await?;
+        if ctx.trigger == TaskTrigger::Scheduled {
+            let stop_value = bg::bg_field(
+                &ctx.env.kubectl,
+                &cluster.namespace,
+                &bg_name,
+                "{.spec.stop}",
+            )
+            .await
+            .unwrap_or_default();
+            if stop_value == "true" {
+                ctx.log_info(&format!(
+                    "battlegroup bg={bg_name} is stopped; skipping scheduled restart"
+                ))?;
+                return Ok(TaskOutcome::Noop);
+            }
+        }
+
         ctx.log_info(&format!(
-            "stopping battlegroup bg={bg_name} ns={}",
+            "restarting battlegroup bg={bg_name} ns={}",
             cluster.namespace
         ))?;
 
         if ctx.dry_run {
-            ctx.log_info("[dry-run] would stop and start battlegroup")?;
+            ctx.log_info("[dry-run] would invoke battlegroup restart")?;
             return Ok(TaskOutcome::Done);
         }
 
-        ctx.env.bg_cli.stop().await?;
-        battlegroup_cli::wait_until_stopped(
-            &ctx.env.kubectl,
-            &cluster.namespace,
-            &bg_name,
-            Duration::from_secs(900),
-        )
-        .await?;
-
-        ctx.log_info(&format!("starting battlegroup bg={bg_name}"))?;
-        ctx.env.bg_cli.start().await?;
+        ctx.env.bg_cli.restart().await?;
         let summary = battlegroup_cli::wait_until_running(
             &ctx.env.kubectl,
             &cluster.namespace,

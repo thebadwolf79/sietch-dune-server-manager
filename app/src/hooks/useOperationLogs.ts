@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { listenToEvent, recordOperationLog } from "../services/tauri";
 import { readLogSidebar, writeLogSidebar } from "../services/storage";
@@ -32,14 +32,17 @@ export function useOperationLogs() {
     writeLogSidebar({ collapsed: logPanelCollapsed, scopeToActiveServer: next });
   };
 
-  const appendLogRow = (row: LogRow) => {
+  // Memoized so downstream hooks that take appendLogRow as a dep (e.g.
+  // useManagementStatus) don't see a new identity on every render — that was
+  // causing a refresh-log-rerender feedback loop that spammed the pane.
+  const appendLogRow = useCallback((row: LogRow) => {
     setLogRows((rows) => limitLogRows([...rows, row]));
     void recordOperationLog(row.level, row.scope, row.message).catch(() => undefined);
-  };
+  }, []);
 
-  const clearLogRows = () => {
+  const clearLogRows = useCallback(() => {
     setLogRows([]);
-  };
+  }, []);
 
   useEffect(() => {
     const unlisten = listenToEvent<OperationLogPayload>("operation-log", (payload) => {

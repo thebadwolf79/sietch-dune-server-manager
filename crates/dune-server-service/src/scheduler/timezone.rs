@@ -19,7 +19,9 @@ pub fn next_daily_at(tz: Tz, hour: u32, minute: u32, now: DateTime<Utc>) -> Date
                 return target;
             }
         }
-        candidate_date = candidate_date.succ_opt().expect("date arithmetic always succeeds");
+        candidate_date = candidate_date
+            .succ_opt()
+            .expect("date arithmetic always succeeds");
     }
 
     // Defensive: if 14 days of DST gaps somehow occurred (impossible in
@@ -50,7 +52,10 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 6, 1, 1, 0, 0).unwrap();
         let next = next_daily_at(ams(), 5, 0, now);
         let local = next.with_timezone(&ams());
-        assert_eq!(local.date_naive(), chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap());
+        assert_eq!(
+            local.date_naive(),
+            chrono::NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()
+        );
         assert_eq!((local.time().hour(), local.time().minute()), (5, 0));
     }
 
@@ -60,7 +65,10 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 6, 1, 9, 0, 0).unwrap();
         let next = next_daily_at(ams(), 5, 0, now);
         let local = next.with_timezone(&ams());
-        assert_eq!(local.date_naive(), chrono::NaiveDate::from_ymd_opt(2026, 6, 2).unwrap());
+        assert_eq!(
+            local.date_naive(),
+            chrono::NaiveDate::from_ymd_opt(2026, 6, 2).unwrap()
+        );
         assert_eq!((local.time().hour(), local.time().minute()), (5, 0));
     }
 

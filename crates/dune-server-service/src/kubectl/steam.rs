@@ -118,8 +118,9 @@ impl SteamCmd {
                 ));
             }
         }
-        let buildid = parse_buildid_from_app_info(&result.stdout)
-            .ok_or_else(|| anyhow!("could not determine latest Steam buildid from app_info_print"))?;
+        let buildid = parse_buildid_from_app_info(&result.stdout).ok_or_else(|| {
+            anyhow!("could not determine latest Steam buildid from app_info_print")
+        })?;
         Ok(AppInfoBuild { buildid })
     }
 
@@ -245,9 +246,8 @@ fn parse_buildid_from_acf(text: &str) -> Option<String> {
 pub fn extract_live_version(bg_json: &serde_json::Value) -> Option<String> {
     use once_cell::sync::Lazy;
     use regex::Regex;
-    static IMAGE_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"/seabass-server(?::|[^:]*:)([0-9]+-0-[A-Za-z0-9_-]+)$").unwrap()
-    });
+    static IMAGE_RE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"/seabass-server(?::|[^:]*:)([0-9]+-0-[A-Za-z0-9_-]+)$").unwrap());
     let mut versions: Vec<String> = Vec::new();
     walk(bg_json, &mut |v| {
         if let serde_json::Value::String(s) = v {
@@ -294,7 +294,10 @@ mod tests {
         }
     }
 }"#;
-        assert_eq!(parse_buildid_from_app_info(sample), Some("12345678".to_string()));
+        assert_eq!(
+            parse_buildid_from_app_info(sample),
+            Some("12345678".to_string())
+        );
     }
 
     #[test]

@@ -47,7 +47,11 @@ impl ProcessResult {
         } else {
             stderr.to_string()
         };
-        Err(anyhow!("{ctx} failed (exit {}): {}", self.exit_code, detail))
+        Err(anyhow!(
+            "{ctx} failed (exit {}): {}",
+            self.exit_code,
+            detail
+        ))
     }
 }
 
@@ -103,7 +107,12 @@ impl KubectlClient {
         dur: Duration,
     ) -> Result<ProcessResult> {
         let (program, full_args): (&str, Vec<&str>) = if self.use_sudo {
-            ("sudo", std::iter::once("kubectl").chain(args.iter().copied()).collect())
+            (
+                "sudo",
+                std::iter::once("kubectl")
+                    .chain(args.iter().copied())
+                    .collect(),
+            )
         } else {
             ("kubectl", args.to_vec())
         };

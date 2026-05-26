@@ -100,7 +100,12 @@ impl PgClient {
 
         let (client, connection) = tokio_postgres::connect(&conninfo, NoTls)
             .await
-            .with_context(|| format!("connecting to postgres at {}:{}", endpoint.host, endpoint.port))?;
+            .with_context(|| {
+                format!(
+                    "connecting to postgres at {}:{}",
+                    endpoint.host, endpoint.port
+                )
+            })?;
 
         tokio::spawn(async move {
             if let Err(err) = connection.await {
@@ -124,7 +129,11 @@ impl PgClient {
                 )
                 .await
                 .unwrap_or_default();
-                if raw.is_empty() { DEFAULT_USER.to_string() } else { raw }
+                if raw.is_empty() {
+                    DEFAULT_USER.to_string()
+                } else {
+                    raw
+                }
             }
         };
         let database = match &self.config.db_override {
@@ -138,7 +147,11 @@ impl PgClient {
                 )
                 .await
                 .unwrap_or_default();
-                if raw.is_empty() { DEFAULT_DB.to_string() } else { raw }
+                if raw.is_empty() {
+                    DEFAULT_DB.to_string()
+                } else {
+                    raw
+                }
             }
         };
         let password = battlegroup::bg_field(
@@ -241,12 +254,16 @@ async fn lookup_db_cluster_ip(kubectl: &KubectlClient, namespace: &str) -> Resul
         if ip == "None" || ip.is_empty() {
             continue;
         }
-        if name.contains("db") && (name.contains("postgres") || name.contains("dbdepl") || name.contains("database")) {
+        if name.contains("db")
+            && (name.contains("postgres") || name.contains("dbdepl") || name.contains("database"))
+        {
             candidate = Some(ip.to_string());
             break;
         }
     }
-    candidate.ok_or_else(|| anyhow!("could not locate database service ClusterIP in namespace {namespace}"))
+    candidate.ok_or_else(|| {
+        anyhow!("could not locate database service ClusterIP in namespace {namespace}")
+    })
 }
 
 /// Escape a value for use in a libpq key=value connection string. Wraps in

@@ -3,7 +3,12 @@ use std::path::PathBuf;
 use dune_manager_core::models::CommandFailure;
 use dune_manager_core::orchestration::{RusshRunner, RusshTarget};
 
-pub fn remote_runner(host: String, user: String, key_path: String, port: Option<u16>) -> Result<RusshRunner, String> {
+pub fn remote_runner(
+    host: String,
+    user: String,
+    key_path: String,
+    port: Option<u16>,
+) -> Result<RusshRunner, String> {
     let mut target = RusshTarget::new(PathBuf::from(key_path), user, host);
     if let Some(p) = port {
         target.port = p;

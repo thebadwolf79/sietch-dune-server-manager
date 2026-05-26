@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use serde_json::Value;
 
 use crate::store::{LogLevel, NewLogEntry, Store, TaskTrigger};
 use crate::tasks::TaskEnv;
@@ -35,6 +36,10 @@ pub struct TaskCtx {
     pub trigger: TaskTrigger,
     pub store: Store,
     pub env: Arc<TaskEnv>,
+    /// Per-trigger overrides, populated from `POST /api/runs/trigger`'s
+    /// optional `options` body. Tasks may inspect this to override their
+    /// schedule-defaults; scheduled fires get `None`.
+    pub options: Option<Value>,
 }
 
 impl TaskCtx {

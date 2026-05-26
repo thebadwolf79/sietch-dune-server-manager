@@ -139,6 +139,7 @@ export function App() {
                   onRestartComponent={(component) =>
                     componentActions.restartRemoteComponent(activeServer, component)
                   }
+                  appendLogRow={appendLogRow}
                 />
               )}
             </AppErrorBoundary>

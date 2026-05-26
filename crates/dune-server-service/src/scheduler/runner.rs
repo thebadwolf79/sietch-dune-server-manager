@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::store::{NewLogEntry, Store, TaskRunStatus, TaskTrigger};
@@ -41,6 +42,7 @@ impl TaskRunner {
         task: Arc<dyn Task>,
         trigger: TaskTrigger,
         dry_run: bool,
+        options: Option<Value>,
     ) -> Result<TaskOutcome> {
         let id = task.id();
 
@@ -75,6 +77,7 @@ impl TaskRunner {
             trigger,
             store: self.store.clone(),
             env: self.env.clone(),
+            options,
         };
         ctx.log_info(&format!("Starting task {id}."))?;
 
@@ -88,7 +91,8 @@ impl TaskRunner {
         match result {
             Ok(TaskOutcome::Done) => {
                 ctx.log_info(&format!("Finished task {id}."))?;
-                self.store.finish_run(run_id, TaskRunStatus::Success, None)?;
+                self.store
+                    .finish_run(run_id, TaskRunStatus::Success, None)?;
                 Ok(TaskOutcome::Done)
             }
             Ok(TaskOutcome::Noop) => {

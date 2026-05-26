@@ -6,7 +6,9 @@ use crate::commands::tunnel_helpers::{
     discover_database_tunnel_port, discover_director_tunnel_port, discover_pg_hero_tunnel_port,
     normalize_tunnel_service, tunnel_target, tunnel_url,
 };
-use crate::dto::{CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus, ServerTunnelStopRequest};
+use crate::dto::{
+    CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus, ServerTunnelStopRequest,
+};
 use crate::state::{ManagedTunnel, TunnelRegistry};
 
 #[tauri::command]
@@ -91,8 +93,13 @@ fn start_custom_tunnel_inner(
         other => return Err(format!("Unsupported remote server kind: {other}")),
     };
 
-    let forwarder = LocalForwarder::start(&target, request.local_port, "127.0.0.1", request.remote_port)
-        .map_err(|err| err.message)?;
+    let forwarder = LocalForwarder::start(
+        &target,
+        request.local_port,
+        "127.0.0.1",
+        request.remote_port,
+    )
+    .map_err(|err| err.message)?;
     let local_port = forwarder.local_port();
 
     let url = match request.protocol.trim() {
@@ -117,7 +124,10 @@ fn start_custom_tunnel_inner(
     }
     tunnels.insert(
         tunnel_id.to_string(),
-        ManagedTunnel { forwarder, status: status.clone() },
+        ManagedTunnel {
+            forwarder,
+            status: status.clone(),
+        },
     );
     Ok(status)
 }

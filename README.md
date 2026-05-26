@@ -2,7 +2,7 @@
 
 A desktop manager for existing Dune Awakening dedicated servers.
 
-![Dune Dedicated Server Manager](images/screenshot.png)
+![Dashboard — BattleGroup status, lifecycle actions, management service, and tunnel controls](images/ss-1.png)
 
 The app manages already-provisioned Dune dedicated servers over SSH and
 Kubernetes control commands. It does not install the game server, create VMs,
@@ -11,10 +11,14 @@ configure Hyper-V, provision Ubuntu, or manage external tools such as SteamCMD.
 ## Features
 
 - Remote server profile management with SSH private-key authentication
-- BattleGroup status, start, stop, and update controls
+- BattleGroup status, start, stop, restart, and update controls
 - Component diagnostics, log viewing, and safe restart actions
 - Secure Director, File Browser, PostgreSQL, and PgHero access through local SSH tunnels
-- Compact desktop UI for day-to-day operations against an existing server
+- Bundled `dune-server-service` daemon for on-host scheduled maintenance (daily restarts with in-game warnings, automated backups, server update check + apply) — installed over SSH straight from the Management card
+- Admin console for in-game actions: item grants, vehicle spawns, skill/journey/XP tags, player lookup with live pawn location, and a logged history of every published command
+- Automated tasks tab with editable schedule settings (daily restart time, warning lead/frequency, update apply lead, IANA timezone) — saving auto-restarts the service so changes apply immediately
+
+![Admin tab — granting items to online players with a searchable Funcom item picker](images/ss-2.png)
 
 More management features coming soon.
 

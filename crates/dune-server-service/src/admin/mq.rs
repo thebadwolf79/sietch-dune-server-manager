@@ -108,7 +108,11 @@ pub fn envelope_for_command(inner: &Value, token: &str) -> String {
 /// pod. Byte-equivalent to the publish snippet in `mq.ts` so the server-side
 /// log line stays consistent.
 pub fn build_erlang_publish(payload_b64: &str, label: &str) -> String {
-    let label = if SAFE_LABEL_RE.is_match(label) { label } else { "smgmt" };
+    let label = if SAFE_LABEL_RE.is_match(label) {
+        label
+    } else {
+        "smgmt"
+    };
     format!(
         "Outer = base64:decode(<<\"{payload_b64}\">>),\n\
          XName = rabbit_misc:r(<<\"/\">>, exchange, <<\"{EXCHANGE}\">>),\n\
@@ -165,7 +169,10 @@ pub async fn publish_inner(
     };
     let scrubbed = crate::logger::redact(&combined).into_owned();
     if !result.ok() {
-        return Err(anyhow!("rabbitmqctl eval exited {}: {scrubbed}", result.exit_code));
+        return Err(anyhow!(
+            "rabbitmqctl eval exited {}: {scrubbed}",
+            result.exit_code
+        ));
     }
     let ok = result.stdout.contains("publish=ok");
     Ok(PublishResult {
@@ -225,7 +232,9 @@ mod tests {
     fn envelope_round_trips() {
         let inner = json!({"ServerCommand": "Foo", "X": 1});
         let b64 = envelope_for_command(&inner, "TOKEN123");
-        let bytes = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
         let outer: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(outer["Version"], 2);
         assert_eq!(outer["AuthToken"], "TOKEN123");

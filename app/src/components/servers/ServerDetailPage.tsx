@@ -1,18 +1,26 @@
-import { Box, Flex, Tabs } from "@radix-ui/themes";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Box, Flex, Tabs, Text } from "@radix-ui/themes";
 
 import type {
   RemoteServerComponent,
   RemoteServerRecord,
   RemoteServerStatus,
 } from "../../types/server";
+import type { LogRow } from "../../types/log";
 import type { CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus } from "../../types/tunnel";
 import type { ServerSubPage } from "../../types/ui";
+import { isManagementSubPage } from "../../types/ui";
 import { remoteServerDefaultUser, resolveServerStatus } from "../../utils/remote-server";
 import ActionButton from "../ui/ActionButton";
 import StatusPill from "../ui/StatusPill";
 import ServerDashboard from "./ServerDashboard";
 import ServerPods from "./ServerPods";
 import ServerUpdatePanel from "./ServerUpdatePanel";
+import AdminTab, { type AdminTabPrefill } from "../management/AdminTab";
+import AutomatedTasksTab from "../management/AutomatedTasksTab";
+import UsersTab from "../management/UsersTab";
+import { isManagementReady, useManagementStatus } from "../management/useManagementStatus";
+import { useManagementTunnel } from "../management/useManagementTunnel";
 
 export type ServerDetailPageProps = {
   server: RemoteServerRecord;
@@ -39,6 +47,7 @@ export type ServerDetailPageProps = {
   onOpenTunnel: (tunnel: ServerTunnelStatus) => void;
   onRefreshComponentLog: (component: RemoteServerComponent) => void;
   onRestartComponent: (component: RemoteServerComponent) => void;
+  appendLogRow: (row: LogRow) => void;
 };
 
 export default function ServerDetailPage(props: ServerDetailPageProps) {
@@ -67,10 +76,33 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
     onOpenTunnel,
     onRefreshComponentLog,
     onRestartComponent,
+    appendLogRow,
   } = props;
   const busy = !!busyLabel;
   const liveStatus = statusError ? undefined : status;
   const resolved = resolveServerStatus(statusError, liveStatus, busy, server);
+
+  const management = useManagementStatus(server, appendLogRow);
+  const managementReady = isManagementReady(management.state);
+  const tunnelState = useManagementTunnel(server, managementReady);
+  const tunnelId = tunnelState.kind === "ready" ? tunnelState.tunnelId : null;
+  const [adminPrefill, setAdminPrefill] = useState<AdminTabPrefill>(null);
+
+  const goToAdmin = useCallback(
+    (prefill: AdminTabPrefill) => {
+      setAdminPrefill(prefill);
+      onSubChange("admin");
+    },
+    [onSubChange],
+  );
+
+  // If management goes away (uninstalled / unreachable) while a management
+  // sub-page is active, bounce the user back to the dashboard.
+  useEffect(() => {
+    if (!managementReady && isManagementSubPage(sub)) {
+      onSubChange("dashboard");
+    }
+  }, [managementReady, sub, onSubChange]);
 
   return (
     <Box className="pane page-pane">
@@ -108,6 +140,13 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
             <Tabs.Trigger value="dashboard">Dashboard</Tabs.Trigger>
             <Tabs.Trigger value="update">Update</Tabs.Trigger>
             <Tabs.Trigger value="pods">Pods</Tabs.Trigger>
+            {managementReady ? (
+              <>
+                <Tabs.Trigger value="users">Users</Tabs.Trigger>
+                <Tabs.Trigger value="admin">Admin</Tabs.Trigger>
+                <Tabs.Trigger value="tasks">Automated tasks</Tabs.Trigger>
+              </>
+            ) : null}
           </Tabs.List>
 
           <Tabs.Content value="dashboard" className="server-detail-tab-content">
@@ -118,6 +157,9 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
               busyLabel={busyLabel}
               tunnels={tunnels}
               tunnelBusy={tunnelBusy}
+              managementStatus={management.state}
+              onRefreshManagement={management.refresh}
+              appendLogRow={appendLogRow}
               onStartBattlegroup={onStartBattlegroup}
               onStopBattlegroup={onStopBattlegroup}
               onRestartBattlegroup={onRestartBattlegroup}
@@ -146,8 +188,65 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
               onRestart={onRestartComponent}
             />
           </Tabs.Content>
+          {managementReady ? (
+            <>
+              <Tabs.Content value="users" className="server-detail-tab-content">
+                <ManagementContent tunnelState={tunnelState} tunnelId={tunnelId}>
+                  {(id) => <UsersTab tunnelId={id} onSwitchToAdmin={goToAdmin} />}
+                </ManagementContent>
+              </Tabs.Content>
+              <Tabs.Content value="admin" className="server-detail-tab-content">
+                <ManagementContent tunnelState={tunnelState} tunnelId={tunnelId}>
+                  {(id) => (
+                    <AdminTab
+                      tunnelId={id}
+                      prefill={adminPrefill}
+                      onPrefillConsumed={() => setAdminPrefill(null)}
+                    />
+                  )}
+                </ManagementContent>
+              </Tabs.Content>
+              <Tabs.Content value="tasks" className="server-detail-tab-content">
+                <ManagementContent tunnelState={tunnelState} tunnelId={tunnelId}>
+                  {(id) => (
+                    <AutomatedTasksTab
+                      tunnelId={id}
+                      server={server}
+                      onAfterRestart={management.refresh}
+                    />
+                  )}
+                </ManagementContent>
+              </Tabs.Content>
+            </>
+          ) : null}
         </Tabs.Root>
       </Flex>
     </Box>
   );
+}
+
+function ManagementContent({
+  tunnelState,
+  tunnelId,
+  children,
+}: {
+  tunnelState: ReturnType<typeof useManagementTunnel>;
+  tunnelId: string | null;
+  children: (tunnelId: string) => ReactNode;
+}) {
+  if (tunnelState.kind === "error") {
+    return (
+      <Box p="4">
+        <Text color="red">Could not open tunnel: {tunnelState.message}</Text>
+      </Box>
+    );
+  }
+  if (!tunnelId || tunnelState.kind !== "ready") {
+    return (
+      <Box p="4">
+        <Text color="gray">Opening tunnel to management service…</Text>
+      </Box>
+    );
+  }
+  return <>{children(tunnelId)}</>;
 }

@@ -2,4 +2,4 @@ pub mod conn;
 pub mod queries;
 
 pub use conn::{PgClient, PgConfig, PgCredentials, PgEndpoint};
-pub use queries::{Player, search_players};
+pub use queries::{get_player_location, search_players, Player, PlayerLocation, PositionProbe};

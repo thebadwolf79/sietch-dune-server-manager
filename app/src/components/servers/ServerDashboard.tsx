@@ -14,6 +14,8 @@ import ServerStatsTable from "./ServerStatsTable";
 import ServerTunnelControls from "./ServerTunnelControls";
 import CustomTunnelControls from "./CustomTunnelControls";
 import ManagementServiceCard from "../management/ManagementServiceCard";
+import type { ManagementStatusState } from "../management/useManagementStatus";
+import type { LogRow } from "../../types/log";
 
 export type ServerDashboardProps = {
   server: RemoteServerRecord;
@@ -22,6 +24,9 @@ export type ServerDashboardProps = {
   busyLabel?: string;
   tunnels: Record<string, ServerTunnelStatus>;
   tunnelBusy: Record<string, boolean>;
+  managementStatus: ManagementStatusState;
+  onRefreshManagement: () => Promise<void>;
+  appendLogRow: (row: LogRow) => void;
   onStartBattlegroup: () => void;
   onStopBattlegroup: () => void;
   onRestartBattlegroup: () => void;
@@ -42,6 +47,9 @@ export default function ServerDashboard({
   busyLabel,
   tunnels,
   tunnelBusy,
+  managementStatus,
+  onRefreshManagement,
+  appendLogRow,
   onStartBattlegroup,
   onStopBattlegroup,
   onRestartBattlegroup,
@@ -123,6 +131,13 @@ export default function ServerDashboard({
         ) : null}
       </div>
 
+      <ManagementServiceCard
+        server={server}
+        status={managementStatus}
+        onRefresh={onRefreshManagement}
+        appendLogRow={appendLogRow}
+      />
+
       <ServerTunnelControls
         serverKey={server.id}
         namespace={server.namespace}
@@ -155,7 +170,6 @@ export default function ServerDashboard({
         onStopTunnel={onStopTunnel}
         onOpenTunnel={onOpenTunnel}
       />
-      <ManagementServiceCard server={server} />
     </Flex>
   );
 }

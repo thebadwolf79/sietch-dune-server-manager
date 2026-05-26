@@ -81,9 +81,13 @@ mod tests {
     fn admin_history_roundtrip() {
         let s = Store::open(&tempdir().join("s.sqlite")).unwrap();
         let payload = serde_json::json!({"ServerCommand": "ServiceBroadcast", "Title": "hi"});
-        let id = s.record_admin_command("ServiceBroadcast", &payload, true, None).unwrap();
+        let id = s
+            .record_admin_command("ServiceBroadcast", &payload, true, None)
+            .unwrap();
         assert!(id > 0);
-        let list = s.list_admin_commands(AdminHistoryFilter::default()).unwrap();
+        let list = s
+            .list_admin_commands(AdminHistoryFilter::default())
+            .unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].command, "ServiceBroadcast");
         assert!(list[0].ok);

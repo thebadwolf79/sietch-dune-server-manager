@@ -38,13 +38,52 @@ pub fn router(state: AppState) -> Router {
         .route("/api/runs", axum::routing::get(api_runs::list_runs))
         .route("/api/logs", axum::routing::get(api_runs::list_logs))
         .route("/api/runs/trigger", axum::routing::post(api_runs::trigger))
-        .route("/api/admin/commands", axum::routing::get(api_admin::list_commands))
-        .route("/api/admin/items", axum::routing::get(api_admin::search_items))
-        .route("/api/admin/vehicles", axum::routing::get(api_admin::search_vehicles))
-        .route("/api/admin/players", axum::routing::get(api_admin::search_players))
+        .route(
+            "/api/config",
+            axum::routing::get(api_runs::get_config).post(api_runs::set_config),
+        )
+        .route(
+            "/api/timezones",
+            axum::routing::get(api_runs::list_timezones),
+        )
+        .route(
+            "/api/admin/commands",
+            axum::routing::get(api_admin::list_commands),
+        )
+        .route(
+            "/api/admin/items",
+            axum::routing::get(api_admin::search_items),
+        )
+        .route(
+            "/api/admin/vehicles",
+            axum::routing::get(api_admin::search_vehicles),
+        )
+        .route(
+            "/api/admin/skill-modules",
+            axum::routing::get(api_admin::search_skill_modules),
+        )
+        .route(
+            "/api/admin/journey-nodes",
+            axum::routing::get(api_admin::search_journey_nodes),
+        )
+        .route(
+            "/api/admin/xp-event-tags",
+            axum::routing::get(api_admin::search_xp_event_tags),
+        )
+        .route(
+            "/api/admin/players",
+            axum::routing::get(api_admin::search_players),
+        )
+        .route(
+            "/api/admin/player-location",
+            axum::routing::get(api_admin::player_location),
+        )
         .route("/api/admin/cluster", axum::routing::get(api_admin::cluster))
         .route("/api/admin/history", axum::routing::get(api_admin::history))
-        .route("/api/admin/publish", axum::routing::post(api_admin::publish))
+        .route(
+            "/api/admin/publish",
+            axum::routing::post(api_admin::publish),
+        )
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
@@ -53,11 +92,7 @@ pub fn version() -> &'static str {
     VERSION
 }
 
-pub async fn serve(
-    cfg: &ServiceConfig,
-    state: AppState,
-    cancel: CancellationToken,
-) -> Result<()> {
+pub async fn serve(cfg: &ServiceConfig, state: AppState, cancel: CancellationToken) -> Result<()> {
     let addr = build_bind_address(&cfg.dashboard_host, cfg.dashboard_port)?;
     let listener = TcpListener::bind(addr)
         .await
@@ -84,5 +119,6 @@ fn build_bind_address(host: &str, port: u16) -> Result<SocketAddr> {
     } else {
         format!("{host}:{port}")
     };
-    SocketAddr::from_str(&candidate).map_err(|err| anyhow!("invalid bind address {candidate}: {err}"))
+    SocketAddr::from_str(&candidate)
+        .map_err(|err| anyhow!("invalid bind address {candidate}: {err}"))
 }

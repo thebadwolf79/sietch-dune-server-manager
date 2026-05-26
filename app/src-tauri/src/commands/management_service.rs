@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use base64::Engine as _;
 use dune_manager_core::orchestration::{RemoteCommandRunner, RusshRunner, RusshTarget};
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::commands::shared::{command_error_message, sh_single_quoted};
 
@@ -11,6 +11,8 @@ const REMOTE_BINARY_PATH: &str = "/opt/dune-server-service/dune-server-service";
 const REMOTE_SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/dune-server-service.service";
 const REMOTE_OPENRC_PATH: &str = "/etc/init.d/dune-server-service";
 const REMOTE_TOKEN_PATH: &str = "/home/dune/.dune/state/command-auth-token";
+
+const BUNDLED_VERSION: &str = env!("DUNE_SERVER_SERVICE_VERSION");
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +42,7 @@ pub struct ManagementInstallResult {
     pub installed: bool,
     pub started: bool,
     pub init_system: String,
+    pub installed_version: Option<String>,
     pub message: String,
 }
 
@@ -49,7 +52,17 @@ pub struct ManagementServiceStatus {
     pub installed: bool,
     pub active: bool,
     pub init_system: String,
+    pub installed_version: Option<String>,
+    pub bundled_version: String,
     pub journal_tail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallProgressEvent {
+    pub step: String,
+    pub status: String,
+    pub message: Option<String>,
 }
 
 fn default_ssh_port() -> u16 {
@@ -58,7 +71,13 @@ fn default_ssh_port() -> u16 {
 
 fn target_from_conn(req: &ManagementConnRequest) -> Result<RusshTarget, String> {
     let mut target = RusshTarget::new(
-        PathBuf::from(req.key_path.as_deref().unwrap_or_default().trim().to_string()),
+        PathBuf::from(
+            req.key_path
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+        ),
         req.user.trim().to_string(),
         req.host.trim().to_string(),
     );
@@ -100,22 +119,58 @@ pub async fn install_management_service(
     let openrc_path = resolve_resource(&app, "binaries/dune-server-service.openrc")?;
     let target = target_from_install(&request)?;
     let token = request.command_auth_token.clone();
+    let app_handle = app.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        install_inner(&target, &binary_path, &unit_path, &openrc_path, token.as_deref())
+        install_inner(
+            &app_handle,
+            &target,
+            &binary_path,
+            &unit_path,
+            &openrc_path,
+            token.as_deref(),
+        )
     })
     .await
     .map_err(|err| format!("install worker failed: {err}"))?
 }
 
 #[tauri::command]
-pub async fn uninstall_management_service(
-    request: ManagementConnRequest,
-) -> Result<(), String> {
+pub fn management_service_bundled_version() -> String {
+    BUNDLED_VERSION.trim().to_string()
+}
+
+#[tauri::command]
+pub async fn uninstall_management_service(request: ManagementConnRequest) -> Result<(), String> {
     let target = target_from_conn(&request)?;
     tauri::async_runtime::spawn_blocking(move || uninstall_inner(&target))
         .await
         .map_err(|err| format!("uninstall worker failed: {err}"))?
+}
+
+#[tauri::command]
+pub async fn restart_management_service(request: ManagementConnRequest) -> Result<(), String> {
+    let target = target_from_conn(&request)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let script = "set -eu\n\
+             export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
+             if command -v systemctl >/dev/null 2>&1; then\n  \
+                 sudo systemctl restart dune-server-service.service\n\
+             elif command -v rc-service >/dev/null 2>&1; then\n  \
+                 sudo rc-service dune-server-service restart\n\
+             else\n  \
+                 echo \"no supported init system\" >&2\n  \
+                 exit 1\n\
+             fi\n\
+             exit 0\n";
+        let runner = RusshRunner::new(target.clone());
+        runner
+            .run_script(script)
+            .map_err(command_error_message)
+            .map(|_| ())
+    })
+    .await
+    .map_err(|err| format!("restart worker failed: {err}"))?
 }
 
 #[tauri::command]
@@ -129,96 +184,194 @@ pub async fn management_service_status(
 }
 
 fn install_inner(
+    app: &tauri::AppHandle,
     target: &RusshTarget,
     binary_path: &std::path::Path,
     unit_path: &std::path::Path,
     openrc_path: &std::path::Path,
     token: Option<&str>,
 ) -> Result<ManagementInstallResult, String> {
+    let runner = RusshRunner::new(target.clone());
+
+    emit_progress(app, "stop-old", "running", None);
+    let stop_script = "set +e\n\
+         export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
+         sudo systemctl disable --now server-management-service.service >/dev/null 2>&1 || true\n\
+         sudo systemctl stop dune-server-service.service >/dev/null 2>&1 || true\n\
+         sudo rc-service dune-server-service stop >/dev/null 2>&1 || true\n\
+         exit 0\n";
+    runner
+        .run_script(stop_script)
+        .map_err(|err| step_err(app, "stop-old", err))?;
+    emit_progress(app, "stop-old", "ok", None);
+
+    emit_progress(app, "upload-binary", "running", None);
     let binary_b64 = read_b64(binary_path)?;
-    let unit_b64 = read_b64(unit_path)?;
-    let openrc_b64 = read_b64(openrc_path)?;
-
-    let token_segment = match token {
-        Some(t) => {
-            let token_b64 = base64::engine::general_purpose::STANDARD.encode(t.as_bytes());
-            format!(
-                "sudo install -d -m 0700 -o dune -g dune /home/dune/.dune/state && \
-                 echo {b64} | base64 -d | sudo install -m 0600 -o dune -g dune /dev/stdin {dest} && ",
-                b64 = sh_single_quoted(&token_b64),
-                dest = sh_single_quoted(REMOTE_TOKEN_PATH),
-            )
-        }
-        None => String::new(),
-    };
-
-    let stop_old = format!(
-        "{{ sudo systemctl disable --now server-management-service.service >/dev/null 2>&1 || true; \
-          sudo systemctl stop dune-server-service.service >/dev/null 2>&1 || true; \
-          sudo rc-service dune-server-service stop >/dev/null 2>&1 || true; }} && "
-    );
-
-    let install_binary = format!(
-        "sudo install -d -m 0755 /opt/dune-server-service && \
-         echo {b64} | base64 -d | sudo install -m 0755 -o root -g root /dev/stdin {dest} && ",
+    let binary_size = std::fs::metadata(binary_path)
+        .ok()
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let upload_script = format!(
+        "set -eu\n\
+         export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
+         sudo install -d -m 0755 /opt/dune-server-service\n\
+         echo {b64} | base64 -d | sudo install -m 0755 -o root -g root /dev/stdin {dest}\n",
         b64 = sh_single_quoted(&binary_b64),
         dest = sh_single_quoted(REMOTE_BINARY_PATH),
     );
+    runner
+        .run_script(&upload_script)
+        .map_err(|err| step_err(app, "upload-binary", err))?;
+    let size_msg = if binary_size > 0 {
+        Some(format!("{:.1} MB", binary_size as f64 / 1024.0 / 1024.0))
+    } else {
+        None
+    };
+    emit_progress(app, "upload-binary", "ok", size_msg);
 
-    let init_install_and_start = format!(
-        "if command -v systemctl >/dev/null 2>&1; then \
-            echo SYSTEMD; \
-            echo {unit_b64} | base64 -d | sudo install -m 0644 -o root -g root /dev/stdin {unit_dest} && \
-            sudo systemctl daemon-reload && \
-            sudo systemctl enable --now dune-server-service.service && \
-            sudo systemctl is-active dune-server-service.service; \
-         elif command -v rc-service >/dev/null 2>&1; then \
-            echo OPENRC; \
-            echo {openrc_b64} | base64 -d | sudo install -m 0755 -o root -g root /dev/stdin {openrc_dest} && \
-            sudo rc-update add dune-server-service default >/dev/null 2>&1 || true; \
-            sudo rc-service dune-server-service restart >/dev/null 2>&1 || sudo rc-service dune-server-service start; \
-            sleep 1; \
-            sudo rc-service dune-server-service status >/dev/null 2>&1 && echo active || echo inactive; \
-         else \
-            echo NONE; \
-            echo \"no supported init system found (need systemd or openrc)\" >&2; \
-            exit 1; \
-         fi",
+    if let Some(t) = token {
+        emit_progress(app, "write-token", "running", None);
+        let token_b64 = base64::engine::general_purpose::STANDARD.encode(t.as_bytes());
+        let token_script = format!(
+            "set -eu\n\
+             export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
+             sudo install -d -m 0700 -o dune -g dune /home/dune/.dune/state\n\
+             echo {b64} | base64 -d | sudo install -m 0600 -o dune -g dune /dev/stdin {dest}\n",
+            b64 = sh_single_quoted(&token_b64),
+            dest = sh_single_quoted(REMOTE_TOKEN_PATH),
+        );
+        runner
+            .run_script(&token_script)
+            .map_err(|err| step_err(app, "write-token", err))?;
+        emit_progress(app, "write-token", "ok", None);
+    } else {
+        emit_progress(
+            app,
+            "write-token",
+            "ok",
+            Some("skipped (no token)".to_string()),
+        );
+    }
+
+    emit_progress(app, "install-init", "running", None);
+    let unit_b64 = read_b64(unit_path)?;
+    let openrc_b64 = read_b64(openrc_path)?;
+    let init_script = format!(
+        "set -eu\n\
+         export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
+         if command -v systemctl >/dev/null 2>&1; then\n  \
+             echo SYSTEMD\n  \
+             echo {unit_b64} | base64 -d | sudo install -m 0644 -o root -g root /dev/stdin {unit_dest}\n  \
+             sudo systemctl daemon-reload\n\
+         elif command -v rc-service >/dev/null 2>&1; then\n  \
+             echo OPENRC\n  \
+             echo {openrc_b64} | base64 -d | sudo install -m 0755 -o root -g root /dev/stdin {openrc_dest}\n  \
+             sudo rc-update add dune-server-service default >/dev/null 2>&1 || true\n\
+         else\n  \
+             echo \"no supported init system found (need systemd or openrc)\" >&2\n  \
+             exit 1\n\
+         fi\n",
         unit_b64 = sh_single_quoted(&unit_b64),
         unit_dest = sh_single_quoted(REMOTE_SYSTEMD_UNIT_PATH),
         openrc_b64 = sh_single_quoted(&openrc_b64),
         openrc_dest = sh_single_quoted(REMOTE_OPENRC_PATH),
     );
-
-    let script = format!(
-        "set -eu\n\
-         export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
-         {stop_old}\n{install_binary}\n{token_segment}\n{init_install_and_start}\n\
-         exit 0\n",
-    );
-
-    let runner = RusshRunner::new(target.clone());
-    let stdout = runner.run_script(&script).map_err(command_error_message)?;
-
+    let init_stdout = runner
+        .run_script(&init_script)
+        .map_err(|err| step_err(app, "install-init", err))?;
     let mut init_system = String::from("unknown");
-    let mut active_state = String::new();
-    for line in stdout.lines() {
-        let trimmed = line.trim();
-        match trimmed {
+    for line in init_stdout.lines() {
+        match line.trim() {
             "SYSTEMD" => init_system = "systemd".to_string(),
             "OPENRC" => init_system = "openrc".to_string(),
+            _ => {}
+        }
+    }
+    emit_progress(app, "install-init", "ok", Some(init_system.clone()));
+
+    emit_progress(app, "start-service", "running", None);
+    let start_script = "set -eu\n\
+         export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
+         if command -v systemctl >/dev/null 2>&1; then\n  \
+             sudo systemctl enable --now dune-server-service.service\n\
+         elif command -v rc-service >/dev/null 2>&1; then\n  \
+             sudo rc-service dune-server-service restart >/dev/null 2>&1 || sudo rc-service dune-server-service start\n\
+         fi\n";
+    runner
+        .run_script(start_script)
+        .map_err(|err| step_err(app, "start-service", err))?;
+    emit_progress(app, "start-service", "ok", None);
+
+    emit_progress(app, "verify", "running", None);
+    let verify_script = "set +e\n\
+         export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
+         if command -v systemctl >/dev/null 2>&1; then\n  \
+             sleep 1\n  \
+             sudo systemctl is-active dune-server-service.service\n\
+         elif command -v rc-service >/dev/null 2>&1; then\n  \
+             sleep 1\n  \
+             sudo rc-service dune-server-service status >/dev/null 2>&1 && echo active || echo inactive\n\
+         else\n  \
+             echo inactive\n\
+         fi\n\
+         /opt/dune-server-service/dune-server-service --version 2>/dev/null || true\n\
+         exit 0\n";
+    let verify_stdout = runner
+        .run_script(verify_script)
+        .map_err(|err| step_err(app, "verify", err))?;
+    let mut active_state = String::new();
+    let mut installed_version: Option<String> = None;
+    for line in verify_stdout.lines() {
+        let trimmed = line.trim();
+        match trimmed {
             "active" | "inactive" => active_state = trimmed.to_string(),
+            other if other.starts_with("dune-server-service ") => {
+                installed_version = other
+                    .strip_prefix("dune-server-service ")
+                    .map(|s| s.trim().to_string());
+            }
             _ => {}
         }
     }
     let started = active_state == "active";
+    let verify_msg = match (started, &installed_version) {
+        (true, Some(v)) => Some(format!("active, version {v}")),
+        (true, None) => Some("active".to_string()),
+        (false, _) => Some(format!("not active ({active_state})")),
+    };
+    emit_progress(
+        app,
+        "verify",
+        if started { "ok" } else { "error" },
+        verify_msg.clone(),
+    );
 
     Ok(ManagementInstallResult {
         installed: true,
         started,
         init_system: init_system.clone(),
+        installed_version,
         message: format!("installed via {init_system}; active={active_state}"),
     })
+}
+
+fn emit_progress(app: &tauri::AppHandle, step: &str, status: &str, message: Option<String>) {
+    let payload = InstallProgressEvent {
+        step: step.to_string(),
+        status: status.to_string(),
+        message,
+    };
+    let _ = app.emit("management-install-progress", payload);
+}
+
+fn step_err(
+    app: &tauri::AppHandle,
+    step: &str,
+    err: dune_manager_core::models::CommandFailure,
+) -> String {
+    let msg = command_error_message(err);
+    emit_progress(app, step, "error", Some(msg.clone()));
+    msg
 }
 
 fn uninstall_inner(target: &RusshTarget) -> Result<(), String> {
@@ -246,15 +399,18 @@ fn uninstall_inner(target: &RusshTarget) -> Result<(), String> {
 fn status_inner(target: &RusshTarget) -> Result<ManagementServiceStatus, String> {
     let script = "set +e\n\
          export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
-         [ -x /opt/dune-server-service/dune-server-service ] && echo INSTALLED=yes || echo INSTALLED=no\n\
+         if [ -x /opt/dune-server-service/dune-server-service ]; then\n  \
+             echo INSTALLED=yes\n  \
+             /opt/dune-server-service/dune-server-service --version 2>/dev/null | head -n 1\n\
+         else\n  \
+             echo INSTALLED=no\n\
+         fi\n\
          if command -v systemctl >/dev/null 2>&1; then\n  \
              echo INIT=systemd\n  \
-             sudo systemctl is-active dune-server-service.service\n  \
-             sudo journalctl -u dune-server-service.service -n 25 --no-pager 2>/dev/null | tail -n 25\n\
+             sudo systemctl is-active dune-server-service.service\n\
          elif command -v rc-service >/dev/null 2>&1; then\n  \
              echo INIT=openrc\n  \
-             sudo rc-service dune-server-service status >/dev/null 2>&1 && echo active || echo inactive\n  \
-             sudo tail -n 25 /var/log/dune-server-service.log 2>/dev/null || true\n\
+             sudo rc-service dune-server-service status >/dev/null 2>&1 && echo active || echo inactive\n\
          else\n  \
              echo INIT=none\n\
          fi\n\
@@ -264,7 +420,7 @@ fn status_inner(target: &RusshTarget) -> Result<ManagementServiceStatus, String>
     let mut installed = false;
     let mut active = false;
     let mut init_system = String::from("unknown");
-    let mut journal_lines: Vec<&str> = Vec::new();
+    let mut installed_version: Option<String> = None;
     for line in stdout.lines() {
         let trimmed = line.trim();
         match trimmed {
@@ -275,7 +431,11 @@ fn status_inner(target: &RusshTarget) -> Result<ManagementServiceStatus, String>
             "INIT=none" => init_system = "none".to_string(),
             "active" => active = true,
             "inactive" => active = false,
-            other if !other.is_empty() => journal_lines.push(other),
+            other if other.starts_with("dune-server-service ") => {
+                installed_version = other
+                    .strip_prefix("dune-server-service ")
+                    .map(|s| s.trim().to_string());
+            }
             _ => {}
         }
     }
@@ -283,12 +443,14 @@ fn status_inner(target: &RusshTarget) -> Result<ManagementServiceStatus, String>
         installed,
         active,
         init_system,
-        journal_tail: journal_lines.join("\n"),
+        installed_version,
+        bundled_version: BUNDLED_VERSION.trim().to_string(),
+        journal_tail: String::new(),
     })
 }
 
 fn read_b64(path: &std::path::Path) -> Result<String, String> {
-    let bytes = std::fs::read(path)
-        .map_err(|err| format!("reading resource {}: {err}", path.display()))?;
+    let bytes =
+        std::fs::read(path).map_err(|err| format!("reading resource {}: {err}", path.display()))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }

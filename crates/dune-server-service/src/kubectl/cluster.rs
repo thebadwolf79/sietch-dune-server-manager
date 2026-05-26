@@ -84,7 +84,9 @@ impl ClusterCache {
 
         let db_pod = match self.kubectl.db_pod_override() {
             Some(p) => Some(p.to_string()),
-            None => detect_pod(&self.kubectl, &namespace, &DB_POD_PATTERN).await.ok(),
+            None => detect_pod(&self.kubectl, &namespace, &DB_POD_PATTERN)
+                .await
+                .ok(),
         };
 
         Ok(Cluster {
@@ -98,7 +100,11 @@ impl ClusterCache {
 async fn detect_namespace(kubectl: &KubectlClient) -> Result<String> {
     let result = kubectl
         .run(&[
-            "get", "pods", "-A", "--no-headers", "-o",
+            "get",
+            "pods",
+            "-A",
+            "--no-headers",
+            "-o",
             "custom-columns=NS:.metadata.namespace,NAME:.metadata.name",
         ])
         .await?;
@@ -119,7 +125,9 @@ async fn detect_namespace(kubectl: &KubectlClient) -> Result<String> {
     }
 
     match candidates.len() {
-        0 => Err(anyhow!("no funcom-seabass-* namespace with a Game RMQ pod found")),
+        0 => Err(anyhow!(
+            "no funcom-seabass-* namespace with a Game RMQ pod found"
+        )),
         1 => Ok(candidates.into_iter().next().unwrap()),
         _ => Err(anyhow!(
             "multiple candidate namespaces: {}; set DUNE_NAMESPACE",
@@ -131,7 +139,12 @@ async fn detect_namespace(kubectl: &KubectlClient) -> Result<String> {
 async fn detect_pod(kubectl: &KubectlClient, namespace: &str, pattern: &Regex) -> Result<String> {
     let result = kubectl
         .run(&[
-            "get", "pods", "-n", namespace, "--no-headers", "-o",
+            "get",
+            "pods",
+            "-n",
+            namespace,
+            "--no-headers",
+            "-o",
             "custom-columns=NAME:.metadata.name",
         ])
         .await?;

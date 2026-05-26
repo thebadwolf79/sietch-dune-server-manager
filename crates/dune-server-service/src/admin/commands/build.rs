@@ -37,8 +37,9 @@ pub fn validate_and_build(
             }
             continue;
         }
-        let coerced = coerce(field.kind, raw.unwrap())
-            .ok_or_else(|| ValidationError::WrongType(field.key.to_string(), kind_str(field.kind)))?;
+        let coerced = coerce(field.kind, raw.unwrap()).ok_or_else(|| {
+            ValidationError::WrongType(field.key.to_string(), kind_str(field.kind))
+        })?;
         normalized.insert(field.key.to_string(), coerced);
     }
 
@@ -48,8 +49,16 @@ pub fn validate_and_build(
             .and_then(|v| v.as_str())
             .unwrap_or("Generic");
         if bt == "Generic"
-            && (normalized.get("Title").and_then(|v| v.as_str()).unwrap_or("").is_empty()
-                || normalized.get("Body").and_then(|v| v.as_str()).unwrap_or("").is_empty())
+            && (normalized
+                .get("Title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .is_empty()
+                || normalized
+                    .get("Body")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .is_empty())
         {
             return Err(ValidationError::BroadcastNeedsTitleAndBody);
         }
@@ -62,9 +71,20 @@ pub fn build(spec: &CommandSpec, normalized: &Map<String, Value>) -> Value {
     match spec.build {
         BuildKind::Passthrough => {
             let mut obj = Map::new();
-            obj.insert("ServerCommand".to_string(), Value::String(spec.id.to_string()));
+            obj.insert(
+                "ServerCommand".to_string(),
+                Value::String(spec.id.to_string()),
+            );
             for (k, v) in normalized {
                 obj.insert(k.clone(), v.clone());
+            }
+            // The seabass AwardXP server-command handler appears to require
+            // `Category` to be present in the payload (otherwise it silently
+            // no-ops). The value itself is ignored — every category lands as
+            // generic player XP — so we always inject "Combat" so the user
+            // doesn't have to see / fill the field.
+            if spec.id == "AwardXP" && !obj.contains_key("Category") {
+                obj.insert("Category".to_string(), Value::String("Combat".to_string()));
             }
             Value::Object(obj)
         }
@@ -84,8 +104,16 @@ fn build_service_broadcast(values: &Map<String, Value>) -> Value {
             "BroadcastPayload": {},
         });
     }
-    let title = values.get("Title").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let body = values.get("Body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let title = values
+        .get("Title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let body = values
+        .get("Body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let duration = values
         .get("BroadcastDuration")
         .and_then(|v| v.as_i64())
@@ -113,10 +141,11 @@ fn default_for(field: &FieldSpec) -> Option<Value> {
         "Experience" => Some(json!(1000)),
         "Level" => Some(json!(1)),
         "SkillPoints" => Some(json!(0)),
-        "Category" => Some(json!("Main")),
+        "Category" => Some(json!("Combat")),
         "BroadcastType" => Some(json!("Generic")),
         "BroadcastDuration" => Some(json!(30)),
-        "TemplateName" => Some(json!("Default")),
+        // TemplateName default removed — the frontend auto-picks the first
+        // valid template per the selected vehicle's available list.
         "Persistent" => Some(json!(1.0)),
         _ => None,
     }

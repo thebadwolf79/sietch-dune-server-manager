@@ -8,9 +8,9 @@ use crate::scheduler::{Schedule, Task, TaskCtx, TaskOutcome};
 use crate::store::PendingUpdateRecord;
 
 /// Replaces `scripts/cron-battlegroup-update-check`. Polls Steam for the
-/// public-branch buildid, compares to local + live versions, and on a real
-/// delta downloads the new payload and writes a `pending_update` row that
-/// `UpdateApplyTask` reads on its next tick.
+/// public-branch buildid, compares it to the locally downloaded build, and on
+/// a real delta writes a `pending_update` row. `UpdateApplyTask` later invokes
+/// the vendor `battlegroup update` flow, which owns download/apply/restart.
 pub struct UpdateCheckTask;
 
 #[async_trait]
@@ -53,43 +53,25 @@ impl Task for UpdateCheckTask {
         }
 
         if ctx.dry_run {
-            ctx.log_info("[dry-run] would download Steam update + schedule pending row")?;
+            ctx.log_info("[dry-run] would schedule vendor battlegroup update")?;
             return Ok(TaskOutcome::Done);
         }
 
-        ctx.log_info("Steam update detected; downloading before scheduling")?;
-        ctx.env.steamcmd.download_update().await?;
-
-        let new_local = ctx.env.steamcmd.local_build().await?;
-        let downloaded_version = ctx
-            .env
-            .steamcmd
-            .downloaded_version()
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("downloaded version file missing or empty"))?;
-
-        if let Some(live) = live_version.as_deref() {
-            if downloaded_version == live {
-                ctx.log_info(&format!(
-                    "downloaded BG version equals live version ({downloaded_version}); no update scheduled"
-                ))?;
-                return Ok(TaskOutcome::Noop);
-            }
-        }
-
-        let due_ts = Utc::now().timestamp() + ctx.env.update_lead_secs;
+        let lead_secs = ctx.env.update_lead_secs.max(0);
+        let due_ts = Utc::now().timestamp() + lead_secs;
         ctx.store.upsert_pending_update(&PendingUpdateRecord {
             battlegroup: bg_name.clone(),
             namespace: cluster.namespace.clone(),
             latest_steam_build: Some(latest.buildid.clone()),
-            local_steam_build: new_local,
+            local_steam_build: local,
             live_version,
-            downloaded_version: downloaded_version.clone(),
+            downloaded_version: latest.buildid.clone(),
             due_ts,
             created_ts: 0,
         })?;
         ctx.log_info(&format!(
-            "scheduled update bg={bg_name} downloaded_version={downloaded_version} due_ts={due_ts}"
+            "scheduled update bg={bg_name} latest_steam_build={} due_ts={due_ts}",
+            latest.buildid
         ))?;
 
         if let Err(err) = ctx
@@ -97,7 +79,10 @@ impl Task for UpdateCheckTask {
             .mq
             .publish_service_broadcast(
                 "Server update",
-                "A server update is ready and will be applied in 30 minutes. The server will restart.",
+                &format!(
+                    "A server update is ready and will be applied in {}. The server will restart.",
+                    human_duration(lead_secs)
+                ),
                 60,
             )
             .await
@@ -106,4 +91,22 @@ impl Task for UpdateCheckTask {
         }
         Ok(TaskOutcome::Done)
     }
+}
+
+fn human_duration(seconds: i64) -> String {
+    if seconds == 0 {
+        return "less than a minute".to_string();
+    }
+    if seconds % 3600 == 0 {
+        let hours = seconds / 3600;
+        return format!("{hours} {}", if hours == 1 { "hour" } else { "hours" });
+    }
+    if seconds % 60 == 0 {
+        let minutes = seconds / 60;
+        return format!(
+            "{minutes} {}",
+            if minutes == 1 { "minute" } else { "minutes" }
+        );
+    }
+    format!("{seconds} seconds")
 }

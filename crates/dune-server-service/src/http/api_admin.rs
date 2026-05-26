@@ -31,6 +31,24 @@ pub async fn search_vehicles(Query(q): Query<SearchQuery>) -> impl IntoResponse 
     Json(data::search_vehicles(&query, limit))
 }
 
+pub async fn search_skill_modules(Query(q): Query<SearchQuery>) -> impl IntoResponse {
+    let query = q.q.unwrap_or_default();
+    let limit = q.limit.unwrap_or(50);
+    Json(data::search_skill_modules(&query, limit))
+}
+
+pub async fn search_journey_nodes(Query(q): Query<SearchQuery>) -> impl IntoResponse {
+    let query = q.q.unwrap_or_default();
+    let limit = q.limit.unwrap_or(80);
+    Json(data::search_journey_nodes(&query, limit))
+}
+
+pub async fn search_xp_event_tags(Query(q): Query<SearchQuery>) -> impl IntoResponse {
+    let query = q.q.unwrap_or_default();
+    let limit = q.limit.unwrap_or(50);
+    Json(data::search_xp_event_tags(&query, limit))
+}
+
 pub async fn search_players(
     State(state): State<AppState>,
     Query(q): Query<SearchQuery>,
@@ -39,6 +57,29 @@ pub async fn search_players(
     let limit = q.limit.unwrap_or(50);
     let rows = players::search_players(&state.env.pg, &state.env.cluster, &query, limit).await?;
     Ok(Json(rows))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlayerLocationQuery {
+    #[serde(rename = "flsId")]
+    pub fls_id: String,
+}
+
+pub async fn player_location(
+    State(state): State<AppState>,
+    Query(q): Query<PlayerLocationQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    use crate::postgres::PositionProbe;
+    let cluster = state.env.cluster.get().await?;
+    let probe =
+        crate::postgres::get_player_location(&state.env.pg, &cluster.namespace, &q.fls_id).await?;
+    match probe {
+        PositionProbe::Found(p) => Ok(Json(p).into_response()),
+        PositionProbe::NoRow => Err(ApiError::not_found(format!(
+            "no live pawn for fls_id {} — player may be offline",
+            q.fls_id
+        ))),
+    }
 }
 
 pub async fn cluster(State(state): State<AppState>) -> Result<impl IntoResponse, ApiError> {
@@ -60,7 +101,9 @@ pub async fn history(
     State(state): State<AppState>,
     Query(q): Query<HistoryQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let list = state.store.list_admin_commands(AdminHistoryFilter { limit: q.limit })?;
+    let list = state
+        .store
+        .list_admin_commands(AdminHistoryFilter { limit: q.limit })?;
     Ok(Json(list))
 }
 
@@ -93,7 +136,9 @@ pub async fn publish(
         &req.command,
         &inner,
         ok,
-        error.as_deref().or(if ok { None } else { Some(output.as_str()) }),
+        error
+            .as_deref()
+            .or(if ok { None } else { Some(output.as_str()) }),
     );
 
     Ok(Json(serde_json::json!({

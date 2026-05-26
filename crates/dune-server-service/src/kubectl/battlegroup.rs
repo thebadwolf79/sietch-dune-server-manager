@@ -8,7 +8,12 @@ use super::{KubectlClient, ProcessResult};
 pub async fn bg_name(kubectl: &KubectlClient, namespace: &str) -> Result<String> {
     let result = kubectl
         .run(&[
-            "get", "battlegroups", "-n", namespace, "--no-headers", "-o",
+            "get",
+            "battlegroups",
+            "-n",
+            namespace,
+            "--no-headers",
+            "-o",
             "custom-columns=NAME:.metadata.name",
         ])
         .await?;
@@ -33,10 +38,18 @@ pub async fn bg_field(
     let path_arg = format!("jsonpath={jsonpath}");
     let result = kubectl
         .run(&[
-            "get", "battlegroup", bg_name, "-n", namespace, "-o", path_arg.as_str(),
+            "get",
+            "battlegroup",
+            bg_name,
+            "-n",
+            namespace,
+            "-o",
+            path_arg.as_str(),
         ])
         .await?;
-    result.require_ok(&format!("kubectl get battlegroup {bg_name} jsonpath={jsonpath}"))?;
+    result.require_ok(&format!(
+        "kubectl get battlegroup {bg_name} jsonpath={jsonpath}"
+    ))?;
     Ok(result.stdout.trim().to_string())
 }
 
@@ -59,7 +72,12 @@ pub async fn count_pods_matching(
 ) -> Result<usize> {
     let result = kubectl
         .run(&[
-            "get", "pods", "-n", namespace, "--no-headers", "-o",
+            "get",
+            "pods",
+            "-n",
+            namespace,
+            "--no-headers",
+            "-o",
             "custom-columns=NAME:.metadata.name",
         ])
         .await?;
@@ -84,7 +102,13 @@ pub async fn secret_value(
     let path_arg = format!("jsonpath={{.data.{key}}}");
     let result = kubectl
         .run(&[
-            "get", "secret", secret_name, "-n", namespace, "-o", path_arg.as_str(),
+            "get",
+            "secret",
+            secret_name,
+            "-n",
+            namespace,
+            "-o",
+            path_arg.as_str(),
         ])
         .await?;
     if !result.ok() {

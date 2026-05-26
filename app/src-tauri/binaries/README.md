@@ -1,7 +1,7 @@
 # Bundled service binaries
 
-This directory holds the Linux `dune-server-service` binary (musl-static) and
-its `dune-server-service.service` systemd unit. Both are populated by the
+This directory holds the Linux `dune-server-service` binary (musl-static), its
+systemd unit, and its OpenRC init script. They are populated by the
 `linux-service-binary` job in `.github/workflows/release.yml` and bundled into
 the desktop installer as Tauri resources.
 
@@ -18,4 +18,6 @@ Copy-Item target\x86_64-unknown-linux-musl\release\dune-server-service `
   app\src-tauri\binaries\dune-server-service
 Copy-Item crates\dune-server-service\systemd\dune-server-service.service `
   app\src-tauri\binaries\dune-server-service.service
+Copy-Item crates\dune-server-service\openrc\dune-server-service `
+  app\src-tauri\binaries\dune-server-service.openrc
 ```

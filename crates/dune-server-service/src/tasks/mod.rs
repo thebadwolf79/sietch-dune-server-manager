@@ -38,12 +38,11 @@ pub struct TaskEnv {
 
 /// All task implementations registered for the scheduler.
 pub fn build_all(env: Arc<TaskEnv>) -> Vec<Arc<dyn crate::scheduler::Task>> {
-    let _ = env; // env is consumed via TaskCtx inside each task
     vec![
         Arc::new(backup::BackupTask) as Arc<dyn crate::scheduler::Task>,
         Arc::new(update_check::UpdateCheckTask),
         Arc::new(update_apply::UpdateApplyTask),
-        Arc::new(restart_notice::RestartNoticeTask),
-        Arc::new(restart::RestartTask),
+        Arc::new(restart_notice::RestartNoticeTask::new(env.clone())),
+        Arc::new(restart::RestartTask::new(env)),
     ]
 }

@@ -4,6 +4,38 @@ use serde::Serialize;
 use super::conn::PgClient;
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PlayerLocation {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    #[serde(rename = "dimensionIndex")]
+    pub dimension_index: Option<i32>,
+    #[serde(rename = "partitionId")]
+    pub partition_id: Option<i64>,
+    /// Pawn actor class — useful sanity for the UI ("…DunePlayerCharacter_C").
+    pub source: String,
+}
+
+// The live player position is on `dune.actors`, not `dune.player_state`. The
+// pawn actor is referenced from `player_state.player_pawn_id`. Its `transform`
+// is a composite `(location:(x,y,z), rotation:(x,y,z,w))`. Confirmed via
+// schema probe 2026-05-26 against funcom-seabass-sh-* on the LAN test host.
+const PLAYER_POSITION_SQL: &str = "
+SELECT
+    ((a.transform).location).x::float8 AS x,
+    ((a.transform).location).y::float8 AS y,
+    ((a.transform).location).z::float8 AS z,
+    a.dimension_index,
+    a.partition_id,
+    a.class
+FROM dune.player_state ps
+JOIN dune.actors a       ON a.id = ps.player_pawn_id
+JOIN dune.accounts acct  ON acct.id = ps.account_id
+WHERE acct.\"user\"::text = $1
+LIMIT 1
+";
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Player {
     #[serde(rename = "flsId")]
     pub fls_id: String,
@@ -38,6 +70,41 @@ ORDER BY
     character_name ASC
 LIMIT $2;
 ";
+
+/// Outcome of a player-position probe.
+pub enum PositionProbe {
+    Found(PlayerLocation),
+    /// No row matched — usually means the player is offline (no live pawn),
+    /// or the fls_id doesn't exist on this server.
+    NoRow,
+}
+
+/// Look up the live world position for a player. Joins `player_state` →
+/// `actors` on `player_pawn_id` and deconstructs the composite
+/// `actors.transform` (`(location:(x,y,z), rotation:(x,y,z,w))`).
+pub async fn get_player_location(
+    pg: &PgClient,
+    namespace: &str,
+    fls_id: &str,
+) -> Result<PositionProbe> {
+    let state = pg.client(namespace).await?;
+    let rows = state
+        .client()
+        .query(PLAYER_POSITION_SQL, &[&fls_id])
+        .await
+        .context("querying player pawn position")?;
+    let Some(row) = rows.into_iter().next() else {
+        return Ok(PositionProbe::NoRow);
+    };
+    Ok(PositionProbe::Found(PlayerLocation {
+        x: row.get::<_, f64>(0),
+        y: row.get::<_, f64>(1),
+        z: row.get::<_, f64>(2),
+        dimension_index: row.try_get::<_, i32>(3).ok(),
+        partition_id: row.try_get::<_, i64>(4).ok(),
+        source: row.try_get::<_, String>(5).unwrap_or_default(),
+    }))
+}
 
 pub async fn search_players(
     pg: &PgClient,

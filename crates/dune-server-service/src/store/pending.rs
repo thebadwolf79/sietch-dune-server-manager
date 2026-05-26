@@ -84,6 +84,17 @@ impl Store {
             Ok(())
         })
     }
+
+    pub fn defer_pending_update(&self, delay_secs: i64) -> Result<()> {
+        let due_ts = Utc::now().timestamp() + delay_secs.max(60);
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE pending_update SET due_ts = ?1 WHERE id = 1",
+                params![due_ts],
+            )?;
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]

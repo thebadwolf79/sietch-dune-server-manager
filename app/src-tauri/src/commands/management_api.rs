@@ -31,11 +31,19 @@ fn tunnel_local_port(registry: &TunnelRegistry, tunnel_id: &str) -> Result<u16, 
 
 async fn get_json(client: &Client, port: u16, path: &str) -> Result<Value, String> {
     let url = format!("http://127.0.0.1:{port}{path}");
-    let resp = client.get(&url).send().await.map_err(|err| format!("GET {path}: {err}"))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|err| format!("GET {path}: {err}"))?;
     if !resp.status().is_success() {
-        return Err(format!("GET {path} -> {}", resp.status()));
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(format!("GET {path} -> {status}: {body_text}"));
     }
-    resp.json::<Value>().await.map_err(|err| format!("decoding {path}: {err}"))
+    resp.json::<Value>()
+        .await
+        .map_err(|err| format!("decoding {path}: {err}"))
 }
 
 async fn post_json(client: &Client, port: u16, path: &str, body: &Value) -> Result<Value, String> {
@@ -51,7 +59,9 @@ async fn post_json(client: &Client, port: u16, path: &str, body: &Value) -> Resu
         let body_text = resp.text().await.unwrap_or_default();
         return Err(format!("POST {path} -> {status}: {body_text}"));
     }
-    resp.json::<Value>().await.map_err(|err| format!("decoding {path}: {err}"))
+    resp.json::<Value>()
+        .await
+        .map_err(|err| format!("decoding {path}: {err}"))
 }
 
 #[tauri::command]
@@ -119,16 +129,16 @@ pub async fn ms_trigger_run(
     registry: tauri::State<'_, TunnelRegistry>,
     tunnel_id: String,
     task: String,
+    options: Option<Value>,
 ) -> Result<Value, String> {
     let port = tunnel_local_port(&registry, &tunnel_id)?;
     let client = ensure_client(&app);
-    post_json(
-        &client,
-        port,
-        "/api/runs/trigger",
-        &serde_json::json!({ "task": task }),
-    )
-    .await
+    let mut body = serde_json::Map::new();
+    body.insert("task".to_string(), Value::String(task));
+    if let Some(opts) = options {
+        body.insert("options".to_string(), opts);
+    }
+    post_json(&client, port, "/api/runs/trigger", &Value::Object(body)).await
 }
 
 #[tauri::command]
@@ -152,7 +162,12 @@ pub async fn ms_search_items(
 ) -> Result<Value, String> {
     let port = tunnel_local_port(&registry, &tunnel_id)?;
     let client = ensure_client(&app);
-    get_json(&client, port, &search_path("/api/admin/items", q.as_deref(), limit)).await
+    get_json(
+        &client,
+        port,
+        &search_path("/api/admin/items", q.as_deref(), limit),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -165,7 +180,66 @@ pub async fn ms_search_vehicles(
 ) -> Result<Value, String> {
     let port = tunnel_local_port(&registry, &tunnel_id)?;
     let client = ensure_client(&app);
-    get_json(&client, port, &search_path("/api/admin/vehicles", q.as_deref(), limit)).await
+    get_json(
+        &client,
+        port,
+        &search_path("/api/admin/vehicles", q.as_deref(), limit),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ms_search_skill_modules(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    q: Option<String>,
+    limit: Option<u32>,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    get_json(
+        &client,
+        port,
+        &search_path("/api/admin/skill-modules", q.as_deref(), limit),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ms_search_journey_nodes(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    q: Option<String>,
+    limit: Option<u32>,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    get_json(
+        &client,
+        port,
+        &search_path("/api/admin/journey-nodes", q.as_deref(), limit),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ms_search_xp_event_tags(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    q: Option<String>,
+    limit: Option<u32>,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    get_json(
+        &client,
+        port,
+        &search_path("/api/admin/xp-event-tags", q.as_deref(), limit),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -178,7 +252,12 @@ pub async fn ms_search_players(
 ) -> Result<Value, String> {
     let port = tunnel_local_port(&registry, &tunnel_id)?;
     let client = ensure_client(&app);
-    get_json(&client, port, &search_path("/api/admin/players", q.as_deref(), limit)).await
+    get_json(
+        &client,
+        port,
+        &search_path("/api/admin/players", q.as_deref(), limit),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -190,6 +269,53 @@ pub async fn ms_cluster(
     let port = tunnel_local_port(&registry, &tunnel_id)?;
     let client = ensure_client(&app);
     get_json(&client, port, "/api/admin/cluster").await
+}
+
+#[tauri::command]
+pub async fn ms_player_location(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    fls_id: String,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    let path = format!("/api/admin/player-location?flsId={}", urlencoding(&fls_id));
+    get_json(&client, port, &path).await
+}
+
+#[tauri::command]
+pub async fn ms_get_config(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    get_json(&client, port, "/api/config").await
+}
+
+#[tauri::command]
+pub async fn ms_set_config(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    config: Value,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    post_json(&client, port, "/api/config", &config).await
+}
+
+#[tauri::command]
+pub async fn ms_list_timezones(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    get_json(&client, port, "/api/timezones").await
 }
 
 #[tauri::command]

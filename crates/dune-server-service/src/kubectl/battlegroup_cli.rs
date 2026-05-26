@@ -37,6 +37,18 @@ impl BattlegroupCli {
         result.require_ok("battlegroup start")
     }
 
+    pub async fn restart(&self) -> Result<()> {
+        let bin = self.bin_str();
+        let result = run_process(&bin, &["restart"], None, 1200).await?;
+        result.require_ok("battlegroup restart")
+    }
+
+    pub async fn update(&self) -> Result<()> {
+        let bin = self.bin_str();
+        let result = run_process(&bin, &["update"], None, 3600).await?;
+        result.require_ok("battlegroup update")
+    }
+
     pub async fn backup(&self, backup_name: &str) -> Result<()> {
         let bin = self.bin_str();
         let result = run_process(&bin, &["backup", backup_name], None, 600).await?;
@@ -116,7 +128,12 @@ pub async fn wait_until_running(
 pub async fn count_server_pods(kubectl: &KubectlClient, namespace: &str) -> Result<usize> {
     let result = kubectl
         .run(&[
-            "get", "pods", "-n", namespace, "--no-headers", "-o",
+            "get",
+            "pods",
+            "-n",
+            namespace,
+            "--no-headers",
+            "-o",
             "custom-columns=NAME:.metadata.name,DEL:.metadata.deletionTimestamp",
         ])
         .await?;
@@ -130,7 +147,10 @@ pub async fn count_server_pods(kubectl: &KubectlClient, namespace: &str) -> Resu
         let mut parts = trimmed.split_whitespace();
         let name = parts.next().unwrap_or("");
         let deletion = parts.next().unwrap_or("");
-        if name.contains("-sg-") && name.contains("-pod-") && (deletion.is_empty() || deletion == "<none>") {
+        if name.contains("-sg-")
+            && name.contains("-pod-")
+            && (deletion.is_empty() || deletion == "<none>")
+        {
             count += 1;
         }
     }
@@ -157,8 +177,15 @@ pub async fn ready_summary(
     bg_name: &str,
 ) -> Result<ReadySummary> {
     let bg = battlegroup::bg_json(kubectl, namespace, bg_name).await?;
-    let status = bg.get("status").cloned().unwrap_or_else(|| serde_json::json!({}));
-    let phase = status.get("phase").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let status = bg
+        .get("status")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let phase = status
+        .get("phase")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let server_group_phase = status
         .get("serverGroupPhase")
         .and_then(|v| v.as_str())

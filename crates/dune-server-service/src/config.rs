@@ -56,7 +56,8 @@ impl ServiceConfig {
             Some(raw) => parse_port(raw)?,
         };
 
-        let tz_raw = env::var("DUNE_SERVICE_TIME_ZONE").unwrap_or_else(|_| DEFAULT_TIME_ZONE.to_string());
+        let tz_raw =
+            env::var("DUNE_SERVICE_TIME_ZONE").unwrap_or_else(|_| DEFAULT_TIME_ZONE.to_string());
         let time_zone = Tz::from_str(&tz_raw).map_err(|_| ConfigError::InvalidTimeZone(tz_raw))?;
 
         let db_path = env::var("DUNE_SERVICE_DB_PATH")
@@ -139,13 +140,17 @@ fn is_loopback_host(host: &str) -> bool {
     if host == "localhost" {
         return true;
     }
-    IpAddr::from_str(host).map(|ip| ip.is_loopback()).unwrap_or(false)
+    IpAddr::from_str(host)
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
 }
 
 fn default_db_path() -> PathBuf {
     if cfg!(windows) {
         if let Ok(local) = env::var("LOCALAPPDATA") {
-            return PathBuf::from(local).join("dune-server-service").join("state.sqlite");
+            return PathBuf::from(local)
+                .join("dune-server-service")
+                .join("state.sqlite");
         }
         PathBuf::from(".data").join("dune-server-service.sqlite")
     } else {
@@ -157,8 +162,8 @@ fn load_dotenv(path: &Path) -> Result<()> {
     if !path.exists() {
         return Ok(());
     }
-    let contents = fs::read_to_string(path)
-        .with_context(|| format!("reading dotenv {}", path.display()))?;
+    let contents =
+        fs::read_to_string(path).with_context(|| format!("reading dotenv {}", path.display()))?;
     for line in contents.split('\n') {
         let Some((key, value)) = parse_dotenv_line(line) else {
             continue;
