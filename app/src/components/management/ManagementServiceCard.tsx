@@ -69,6 +69,8 @@ export default function ManagementServiceCard({
         appendLogRow(
           log.error("mgmt.install", `${stepLabel} failed${detail}`, server.id),
         );
+      } else if (ev.status === "running") {
+        appendLogRow(log.info("mgmt.install", `${stepLabel} started${detail}`, server.id));
       } else if (ev.status === "ok") {
         appendLogRow(log.info("mgmt.install", `${stepLabel} ok${detail}`, server.id));
       }

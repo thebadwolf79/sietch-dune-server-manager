@@ -58,6 +58,17 @@ impl RusshRunner {
         });
     }
 
+    /// Runs a command while streaming arbitrary stdin bytes to the remote
+    /// process. This is intended for binary payload uploads where embedding
+    /// base64 in a shell script would create a very large command body.
+    pub fn run_with_stdin(&self, command: &str, stdin_body: &[u8]) -> CommandResult<String> {
+        let runner = self.clone();
+        let command = command.to_string();
+        let stdin_body = stdin_body.to_vec();
+        shared_runtime()
+            .block_on(async move { runner.exec_with_retry(&command, Some(&stdin_body)).await })
+    }
+
     async fn exec_with_retry(
         &self,
         command: &str,

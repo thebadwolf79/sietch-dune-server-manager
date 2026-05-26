@@ -205,29 +205,56 @@ fn install_inner(
         .map_err(|err| step_err(app, "stop-old", err))?;
     emit_progress(app, "stop-old", "ok", None);
 
-    emit_progress(app, "upload-binary", "running", None);
-    let binary_b64 = read_b64(binary_path)?;
+    let binary_bytes = std::fs::read(binary_path)
+        .map_err(|err| format!("reading resource {}: {err}", binary_path.display()))?;
     let binary_size = std::fs::metadata(binary_path)
         .ok()
         .map(|m| m.len())
         .unwrap_or(0);
+    let size_msg = if binary_size > 0 {
+        format!("{:.1} MB", binary_size as f64 / 1024.0 / 1024.0)
+    } else {
+        "unknown size".to_string()
+    };
+    emit_progress(
+        app,
+        "upload-binary",
+        "running",
+        Some(format!(
+            "streaming {size_msg} from {} to {REMOTE_BINARY_PATH}",
+            binary_path.display()
+        )),
+    );
     let upload_script = format!(
         "set -eu\n\
          export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
          sudo install -d -m 0755 /opt/dune-server-service\n\
-         echo {b64} | base64 -d | sudo install -m 0755 -o root -g root /dev/stdin {dest}\n",
-        b64 = sh_single_quoted(&binary_b64),
+         tmp=$(mktemp /tmp/dune-server-service.XXXXXX)\n\
+         trap 'rm -f \"$tmp\"' EXIT\n\
+         cat > \"$tmp\"\n\
+         actual=$(wc -c < \"$tmp\" | tr -d '[:space:]')\n\
+         if [ \"$actual\" != {expected_bytes} ]; then\n  \
+             echo \"upload byte-count mismatch: expected {expected_bytes}, got $actual\" >&2\n  \
+             exit 42\n\
+         fi\n\
+         sudo install -m 0755 -o root -g root \"$tmp\" {dest}\n\
+         installed=$(sudo stat -c '%s bytes mode=%a owner=%U:%G' {dest})\n\
+         echo \"remote install: $installed\"\n",
+        expected_bytes = binary_bytes.len(),
         dest = sh_single_quoted(REMOTE_BINARY_PATH),
     );
-    runner
-        .run_script(&upload_script)
+    let upload_stdout = runner
+        .run_with_stdin(
+            &format!("sh -c {}", sh_single_quoted(&upload_script)),
+            &binary_bytes,
+        )
         .map_err(|err| step_err(app, "upload-binary", err))?;
-    let size_msg = if binary_size > 0 {
-        Some(format!("{:.1} MB", binary_size as f64 / 1024.0 / 1024.0))
+    let upload_msg = if upload_stdout.trim().is_empty() {
+        size_msg
     } else {
-        None
+        format!("{size_msg}; {}", upload_stdout.trim())
     };
-    emit_progress(app, "upload-binary", "ok", size_msg);
+    emit_progress(app, "upload-binary", "ok", Some(upload_msg));
 
     if let Some(t) = token {
         emit_progress(app, "write-token", "running", None);

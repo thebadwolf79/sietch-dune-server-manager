@@ -151,15 +151,23 @@ pub(crate) async fn exec_capture(
         .map_err(|err| failure(format!("ssh exec failed: {err}")))?;
     if let Some(body) = stdin_body {
         if !body.is_empty() {
-            channel
-                .data(body)
-                .await
-                .map_err(|err| failure(format!("ssh stdin write failed: {err}")))?;
+            let mut written = 0usize;
+            let total = body.len();
+            for chunk in body.chunks(32 * 1024) {
+                channel.data(chunk).await.map_err(|err| {
+                    failure(format!(
+                        "ssh stdin write failed after {written}/{total} bytes: {err}"
+                    ))
+                })?;
+                written += chunk.len();
+            }
         }
-        channel
-            .eof()
-            .await
-            .map_err(|err| failure(format!("ssh stdin close failed: {err}")))?;
+        channel.eof().await.map_err(|err| {
+            let total = body.len();
+            failure(format!(
+                "ssh stdin close failed after sending {total} bytes: {err}"
+            ))
+        })?;
     }
 
     let mut stdout = Vec::new();
