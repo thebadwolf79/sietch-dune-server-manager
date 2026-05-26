@@ -17,6 +17,7 @@ pub const DEFAULT_DASHBOARD_PORT: u16 = 29187;
 pub const DEFAULT_TIME_ZONE: &str = "Europe/Amsterdam";
 pub const DEFAULT_COMMAND_AUTH_TOKEN_FILE: &str = "/home/dune/.dune/state/command-auth-token";
 pub const DEFAULT_DB_PATH_LINUX: &str = "/home/dune/.dune/state/dune-server-service.sqlite";
+pub const DEFAULT_SERVICE_HOME_LINUX: &str = "/home/dune";
 
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
@@ -33,6 +34,7 @@ pub struct ServiceConfig {
     pub pg_user_override: Option<String>,
     pub pg_db_override: Option<String>,
     pub kubectl_use_sudo: bool,
+    pub service_home: PathBuf,
     pub steamcmd_path: Option<PathBuf>,
     pub steamcmd_download_path: Option<PathBuf>,
 }
@@ -64,9 +66,16 @@ impl ServiceConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| default_db_path());
 
+        let service_home = default_service_home();
+
         let command_auth_token_file = env::var("DUNE_COMMAND_AUTH_TOKEN_FILE")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_COMMAND_AUTH_TOKEN_FILE));
+            .unwrap_or_else(|_| {
+                service_home
+                    .join(".dune")
+                    .join("state")
+                    .join("command-auth-token")
+            });
 
         // Default to sudo because k3s installs `kubectl` with a kubeconfig
         // (`/etc/rancher/k3s/k3s.yaml`) that is only root-readable. The
@@ -81,7 +90,7 @@ impl ServiceConfig {
         Ok(Self {
             bin_dir: env::var("DUNE_BIN_DIR")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from(DEFAULT_BIN_DIR)),
+                .unwrap_or_else(|_| service_home.join(".dune").join("bin")),
             dashboard_host,
             dashboard_port,
             db_path,
@@ -94,6 +103,7 @@ impl ServiceConfig {
             pg_user_override: nonempty_env("DUNE_PG_USER"),
             pg_db_override: nonempty_env("DUNE_PG_DB"),
             kubectl_use_sudo,
+            service_home: service_home.clone(),
             steamcmd_path: nonempty_env("DUNE_STEAMCMD_PATH").map(PathBuf::from),
             steamcmd_download_path: nonempty_env("DUNE_STEAMCMD_DOWNLOAD_PATH").map(PathBuf::from),
         })
@@ -154,8 +164,25 @@ fn default_db_path() -> PathBuf {
         }
         PathBuf::from(".data").join("dune-server-service.sqlite")
     } else {
-        PathBuf::from(DEFAULT_DB_PATH_LINUX)
+        default_service_home()
+            .join(".dune")
+            .join("state")
+            .join("dune-server-service.sqlite")
     }
+}
+
+fn default_service_home() -> PathBuf {
+    env::var("DUNE_SERVICE_HOME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            env::var("HOME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SERVICE_HOME_LINUX))
 }
 
 fn load_dotenv(path: &Path) -> Result<()> {

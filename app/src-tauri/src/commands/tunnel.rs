@@ -257,6 +257,9 @@ fn probe_management_api(local_port: u16) -> Result<(), String> {
     let n = stream
         .read(&mut buf)
         .map_err(|err| format!("read failed: {err}"))?;
+    if n == 0 {
+        return Err("remote closed without an HTTP response".to_string());
+    }
     let head = String::from_utf8_lossy(&buf[..n]);
     if head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200") {
         Ok(())

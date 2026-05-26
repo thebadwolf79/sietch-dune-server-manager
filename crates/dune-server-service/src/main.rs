@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -16,8 +15,7 @@ use dune_server_service::systemd_compat;
 use dune_server_service::tasks::TaskEnv;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_PATH_EXTRAS: &str =
-    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/dune/.local/bin";
+const DEFAULT_PATH_EXTRAS: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 fn main() -> ExitCode {
     for arg in std::env::args().skip(1) {
@@ -122,12 +120,16 @@ async fn run() -> Result<()> {
     let download_path = cfg
         .steamcmd_download_path
         .clone()
-        .unwrap_or_else(|| PathBuf::from("/home/dune/.dune/download"));
+        .unwrap_or_else(|| cfg.service_home.join(".dune").join("download"));
     let steamcmd_bin = cfg
         .steamcmd_path
         .clone()
-        .unwrap_or_else(|| PathBuf::from("/home/dune/.local/bin/steamcmd"));
-    let steamcmd = SteamCmd::new(steamcmd_bin, download_path.clone());
+        .unwrap_or_else(|| cfg.service_home.join(".local").join("bin").join("steamcmd"));
+    let steamcmd = SteamCmd::new(
+        steamcmd_bin,
+        download_path.clone(),
+        cfg.service_home.clone(),
+    );
     if let Err(err) = steamcmd.ensure_wrapper() {
         tracing::warn!(error = %err, "could not ensure steamcmd wrapper; update-check will fail until resolved");
     }

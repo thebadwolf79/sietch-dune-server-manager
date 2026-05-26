@@ -10,7 +10,6 @@ use crate::commands::shared::{command_error_message, sh_single_quoted};
 const REMOTE_BINARY_PATH: &str = "/opt/dune-server-service/dune-server-service";
 const REMOTE_SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/dune-server-service.service";
 const REMOTE_OPENRC_PATH: &str = "/etc/init.d/dune-server-service";
-const REMOTE_TOKEN_PATH: &str = "/home/dune/.dune/state/command-auth-token";
 
 const BUNDLED_VERSION: &str = env!("DUNE_SERVER_SERVICE_VERSION");
 
@@ -67,6 +66,13 @@ pub struct InstallProgressEvent {
 
 fn default_ssh_port() -> u16 {
     22
+}
+
+#[derive(Debug, Clone)]
+struct ServiceAccount {
+    user: String,
+    group: String,
+    home: String,
 }
 
 fn target_from_conn(req: &ManagementConnRequest) -> Result<RusshTarget, String> {
@@ -192,6 +198,7 @@ fn install_inner(
     token: Option<&str>,
 ) -> Result<ManagementInstallResult, String> {
     let runner = RusshRunner::new(target.clone());
+    let account = discover_service_account(&runner, &target.user)?;
 
     emit_progress(app, "stop-old", "running", None);
     let stop_script = "set +e\n\
@@ -259,13 +266,17 @@ fn install_inner(
     if let Some(t) = token {
         emit_progress(app, "write-token", "running", None);
         let token_b64 = base64::engine::general_purpose::STANDARD.encode(t.as_bytes());
+        let token_path = format!("{}/.dune/state/command-auth-token", account.home);
         let token_script = format!(
             "set -eu\n\
              export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
-             sudo install -d -m 0700 -o dune -g dune /home/dune/.dune/state\n\
-             echo {b64} | base64 -d | sudo install -m 0600 -o dune -g dune /dev/stdin {dest}\n",
+             sudo install -d -m 0700 -o {user} -g {group} {state_dir}\n\
+             echo {b64} | base64 -d | sudo install -m 0600 -o {user} -g {group} /dev/stdin {dest}\n",
+            user = sh_single_quoted(&account.user),
+            group = sh_single_quoted(&account.group),
+            state_dir = sh_single_quoted(&format!("{}/.dune/state", account.home)),
             b64 = sh_single_quoted(&token_b64),
-            dest = sh_single_quoted(REMOTE_TOKEN_PATH),
+            dest = sh_single_quoted(&token_path),
         );
         runner
             .run_script(&token_script)
@@ -281,8 +292,10 @@ fn install_inner(
     }
 
     emit_progress(app, "install-init", "running", None);
-    let unit_b64 = read_b64(unit_path)?;
-    let openrc_b64 = read_b64(openrc_path)?;
+    let unit_b64 = base64::engine::general_purpose::STANDARD
+        .encode(render_systemd_unit(unit_path, &account)?.as_bytes());
+    let openrc_b64 = base64::engine::general_purpose::STANDARD
+        .encode(render_openrc_unit(openrc_path, &account)?.as_bytes());
     let init_script = format!(
         "set -eu\n\
          export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH\n\
@@ -385,6 +398,86 @@ fn install_inner(
     })
 }
 
+fn discover_service_account(
+    runner: &RusshRunner,
+    registered_user: &str,
+) -> Result<ServiceAccount, String> {
+    let user = registered_user.trim();
+    if user.is_empty() {
+        return Err("registered SSH user is required".to_string());
+    }
+    let script = format!(
+        "set -eu\n\
+         user={user}\n\
+         home=$(getent passwd \"$user\" | awk -F: '{{print $6}}')\n\
+         group=$(id -gn \"$user\")\n\
+         if [ -z \"$home\" ] || [ -z \"$group\" ]; then\n  \
+             echo \"could not resolve service account for $user\" >&2\n  \
+             exit 1\n\
+         fi\n\
+         printf 'USER=%s\\nGROUP=%s\\nHOME=%s\\n' \"$user\" \"$group\" \"$home\"\n",
+        user = sh_single_quoted(user),
+    );
+    let stdout = runner.run_script(&script).map_err(command_error_message)?;
+    let mut account = ServiceAccount {
+        user: String::new(),
+        group: String::new(),
+        home: String::new(),
+    };
+    for line in stdout.lines() {
+        if let Some(value) = line.strip_prefix("USER=") {
+            account.user = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("GROUP=") {
+            account.group = value.trim().to_string();
+        } else if let Some(value) = line.strip_prefix("HOME=") {
+            account.home = value.trim().trim_end_matches('/').to_string();
+        }
+    }
+    if account.user.is_empty() || account.group.is_empty() || account.home.is_empty() {
+        return Err(format!(
+            "could not resolve service account from remote output: {stdout}"
+        ));
+    }
+    Ok(account)
+}
+
+fn render_systemd_unit(path: &std::path::Path, account: &ServiceAccount) -> Result<String, String> {
+    let unit = std::fs::read_to_string(path)
+        .map_err(|err| format!("reading resource {}: {err}", path.display()))?;
+    let home = account.home.as_str();
+    Ok(unit
+        .replace("User=dune", &format!("User={}", account.user))
+        .replace("Group=dune", &format!("Group={}", account.group))
+        .replace("/home/dune/.local/bin", &format!("{home}/.local/bin"))
+        .replace("/home/dune/.dune", &format!("{home}/.dune"))
+        .replace("/home/dune/.steam", &format!("{home}/.steam"))
+        .replace("/home/dune/Steam", &format!("{home}/Steam"))
+        .replace(
+            "Environment=\"DUNE_SERVICE_HOME=/home/dune\"",
+            &format!("Environment=\"DUNE_SERVICE_HOME={home}\""),
+        ))
+}
+
+fn render_openrc_unit(path: &std::path::Path, account: &ServiceAccount) -> Result<String, String> {
+    let unit = std::fs::read_to_string(path)
+        .map_err(|err| format!("reading resource {}: {err}", path.display()))?;
+    let home = account.home.as_str();
+    Ok(unit
+        .replace(
+            "command_user=\"dune:dune\"",
+            &format!("command_user=\"{}:{}\"", account.user, account.group),
+        )
+        .replace(
+            "--owner dune:dune",
+            &format!("--owner {}:{}", account.user, account.group),
+        )
+        .replace("/home/dune/.dune", &format!("{home}/.dune"))
+        .replace(
+            "DUNE_SERVICE_HOME=\"${DUNE_SERVICE_HOME:-/home/dune}\"",
+            &format!("DUNE_SERVICE_HOME=\"${{DUNE_SERVICE_HOME:-{home}}}\""),
+        ))
+}
+
 fn emit_progress(app: &tauri::AppHandle, step: &str, status: &str, message: Option<String>) {
     let payload = InstallProgressEvent {
         step: step.to_string(),
@@ -477,10 +570,4 @@ fn status_inner(target: &RusshTarget) -> Result<ManagementServiceStatus, String>
         bundled_version: BUNDLED_VERSION.trim().to_string(),
         journal_tail: String::new(),
     })
-}
-
-fn read_b64(path: &std::path::Path) -> Result<String, String> {
-    let bytes =
-        std::fs::read(path).map_err(|err| format!("reading resource {}: {err}", path.display()))?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
 }

@@ -8,6 +8,7 @@ Type=simple
 ExecStart=/opt/dune-server-service/dune-server-service
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/dune/.local/bin"
 Environment="DUNE_DASHBOARD_PORT=29187"
+Environment="DUNE_SERVICE_HOME=/home/dune"
 EnvironmentFile=-/etc/dune-server-service.env
 Restart=on-failure
 RestartSec=10
