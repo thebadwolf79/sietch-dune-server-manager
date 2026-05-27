@@ -169,6 +169,22 @@ jobs:
           $config = $config -replace '"createUpdaterArtifacts":\s*false', '"createUpdaterArtifacts": true'
           Set-Content -Path $tauriConfigPath -Value $config -NoNewline
 
+      - name: Resolve release notes
+        id: notes
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_VERSION
+          $notesPath = "release-notes/$version.md"
+          if (Test-Path $notesPath) {
+            $body = Get-Content $notesPath -Raw
+          } else {
+            $body = "Release v$version. See the commit log for details (no release-notes/$version.md was provided)."
+          }
+          $delimiter = "EOF_$(New-Guid)"
+          "RELEASE_BODY<<$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $body | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $delimiter | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -180,6 +196,7 @@ jobs:
           projectPath: app
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "Dune Dedicated Server Manager ${{ env.RELEASE_TAG }}"
+          releaseBody: ${{ steps.notes.outputs.RELEASE_BODY }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

@@ -31,6 +31,9 @@ pnpm-debug.log*
 !docs/
 !docs/*.md
 docs/rabbitmq-protocol.md
+# Release notes go on GitHub releases via the release workflow.
+!release-notes/
+!release-notes/*.md
 
 # Editor and OS noise
 .idea/
