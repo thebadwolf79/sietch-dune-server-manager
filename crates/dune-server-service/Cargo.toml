@@ -1,6 +1,6 @@
 [package]
 name = "dune-server-service"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2021"
 publish = false
 description = "Dune dedicated-server management daemon: scheduled maintenance + admin command API."

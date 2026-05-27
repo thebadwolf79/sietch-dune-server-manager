@@ -1,8 +1,6 @@
+use dune_manager_core::errors::failure;
 use dune_manager_core::models::CommandResult;
-use dune_manager_core::orchestration::{
-    BattlegroupManagementOrchestrator, BattlegroupRef, RemoteCommandRunner, RusshRunner,
-    StructuredKubectl, VendorBattlegroupWrapper,
-};
+use dune_manager_core::orchestration::{RemoteCommandRunner, RusshRunner};
 use serde_json::Value;
 
 use crate::commands::shared::sh_single_quoted;
@@ -18,39 +16,98 @@ pub fn read_remote_server_status(
     namespace: &str,
     battlegroup_name: &str,
 ) -> CommandResult<RemoteServerStatus> {
-    let ssh_user = runner.target().user.clone();
-    let manager = BattlegroupManagementOrchestrator::new(
-        StructuredKubectl::new(runner.clone()),
-        VendorBattlegroupWrapper::with_ssh_user(runner.clone(), ssh_user),
-    );
-    let bg_ref = BattlegroupRef {
-        namespace: namespace.to_string(),
-        name: battlegroup_name.to_string(),
-    };
-    let state = manager.status(&bg_ref)?;
+    // The vendor wrapper's `status` text output is the source of truth in
+    // older operator versions, but the format keeps shifting across Funcom
+    // releases (newer wrappers show the partial world name in "Status",
+    // "N/M" ratios under "Director", and semantic words like "Healthy"
+    // under "Uptime" — none of which match the older
+    // `Running/Running/Running/Running/1h2m` shape we used to parse).
+    // Read the BattleGroup CR's `status` object directly so we stay
+    // pinned to the stable Kubernetes schema instead of the rotating
+    // text rendering.
+    let bg = runner.run_json(
+        &format!(
+            "sudo kubectl get battlegroup -n {} {} -o json",
+            sh_single_quoted(namespace),
+            sh_single_quoted(battlegroup_name),
+        ),
+        "remote battlegroup",
+    )?;
+    let battlegroup = battlegroup_status_from_json(&bg).ok_or_else(|| {
+        failure(format!(
+            "BattleGroup `{battlegroup_name}` returned no status object yet (likely still initialising)"
+        ))
+    })?;
     let package = read_guest_package_status(runner, namespace, battlegroup_name)?;
-    Ok(RemoteServerStatus {
-        battlegroup: RemoteBattlegroupStatus {
-            stop: state.stop,
-            phase: state.phase,
-            database_phase: state.database_phase,
-            server_group_phase: state.server_group_phase,
-            director_phase: state.director_phase,
-            uptime: state.uptime,
-            server_stats: state
-                .server_stats
-                .into_iter()
-                .map(|row| RemoteBattlegroupServerStat {
-                    map: friendly_map_name(&row.map, &row.map),
-                    phase: row.phase,
-                    ready: row.ready,
-                    players: row.players,
-                    age: row.age,
-                })
-                .collect(),
-        },
-        package,
+    Ok(RemoteServerStatus { battlegroup, package })
+}
+
+/// Pure function that maps a raw `kubectl get battlegroup ... -o json`
+/// payload into the UI's `RemoteBattlegroupStatus`. Defensive: every field
+/// has a sensible empty/false default so partially-populated status (e.g.
+/// directorPhase = null while the operator is still reconciling) doesn't
+/// break the page. Returns None only if there's no metadata.name at all,
+/// in which case the JSON isn't a BattleGroup object.
+pub(crate) fn battlegroup_status_from_json(bg: &Value) -> Option<RemoteBattlegroupStatus> {
+    bg.get("metadata")?.get("name")?.as_str()?;
+    let spec = bg.get("spec").cloned().unwrap_or(Value::Null);
+    let status = bg.get("status").cloned().unwrap_or(Value::Null);
+
+    let stop = spec
+        .get("stop")
+        .and_then(Value::as_bool)
+        .or_else(|| status.get("stop").and_then(Value::as_bool))
+        .unwrap_or(false);
+
+    let server_stats = status
+        .get("servers")
+        .and_then(Value::as_array)
+        .map(|servers| servers.iter().map(server_stat_from_json).collect())
+        .unwrap_or_default();
+
+    Some(RemoteBattlegroupStatus {
+        stop,
+        phase: string_field(&status, "phase"),
+        database_phase: string_field(&status, "databasePhase"),
+        server_group_phase: string_field(&status, "serverGroupPhase"),
+        director_phase: string_field(&status, "directorPhase"),
+        uptime: string_field(&status, "uptime"),
+        server_stats,
     })
+}
+
+fn string_field(value: &Value, key: &str) -> String {
+    match value.get(key) {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::Bool(b)) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn server_stat_from_json(server: &Value) -> RemoteBattlegroupServerStat {
+    // The operator labels each entry by the map key (e.g. "Survival_1");
+    // newer versions use `name`. Try both and pass through the friendly
+    // alias so the UI matches what older operators printed in the wrapper
+    // text table.
+    let raw_map = server
+        .get("map")
+        .and_then(Value::as_str)
+        .or_else(|| server.get("name").and_then(Value::as_str))
+        .unwrap_or_default();
+    let ready_str = match server.get("ready") {
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    };
+    RemoteBattlegroupServerStat {
+        map: friendly_map_name(raw_map, raw_map),
+        phase: string_field(server, "phase"),
+        ready: ready_str,
+        players: string_field(server, "players"),
+        age: string_field(server, "age"),
+    }
 }
 
 fn read_guest_package_status(
@@ -222,4 +279,79 @@ fn remote_record_id(_server_type: &str, host: &str, key_path: Option<&str>) -> S
         host.trim().to_lowercase(),
         key_path.unwrap_or_default().trim().to_lowercase()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn bg(spec: Value, status: Value) -> Value {
+        json!({
+            "metadata": {"name": "sh-test-bg", "namespace": "funcom-seabass-sh-test"},
+            "spec": spec,
+            "status": status,
+        })
+    }
+
+    #[test]
+    fn maps_reconciling_bg_with_null_director_phase() {
+        // Mirrors the user-reported payload: phase Reconciling, gateway
+        // Running, director not yet populated. Prior text-parse path was
+        // confusing the UI into greying the Director tunnel; under direct
+        // kubectl read the director_phase is just "" which the UI treats
+        // as "ready enough".
+        let value = bg(
+            json!({"stop": false}),
+            json!({
+                "phase": "Reconciling",
+                "serverGroupPhase": "Running",
+                "directorPhase": Value::Null,
+                "stop": Value::Null,
+            }),
+        );
+        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        assert!(!dto.stop);
+        assert_eq!(dto.phase, "Reconciling");
+        assert_eq!(dto.server_group_phase, "Running");
+        assert_eq!(dto.director_phase, "");
+        assert_eq!(dto.uptime, "");
+    }
+
+    #[test]
+    fn falls_back_to_status_stop_when_spec_missing() {
+        let value = bg(json!({}), json!({"phase": "Stopped", "stop": true}));
+        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        assert!(dto.stop);
+        assert_eq!(dto.phase, "Stopped");
+    }
+
+    #[test]
+    fn server_stats_pulled_from_status_servers_array() {
+        let value = bg(
+            json!({"stop": false}),
+            json!({
+                "phase": "Running",
+                "servers": [
+                    {"map": "Survival_1", "phase": "Running", "ready": true, "players": 3, "age": "1h"},
+                    {"name": "DeepDesert_1", "phase": "Stopped", "ready": false, "players": 0},
+                ]
+            }),
+        );
+        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        assert_eq!(dto.server_stats.len(), 2);
+        assert_eq!(dto.server_stats[0].map, friendly_map_name("Survival_1", "Survival_1"));
+        assert_eq!(dto.server_stats[0].phase, "Running");
+        assert_eq!(dto.server_stats[0].ready, "true");
+        assert_eq!(dto.server_stats[0].players, "3");
+        assert_eq!(dto.server_stats[1].map, friendly_map_name("DeepDesert_1", "DeepDesert_1"));
+        assert_eq!(dto.server_stats[1].ready, "false");
+        assert_eq!(dto.server_stats[1].age, "");
+    }
+
+    #[test]
+    fn returns_none_when_not_a_battlegroup_resource() {
+        let value = json!({"kind": "Pod", "spec": {}, "status": {}});
+        assert!(battlegroup_status_from_json(&value).is_none());
+    }
 }
