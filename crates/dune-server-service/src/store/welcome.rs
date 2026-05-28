@@ -120,6 +120,7 @@ impl Store {
                     last_online_status = excluded.last_online_status,
                     first_online_at = CASE
                         WHEN welcome_grants.status != 'pending' THEN welcome_grants.first_online_at
+                        WHEN excluded.first_online_at IS NULL THEN NULL
                         ELSE COALESCE(welcome_grants.first_online_at, excluded.first_online_at)
                     END,
                     updated_at = CASE
