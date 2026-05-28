@@ -25,6 +25,7 @@ import DumpPruneDialog from "./DumpPruneDialog";
 
 const DIRECT_TASKS: Array<{ id: string; label: string }> = [
   { id: "backup", label: "Backup" },
+  { id: "welcome-package", label: "Welcome package scan" },
   { id: "update-check", label: "Check for server update" },
   { id: "update-apply", label: "Apply server update" },
   { id: "restart", label: "Restart server" },
@@ -556,6 +557,7 @@ function ScheduleSettings({
               <CronStatusHint status={backupCronStatus} />
             </Box>
           </Box>
+
         </Box>
       ) : (
         <Box className="schedule-grid">
@@ -590,6 +592,7 @@ function ScheduleSettings({
                 : "disabled (manual only)"
               : "—"}
           </Text>
+
         </Box>
       )}
 

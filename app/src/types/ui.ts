@@ -4,6 +4,7 @@ export type ServerSubPage =
   | "pods"
   | "users"
   | "admin"
+  | "welcome"
   | "tasks";
 
 export type ActivePage =
@@ -16,12 +17,14 @@ export const SERVER_SUB_PAGES: readonly ServerSubPage[] = [
   "pods",
   "users",
   "admin",
+  "welcome",
   "tasks",
 ] as const;
 
 export const MANAGEMENT_SUB_PAGES: readonly ServerSubPage[] = [
   "users",
   "admin",
+  "welcome",
   "tasks",
 ] as const;
 

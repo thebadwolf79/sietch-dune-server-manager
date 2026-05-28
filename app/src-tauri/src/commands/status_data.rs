@@ -53,20 +53,14 @@ pub fn read_remote_server_status(
         ))
     })?;
     let package = read_guest_package_status(runner, namespace, battlegroup_name)?;
-    Ok(RemoteServerStatus { battlegroup, package })
+    Ok(RemoteServerStatus {
+        battlegroup,
+        package,
+    })
 }
 
-/// Pure function that maps a raw `kubectl get battlegroup ... -o json`
-/// payload into the UI's `RemoteBattlegroupStatus`. Defensive: every field
-/// has a sensible empty/false default so partially-populated status (e.g.
-/// directorPhase = null while the operator is still reconciling) doesn't
-/// break the page. Returns None only if there's no metadata.name at all,
-/// in which case the JSON isn't a BattleGroup object.
-pub(crate) fn battlegroup_status_from_json(bg: &Value) -> Option<RemoteBattlegroupStatus> {
-    battlegroup_status_from_json_with_stats(bg, &Value::Null)
-}
-
-/// Same as `battlegroup_status_from_json` but also merges per-partition
+/// Maps a raw `kubectl get battlegroup ... -o json` payload into the UI's
+/// `RemoteBattlegroupStatus` and merges per-partition
 /// live data (players, gamePhase, ready) from a `kubectl get serverstats`
 /// JSON payload. Pass `Value::Null` when no stats are available.
 pub(crate) fn battlegroup_status_from_json_with_stats(
@@ -448,6 +442,10 @@ mod tests {
         })
     }
 
+    fn bg_status(bg: &Value) -> Option<RemoteBattlegroupStatus> {
+        battlegroup_status_from_json_with_stats(bg, &Value::Null)
+    }
+
     #[test]
     fn maps_reconciling_bg_with_null_director_phase() {
         // Mirrors the user-reported payload: phase Reconciling, gateway
@@ -464,7 +462,7 @@ mod tests {
                 "stop": Value::Null,
             }),
         );
-        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        let dto = bg_status(&value).expect("status maps");
         assert!(!dto.stop);
         assert_eq!(dto.phase, "Reconciling");
         assert_eq!(dto.server_group_phase, "Running");
@@ -475,7 +473,7 @@ mod tests {
     #[test]
     fn falls_back_to_status_stop_when_spec_missing() {
         let value = bg(json!({}), json!({"phase": "Stopped", "stop": true}));
-        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        let dto = bg_status(&value).expect("status maps");
         assert!(dto.stop);
         assert_eq!(dto.phase, "Stopped");
     }
@@ -492,15 +490,21 @@ mod tests {
                 ]
             }),
         );
-        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        let dto = bg_status(&value).expect("status maps");
         assert_eq!(dto.server_stats.len(), 2);
-        assert_eq!(dto.server_stats[0].map, friendly_map_name("Survival_1", "Survival_1"));
+        assert_eq!(
+            dto.server_stats[0].map,
+            friendly_map_name("Survival_1", "Survival_1")
+        );
         assert_eq!(dto.server_stats[0].phase, "Running");
         assert_eq!(dto.server_stats[0].ready, "true");
         // Players empty when no ServerStats CR is supplied — that data lives
         // on a separate CRD and is merged via `_with_stats`.
         assert_eq!(dto.server_stats[0].players, "");
-        assert_eq!(dto.server_stats[1].map, friendly_map_name("DeepDesert_1", "DeepDesert_1"));
+        assert_eq!(
+            dto.server_stats[1].map,
+            friendly_map_name("DeepDesert_1", "DeepDesert_1")
+        );
         assert_eq!(dto.server_stats[1].ready, "false");
         assert_eq!(dto.server_stats[1].age, "");
     }
@@ -581,7 +585,7 @@ mod tests {
                 ]
             }),
         );
-        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        let dto = bg_status(&value).expect("status maps");
         assert_eq!(dto.server_stats.len(), 3);
         assert_eq!(dto.server_stats[0].map, "Hagga Basin #1");
         assert_eq!(dto.server_stats[1].map, "Hagga Basin #31");
@@ -593,7 +597,7 @@ mod tests {
     #[test]
     fn returns_none_when_not_a_battlegroup_resource() {
         let value = json!({"kind": "Pod", "spec": {}, "status": {}});
-        assert!(battlegroup_status_from_json(&value).is_none());
+        assert!(bg_status(&value).is_none());
     }
 
     #[test]
@@ -613,11 +617,15 @@ mod tests {
                 ],
             }),
         );
-        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        let dto = bg_status(&value).expect("status maps");
         // All rows pick up the same BG-level age.
         assert_eq!(dto.server_stats.len(), 2);
         for row in &dto.server_stats {
-            assert!(row.age == "1m" || row.age == "60s", "row age was {:?}", row.age);
+            assert!(
+                row.age == "1m" || row.age == "60s",
+                "row age was {:?}",
+                row.age
+            );
         }
     }
 
@@ -636,20 +644,21 @@ mod tests {
                 },
             }),
         );
-        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        let dto = bg_status(&value).expect("status maps");
         assert_eq!(dto.database_phase, "Ready");
         assert_eq!(dto.director_phase, "Healthy");
     }
 
     #[test]
     fn uptime_derived_from_start_timestamp_when_no_literal() {
-        let one_hr_ago = (chrono::Utc::now() - chrono::Duration::hours(1) - chrono::Duration::minutes(2))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let one_hr_ago =
+            (chrono::Utc::now() - chrono::Duration::hours(1) - chrono::Duration::minutes(2))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let value = bg(
             json!({"stop": false}),
             json!({"phase": "Healthy", "startTimestamp": one_hr_ago}),
         );
-        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        let dto = bg_status(&value).expect("status maps");
         assert_eq!(dto.uptime, "1h 2m");
     }
 
@@ -663,7 +672,7 @@ mod tests {
                 "startTimestamp": "2026-05-22T01:27:53Z",
             }),
         );
-        let dto = battlegroup_status_from_json(&value).expect("status maps");
+        let dto = bg_status(&value).expect("status maps");
         assert_eq!(dto.uptime, "1h2m");
     }
 
@@ -674,8 +683,9 @@ mod tests {
         let recent = (chrono::Utc::now() - chrono::Duration::seconds(30))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         assert!(format_age_since_iso(&recent).ends_with('s'));
-        let hours = (chrono::Utc::now() - chrono::Duration::hours(3) - chrono::Duration::minutes(15))
-            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let hours =
+            (chrono::Utc::now() - chrono::Duration::hours(3) - chrono::Duration::minutes(15))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         assert_eq!(format_age_since_iso(&hours), "3h 15m");
         let days = (chrono::Utc::now() - chrono::Duration::days(5) - chrono::Duration::hours(7))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);

@@ -152,6 +152,17 @@ export type ScheduleConfig = {
   restartTz: string;
   /** null = scheduled backups disabled; otherwise the 5-field cron string. */
   backupCron: string | null;
+  welcomeMessageEnabled: boolean;
+  welcomePackageEnabled: boolean;
+  welcomePackageRequireEmptyBackpack: boolean;
+  welcomePackageVersion: string;
+  welcomePackagePollSecs: number;
+  welcomePackageOnlineGraceSecs: number;
+  welcomePackageActionsJson: string;
+  /** Backward-compatible alias returned by older service builds. */
+  welcomePackageItemsJson: string;
+  welcomeWhisperSourcePlayer: string;
+  welcomeMessage: string;
   restartRequired: boolean;
 };
 
@@ -164,6 +175,17 @@ export type ScheduleConfigUpdate = Partial<{
   restartTz: string;
   /** Empty string clears the cron (disables); non-empty validated server-side. */
   backupCron: string;
+  welcomeMessageEnabled: boolean;
+  welcomePackageEnabled: boolean;
+  welcomePackageRequireEmptyBackpack: boolean;
+  welcomePackageVersion: string;
+  welcomePackagePollSecs: number;
+  welcomePackageOnlineGraceSecs: number;
+  welcomePackageActionsJson: string;
+  /** Older service builds accept this; newer builds map it to actions. */
+  welcomePackageItemsJson: string;
+  welcomeWhisperSourcePlayer: string;
+  welcomeMessage: string;
 }>;
 
 export type CronPreviewResult =
@@ -231,6 +253,21 @@ export type HistoryDto = {
   payload: Record<string, unknown>;
   ok: boolean;
   message: string | null;
+};
+
+export type WelcomeGrantDto = {
+  playerId: string;
+  packageVersion: string;
+  accountId: number;
+  characterName: string | null;
+  status: "pending" | "granted" | "failed";
+  detectedAt: string;
+  updatedAt: string;
+  grantedAt: string | null;
+  attempts: number;
+  lastOnlineStatus: string | null;
+  firstOnlineAt: string | null;
+  lastError: string | null;
 };
 
 export type PublishResultDto = {

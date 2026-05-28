@@ -11,6 +11,7 @@ use crate::kubectl::{ClusterCache, KubectlClient};
 
 const EXCHANGE: &str = "heartbeats";
 const ROUTING_KEY: &str = "notifications";
+const WHISPER_EXCHANGE: &str = "chat.whispers";
 const USER_ID: &str = "fls";
 const APP_ID: &str = "fls_backend";
 
@@ -62,6 +63,16 @@ impl MqPublisher {
 
     pub async fn publish_inner(&self, inner: &Value, label: &str) -> Result<PublishResult> {
         publish_inner(self, inner, label).await
+    }
+
+    pub async fn publish_whisper(
+        &self,
+        routing_key: &str,
+        sender_fls_id: &str,
+        body: &Value,
+        label: &str,
+    ) -> Result<PublishResult> {
+        publish_whisper(self, routing_key, sender_fls_id, body, label).await
     }
 
     pub async fn publish_service_broadcast(
@@ -132,6 +143,34 @@ pub fn build_erlang_publish(payload_b64: &str, label: &str) -> String {
     )
 }
 
+pub fn build_erlang_whisper_publish(
+    payload_b64: &str,
+    routing_key_b64: &str,
+    sender_fls_id_b64: &str,
+    label: &str,
+) -> String {
+    let label = if SAFE_LABEL_RE.is_match(label) {
+        label
+    } else {
+        "smgmt"
+    };
+    let exchange_b64 = base64::engine::general_purpose::STANDARD.encode(WHISPER_EXCHANGE);
+    format!(
+        "Body = base64:decode(<<\"{payload_b64}\">>),\n\
+         Exchange = base64:decode(<<\"{exchange_b64}\">>),\n\
+         RoutingKey = base64:decode(<<\"{routing_key_b64}\">>),\n\
+         Sender = base64:decode(<<\"{sender_fls_id_b64}\">>),\n\
+         XName = rabbit_misc:r(<<\"/\">>, exchange, Exchange),\n\
+         X = rabbit_exchange:lookup_or_die(XName),\n\
+         MsgId = list_to_binary(\"smgmt-{label}-\" ++ integer_to_list(erlang:system_time(millisecond))),\n\
+         P = {{list_to_atom(\"P_basic\"), <<\"Content\">>, undefined, [], undefined, undefined, undefined, undefined, undefined, MsgId, undefined, <<\"text_chat\">>, Sender, <<\"{APP_ID}\">>, undefined}},\n\
+         Content = rabbit_basic:build_content(P, Body),\n\
+         {{ok, Msg}} = rabbit_basic:message(XName, RoutingKey, Content),\n\
+         Result = rabbit_queue_type:publish_at_most_once(X, Msg),\n\
+         io:format(\"publish=~p exchange={WHISPER_EXCHANGE} routing=~s app_id={APP_ID} user_id=~s label={label}~n\", [Result, RoutingKey, Sender]).\n",
+    )
+}
+
 pub async fn publish_inner(
     publisher: &MqPublisher,
     inner: &Value,
@@ -167,6 +206,67 @@ pub async fn publish_inner(
         )
         .await
         .context("kubectl exec rabbitmqctl eval")?;
+
+    let combined = if result.stderr.trim().is_empty() {
+        result.stdout.clone()
+    } else {
+        format!("{}\n{}", result.stdout, result.stderr)
+    };
+    let scrubbed = crate::logger::redact(&combined).into_owned();
+    if !result.ok() {
+        return Err(anyhow!(
+            "rabbitmqctl eval exited {}: {scrubbed}",
+            result.exit_code
+        ));
+    }
+    let ok = result.stdout.contains("publish=ok");
+    Ok(PublishResult {
+        ok,
+        output: scrubbed,
+    })
+}
+
+pub async fn publish_whisper(
+    publisher: &MqPublisher,
+    routing_key: &str,
+    sender_fls_id: &str,
+    body: &Value,
+    label: &str,
+) -> Result<PublishResult> {
+    let cluster = publisher.cluster.get().await?;
+    let payload_b64 = base64::engine::general_purpose::STANDARD
+        .encode(serde_json::to_vec(body).context("serializing whisper body")?);
+    let routing_key_b64 = base64::engine::general_purpose::STANDARD.encode(routing_key);
+    let sender_fls_id_b64 = base64::engine::general_purpose::STANDARD.encode(sender_fls_id);
+    let erlang =
+        build_erlang_whisper_publish(&payload_b64, &routing_key_b64, &sender_fls_id_b64, label);
+
+    let shell = "set -eu; \
+        export PATH=/opt/rabbitmq/sbin:/opt/erlang/lib/erlang/bin:/bin:/usr/bin:/usr/local/bin:$PATH; \
+        cat > /tmp/dune-mq-whisper.erl; \
+        expr=$(cat /tmp/dune-mq-whisper.erl); \
+        /opt/rabbitmq/sbin/rabbitmqctl eval \"$expr\"; \
+        rm -f /tmp/dune-mq-whisper.erl";
+
+    let result = publisher
+        .kubectl
+        .run_timeout(
+            &[
+                "exec",
+                "-i",
+                "-n",
+                &cluster.namespace,
+                &cluster.mq_pod,
+                "--",
+                "sh",
+                "-lc",
+                shell,
+            ],
+            Some(&erlang),
+            30,
+        )
+        .await
+        .context("kubectl exec rabbitmqctl eval whisper")?;
 
     let combined = if result.stderr.trim().is_empty() {
         result.stdout.clone()
@@ -278,5 +378,16 @@ mod tests {
         assert!(s.contains("<<\"fls\">>"));
         assert!(s.contains("<<\"fls_backend\">>"));
         assert!(s.contains("<<\"Content\">>"));
+    }
+
+    #[test]
+    fn whisper_erlang_uses_chat_whispers_and_sender() {
+        let routing = base64::engine::general_purpose::STANDARD.encode("recipient-chat-id");
+        let sender = base64::engine::general_purpose::STANDARD.encode("sender-fls-id");
+        let s = build_erlang_whisper_publish("PAYLOAD", &routing, &sender, "whisper");
+        assert!(s.contains("chat.whispers"));
+        assert!(s.contains("<<\"text_chat\">>"));
+        assert!(s.contains("Sender"));
+        assert!(s.contains("RoutingKey"));
     }
 }

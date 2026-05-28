@@ -376,6 +376,22 @@ pub async fn ms_history(
 }
 
 #[tauri::command]
+pub async fn ms_welcome_grants(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    limit: Option<u32>,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    let path = match limit {
+        Some(l) => format!("/api/admin/welcome-grants?limit={l}"),
+        None => String::from("/api/admin/welcome-grants"),
+    };
+    get_json(&client, port, &path).await
+}
+
+#[tauri::command]
 pub async fn ms_publish(
     app: tauri::AppHandle,
     registry: tauri::State<'_, TunnelRegistry>,
@@ -390,6 +406,30 @@ pub async fn ms_publish(
         port,
         "/api/admin/publish",
         &serde_json::json!({ "command": command, "fields": fields }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ms_welcome_whisper(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    recipient_player_id: String,
+    source_player_id: String,
+    message: String,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    post_json(
+        &client,
+        port,
+        "/api/admin/welcome-whisper",
+        &serde_json::json!({
+            "recipientPlayerId": recipient_player_id,
+            "sourcePlayerId": source_player_id,
+            "message": message,
+        }),
     )
     .await
 }

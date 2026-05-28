@@ -7,10 +7,14 @@ use rusqlite::{Connection, OptionalExtension};
 pub mod admin_history;
 pub mod pending;
 pub mod runs;
+pub mod welcome;
 
 pub use admin_history::{AdminHistoryEntry, AdminHistoryFilter};
 pub use pending::PendingUpdateRecord;
 pub use runs::{LogEntry, LogLevel, NewLogEntry, TaskRun, TaskRunStatus, TaskTrigger};
+pub use welcome::{
+    WelcomeActionRecord, WelcomeActionStatus, WelcomeGrantRecord, WelcomeGrantStatus,
+};
 
 /// Shared store handle. Wraps a single SQLite connection behind a mutex so the
 /// async layer can call into it from `spawn_blocking` closures.
@@ -33,6 +37,7 @@ impl Store {
         conn.pragma_update(None, "busy_timeout", 5000)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
+        migrate_schema(&conn)?;
         let orphaned_update_apply = count_running_update_apply(&conn)?;
         let orphaned = mark_orphaned_runs(&conn)?;
         if orphaned > 0 {
@@ -91,6 +96,40 @@ impl Store {
             .get_config(key)?
             .and_then(|raw| raw.parse::<i64>().ok()))
     }
+}
+
+fn migrate_schema(conn: &Connection) -> rusqlite::Result<()> {
+    add_column_if_missing(
+        conn,
+        "welcome_grants",
+        "first_online_at",
+        "ALTER TABLE welcome_grants ADD COLUMN first_online_at TEXT",
+    )?;
+    Ok(())
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    sql: &str,
+) -> rusqlite::Result<()> {
+    let exists = {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        let mut exists = false;
+        for row in rows {
+            if row? == column {
+                exists = true;
+                break;
+            }
+        }
+        exists
+    };
+    if !exists {
+        conn.execute(sql, [])?;
+    }
+    Ok(())
 }
 
 fn count_running_update_apply(conn: &Connection) -> rusqlite::Result<usize> {
@@ -172,11 +211,50 @@ CREATE TABLE IF NOT EXISTS task_config (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS welcome_grants (
+    player_id TEXT NOT NULL,
+    package_version TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    character_name TEXT,
+    status TEXT NOT NULL,
+    detected_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    granted_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_online_status TEXT,
+    first_online_at TEXT,
+    last_error TEXT,
+    PRIMARY KEY (player_id, package_version)
+);
+
+CREATE TABLE IF NOT EXISTS welcome_grant_actions (
+    player_id TEXT NOT NULL,
+    package_version TEXT NOT NULL,
+    action_index INTEGER NOT NULL,
+    action_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    published_at TEXT,
+    confirmed_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    item_name TEXT,
+    baseline_quantity INTEGER,
+    expected_quantity INTEGER,
+    last_error TEXT,
+    PRIMARY KEY (player_id, package_version, action_index),
+    FOREIGN KEY (player_id, package_version)
+        REFERENCES welcome_grants(player_id, package_version)
+        ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_task_runs_started_at ON task_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_id ON task_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_log_entries_created_at ON log_entries(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_log_entries_run_id ON log_entries(run_id);
 CREATE INDEX IF NOT EXISTS idx_admin_commands_created_at ON admin_commands(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_welcome_grants_status ON welcome_grants(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_welcome_grant_actions_status ON welcome_grant_actions(status, updated_at DESC);
 ";
 
 #[cfg(test)]
@@ -194,11 +272,11 @@ mod tests {
                 assert_eq!(mode.to_lowercase(), "wal");
                 let count: i64 = c.query_row(
                     "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN \
-                     ('task_runs','log_entries','admin_commands','pending_update')",
+                     ('task_runs','log_entries','admin_commands','pending_update','welcome_grants','welcome_grant_actions')",
                     [],
                     |row| row.get(0),
                 )?;
-                assert_eq!(count, 4);
+                assert_eq!(count, 6);
                 Ok(())
             })
             .unwrap();

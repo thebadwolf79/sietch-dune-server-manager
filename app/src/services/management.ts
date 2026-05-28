@@ -24,6 +24,7 @@ import type {
   ScheduleConfigUpdate,
   SkillModuleDto,
   VehicleDto,
+  WelcomeGrantDto,
   XpEventTagDto,
 } from "../types/management";
 
@@ -76,6 +77,20 @@ export const managementApi = {
   cluster: (tunnelId: string) => invoke<ClusterDto>("ms_cluster", { tunnelId }),
   history: (tunnelId: string, limit?: number) =>
     invoke<HistoryDto[]>("ms_history", { tunnelId, limit }),
+  welcomeGrants: (tunnelId: string, limit?: number) =>
+    invoke<WelcomeGrantDto[]>("ms_welcome_grants", { tunnelId, limit }),
+  sendWelcomeWhisper: (
+    tunnelId: string,
+    recipientPlayerId: string,
+    sourcePlayerId: string,
+    message: string,
+  ) =>
+    invoke<PublishResultDto>("ms_welcome_whisper", {
+      tunnelId,
+      recipientPlayerId,
+      sourcePlayerId,
+      message,
+    }),
   publish: (tunnelId: string, command: string, fields: Record<string, unknown>) =>
     invoke<PublishResultDto>("ms_publish", { tunnelId, command, fields }),
 };

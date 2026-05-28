@@ -105,6 +105,16 @@ pub struct ConfigResponse {
     /// work. When set, it is the exact 5-field cron string the operator typed,
     /// evaluated in `restart_tz`.
     pub backup_cron: Option<String>,
+    pub welcome_message_enabled: bool,
+    pub welcome_package_enabled: bool,
+    pub welcome_package_require_empty_backpack: bool,
+    pub welcome_package_version: String,
+    pub welcome_package_poll_secs: u64,
+    pub welcome_package_online_grace_secs: u64,
+    pub welcome_package_actions_json: String,
+    pub welcome_package_items_json: String,
+    pub welcome_whisper_source_player: String,
+    pub welcome_message: String,
     /// True if any saved override differs from the active TaskEnv values —
     /// signals to the UI that a service restart is needed to pick them up.
     pub restart_required: bool,
@@ -136,6 +146,30 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
         .filter(|v| !v.is_empty());
 
     let stored_tz = state.store.get_config("restart_tz")?;
+    let stored_welcome_enabled = state
+        .store
+        .get_config_i64("welcome_package_enabled")?
+        .map(|v| v != 0);
+    let stored_welcome_message_enabled = state
+        .store
+        .get_config_i64("welcome_message_enabled")?
+        .map(|v| v != 0);
+    let stored_welcome_require_empty_backpack = state
+        .store
+        .get_config_i64("welcome_package_require_empty_backpack")?
+        .map(|v| v != 0);
+    let stored_welcome_poll = state
+        .store
+        .get_config_i64("welcome_package_poll_secs")?
+        .map(|v| v as u64);
+    let stored_welcome_grace = state
+        .store
+        .get_config_i64("welcome_package_online_grace_secs")?
+        .map(|v| v as u64);
+    let stored_welcome_actions_json = state.store.get_config("welcome_package_actions_json")?;
+    let stored_welcome_items_json = state.store.get_config("welcome_package_items_json")?;
+    let stored_welcome_whisper_source = state.store.get_config("welcome_whisper_source_player")?;
+    let stored_welcome_message = state.store.get_config("welcome_message")?;
 
     let restart_required = stored_hour.map(|v| v != env.restart_hour).unwrap_or(false)
         || stored_minute
@@ -154,6 +188,38 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
         || stored_tz
             .as_deref()
             .map(|v| v != env.restart_tz.name())
+            .unwrap_or(false)
+        || stored_welcome_enabled
+            .map(|v| v != env.welcome_package_enabled)
+            .unwrap_or(false)
+        || stored_welcome_message_enabled
+            .map(|v| v != env.welcome_message_enabled)
+            .unwrap_or(false)
+        || stored_welcome_require_empty_backpack
+            .map(|v| v != env.welcome_package_require_empty_backpack)
+            .unwrap_or(false)
+        || stored_welcome_poll
+            .map(|v| v != env.welcome_package_poll_secs)
+            .unwrap_or(false)
+        || stored_welcome_grace
+            .map(|v| v != env.welcome_package_online_grace_secs)
+            .unwrap_or(false)
+        || stored_welcome_actions_json
+            .as_deref()
+            .map(|v| v != env.welcome_package_actions_json)
+            .unwrap_or_else(|| {
+                stored_welcome_items_json
+                    .as_deref()
+                    .map(|v| v != env.welcome_package_actions_json)
+                    .unwrap_or(false)
+            })
+        || stored_welcome_whisper_source
+            .as_deref()
+            .map(|v| v != env.welcome_whisper_source_player)
+            .unwrap_or(false)
+        || stored_welcome_message
+            .as_deref()
+            .map(|v| v != env.welcome_message)
             .unwrap_or(false);
 
     Ok(Json(ConfigResponse {
@@ -164,6 +230,16 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
         update_lead_secs: env.update_lead_secs,
         restart_tz: env.restart_tz.name().to_string(),
         backup_cron: env.backup_cron_raw.clone(),
+        welcome_message_enabled: env.welcome_message_enabled,
+        welcome_package_enabled: env.welcome_package_enabled,
+        welcome_package_require_empty_backpack: env.welcome_package_require_empty_backpack,
+        welcome_package_version: env.welcome_package_version.clone(),
+        welcome_package_poll_secs: env.welcome_package_poll_secs,
+        welcome_package_online_grace_secs: env.welcome_package_online_grace_secs,
+        welcome_package_actions_json: env.welcome_package_actions_json.clone(),
+        welcome_package_items_json: env.welcome_package_actions_json.clone(),
+        welcome_whisper_source_player: env.welcome_whisper_source_player.clone(),
+        welcome_message: env.welcome_message.clone(),
         restart_required,
     }))
 }
@@ -180,6 +256,16 @@ pub struct ConfigUpdate {
     /// Empty string clears the cron schedule (= disabled); non-empty strings
     /// are validated by `parse_cron` before being persisted.
     pub backup_cron: Option<String>,
+    pub welcome_message_enabled: Option<bool>,
+    pub welcome_package_enabled: Option<bool>,
+    pub welcome_package_require_empty_backpack: Option<bool>,
+    pub welcome_package_version: Option<String>,
+    pub welcome_package_poll_secs: Option<u64>,
+    pub welcome_package_online_grace_secs: Option<u64>,
+    pub welcome_package_actions_json: Option<String>,
+    pub welcome_package_items_json: Option<String>,
+    pub welcome_whisper_source_player: Option<String>,
+    pub welcome_message: Option<String>,
 }
 
 pub async fn set_config(
@@ -242,6 +328,81 @@ pub async fn set_config(
                 .map_err(|err| ApiError::bad_request(err.to_string()))?;
             state.store.set_config("backup_cron", trimmed)?;
         }
+    }
+    if let Some(enabled) = req.welcome_package_enabled {
+        state
+            .store
+            .set_config("welcome_package_enabled", if enabled { "1" } else { "0" })?;
+    }
+    if let Some(enabled) = req.welcome_message_enabled {
+        state
+            .store
+            .set_config("welcome_message_enabled", if enabled { "1" } else { "0" })?;
+    }
+    if let Some(enabled) = req.welcome_package_require_empty_backpack {
+        state.store.set_config(
+            "welcome_package_require_empty_backpack",
+            if enabled { "1" } else { "0" },
+        )?;
+    }
+    if let Some(version) = req.welcome_package_version.as_deref() {
+        let trimmed = version.trim();
+        if trimmed.is_empty() {
+            return Err(ApiError::bad_request(
+                "welcome_package_version must not be empty",
+            ));
+        }
+        // Kept for compatibility with older clients, but package version is
+        // intentionally fixed to v1 while the feature is experimental.
+    }
+    if let Some(secs) = req.welcome_package_poll_secs {
+        if secs < 5 {
+            return Err(ApiError::bad_request(
+                "welcome_package_poll_secs must be at least 5",
+            ));
+        }
+        state
+            .store
+            .set_config("welcome_package_poll_secs", &secs.to_string())?;
+    }
+    if let Some(secs) = req.welcome_package_online_grace_secs {
+        if secs > 300 {
+            return Err(ApiError::bad_request(
+                "welcome_package_online_grace_secs must be <= 300",
+            ));
+        }
+        state
+            .store
+            .set_config("welcome_package_online_grace_secs", &secs.to_string())?;
+    }
+    if let Some(raw) = req.welcome_package_actions_json.as_deref() {
+        let trimmed = raw.trim();
+        crate::tasks::welcome_package::parse_welcome_actions(trimmed)
+            .map_err(|err| ApiError::bad_request(err.to_string()))?;
+        state
+            .store
+            .set_config("welcome_package_actions_json", trimmed)?;
+    }
+    if let Some(raw) = req.welcome_package_items_json.as_deref() {
+        let trimmed = raw.trim();
+        crate::tasks::welcome_package::parse_welcome_actions(trimmed)
+            .map_err(|err| ApiError::bad_request(err.to_string()))?;
+        state
+            .store
+            .set_config("welcome_package_actions_json", trimmed)?;
+    }
+    if let Some(source) = req.welcome_whisper_source_player.as_deref() {
+        state
+            .store
+            .set_config("welcome_whisper_source_player", source.trim())?;
+    }
+    if let Some(message) = req.welcome_message.as_deref() {
+        if message.len() > 1000 {
+            return Err(ApiError::bad_request(
+                "welcome_message must be <= 1000 characters",
+            ));
+        }
+        state.store.set_config("welcome_message", message)?;
     }
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -468,11 +629,7 @@ pub async fn dump_prune_execute(
             Ok(r) => skipped.push(DumpPruneSkip {
                 namespace: target.namespace.clone(),
                 name: target.name.clone(),
-                reason: format!(
-                    "kubectl exit {}: {}",
-                    r.exit_code,
-                    r.stderr.trim()
-                ),
+                reason: format!("kubectl exit {}: {}", r.exit_code, r.stderr.trim()),
             }),
             Err(err) => skipped.push(DumpPruneSkip {
                 namespace: target.namespace.clone(),

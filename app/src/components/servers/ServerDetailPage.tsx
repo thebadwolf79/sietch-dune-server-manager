@@ -19,6 +19,7 @@ import ServerUpdatePanel from "./ServerUpdatePanel";
 import AdminTab, { type AdminTabPrefill } from "../management/AdminTab";
 import AutomatedTasksTab from "../management/AutomatedTasksTab";
 import UsersTab from "../management/UsersTab";
+import WelcomePackageTab from "../management/WelcomePackageTab";
 import { isManagementReady, useManagementStatus } from "../management/useManagementStatus";
 import { useManagementTunnel } from "../management/useManagementTunnel";
 
@@ -144,6 +145,7 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
               <>
                 <Tabs.Trigger value="users">Users</Tabs.Trigger>
                 <Tabs.Trigger value="admin">Admin</Tabs.Trigger>
+                <Tabs.Trigger value="welcome">Welcome Package</Tabs.Trigger>
                 <Tabs.Trigger value="tasks">Automated tasks</Tabs.Trigger>
               </>
             ) : null}
@@ -210,6 +212,17 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
                 <ManagementContent tunnelState={tunnelState} tunnelId={tunnelId}>
                   {(id) => (
                     <AutomatedTasksTab
+                      tunnelId={id}
+                      server={server}
+                      onAfterRestart={management.refresh}
+                    />
+                  )}
+                </ManagementContent>
+              </Tabs.Content>
+              <Tabs.Content value="welcome" className="server-detail-tab-content">
+                <ManagementContent tunnelState={tunnelState} tunnelId={tunnelId}>
+                  {(id) => (
+                    <WelcomePackageTab
                       tunnelId={id}
                       server={server}
                       onAfterRestart={management.refresh}

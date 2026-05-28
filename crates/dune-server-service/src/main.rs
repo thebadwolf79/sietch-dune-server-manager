@@ -156,6 +156,15 @@ async fn run() -> Result<()> {
     let mut restart_minute: u32 = 0;
     let mut restart_warning_frequency_secs: u64 = 600;
     let mut restart_warning_duration_secs: u64 = 1800;
+    let mut welcome_package_enabled = false;
+    let mut welcome_message_enabled = false;
+    let mut welcome_package_require_empty_backpack = false;
+    let welcome_package_version = String::from("v1");
+    let mut welcome_package_poll_secs: u64 = 30;
+    let mut welcome_package_online_grace_secs: u64 = 20;
+    let mut welcome_package_actions_json = String::from("[]");
+    let mut welcome_whisper_source_player = String::new();
+    let mut welcome_message = String::new();
     // Backups default to OFF. Operator opts in by POSTing /api/config with a
     // cron expression in `backupCron`.
     let mut backup_cron: Option<cron::Schedule> = None;
@@ -175,6 +184,32 @@ async fn run() -> Result<()> {
     if let Ok(Some(v)) = store.get_config_i64("restart_warning_duration_secs") {
         restart_warning_duration_secs = v as u64;
     }
+    if let Ok(Some(v)) = store.get_config_i64("welcome_package_enabled") {
+        welcome_package_enabled = v != 0;
+    }
+    if let Ok(Some(v)) = store.get_config_i64("welcome_message_enabled") {
+        welcome_message_enabled = v != 0;
+    }
+    if let Ok(Some(v)) = store.get_config_i64("welcome_package_require_empty_backpack") {
+        welcome_package_require_empty_backpack = v != 0;
+    }
+    if let Ok(Some(v)) = store.get_config_i64("welcome_package_poll_secs") {
+        welcome_package_poll_secs = (v as u64).max(5);
+    }
+    if let Ok(Some(v)) = store.get_config_i64("welcome_package_online_grace_secs") {
+        welcome_package_online_grace_secs = (v as u64).min(300);
+    }
+    if let Ok(Some(v)) = store.get_config("welcome_package_actions_json") {
+        welcome_package_actions_json = v;
+    } else if let Ok(Some(v)) = store.get_config("welcome_package_items_json") {
+        welcome_package_actions_json = v;
+    }
+    if let Ok(Some(v)) = store.get_config("welcome_whisper_source_player") {
+        welcome_whisper_source_player = v;
+    }
+    if let Ok(Some(v)) = store.get_config("welcome_message") {
+        welcome_message = v;
+    }
     if let Ok(Some(expr)) = store.get_config("backup_cron") {
         let trimmed = expr.trim();
         if !trimmed.is_empty() {
@@ -189,6 +224,20 @@ async fn run() -> Result<()> {
             }
         }
     }
+    let welcome_package_actions =
+        match dune_server_service::tasks::welcome_package::parse_welcome_actions(
+            &welcome_package_actions_json,
+        ) {
+            Ok(actions) => actions,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "ignoring invalid welcome_package_actions_json; welcome package disabled for this daemon run"
+                );
+                welcome_package_enabled = false;
+                Vec::new()
+            }
+        };
     let mut effective_tz = cfg.time_zone;
     if let Ok(Some(tz_name)) = store.get_config("restart_tz") {
         match tz_name.parse::<chrono_tz::Tz>() {
@@ -205,6 +254,15 @@ async fn run() -> Result<()> {
         restart_warning_frequency_secs,
         restart_warning_duration_secs,
         backup_cron = backup_cron_raw.as_deref().unwrap_or("(disabled)"),
+        welcome_package_enabled,
+        welcome_message_enabled,
+        welcome_package_require_empty_backpack,
+        welcome_package_version = %welcome_package_version,
+        welcome_package_poll_secs,
+        welcome_package_online_grace_secs,
+        welcome_package_actions = welcome_package_actions.len(),
+        welcome_whisper_source_player = %welcome_whisper_source_player,
+        welcome_message_configured = !welcome_message.trim().is_empty(),
         tz = %effective_tz.name(),
         "task schedule resolved"
     );
@@ -226,6 +284,16 @@ async fn run() -> Result<()> {
         restart_tz: effective_tz,
         backup_cron,
         backup_cron_raw,
+        welcome_package_enabled,
+        welcome_message_enabled,
+        welcome_package_require_empty_backpack,
+        welcome_package_version,
+        welcome_package_poll_secs,
+        welcome_package_online_grace_secs,
+        welcome_package_actions,
+        welcome_package_actions_json,
+        welcome_whisper_source_player,
+        welcome_message,
     });
 
     let runner = Arc::new(TaskRunner::new(store.clone(), env.clone()));

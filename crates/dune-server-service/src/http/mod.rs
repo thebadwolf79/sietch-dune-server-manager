@@ -52,8 +52,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/api/maintenance/dump-prune",
-            axum::routing::get(api_runs::dump_prune_preview)
-                .post(api_runs::dump_prune_execute),
+            axum::routing::get(api_runs::dump_prune_preview).post(api_runs::dump_prune_execute),
         )
         .route(
             "/api/admin/commands",
@@ -89,6 +88,14 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/admin/cluster", axum::routing::get(api_admin::cluster))
         .route("/api/admin/history", axum::routing::get(api_admin::history))
+        .route(
+            "/api/admin/welcome-grants",
+            axum::routing::get(api_admin::welcome_grants),
+        )
+        .route(
+            "/api/admin/welcome-whisper",
+            axum::routing::post(api_admin::welcome_whisper),
+        )
         .route(
             "/api/admin/publish",
             axum::routing::post(api_admin::publish),

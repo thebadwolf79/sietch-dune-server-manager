@@ -123,6 +123,82 @@ pub async fn history(
     Ok(Json(list))
 }
 
+pub async fn welcome_grants(
+    State(state): State<AppState>,
+    Query(q): Query<HistoryQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let list = state.store.list_welcome_grants(q.limit.unwrap_or(100))?;
+    Ok(Json(list))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WelcomeWhisperRequest {
+    pub recipient_player_id: String,
+    #[serde(default)]
+    pub source_player_id: String,
+    pub message: String,
+}
+
+pub async fn welcome_whisper(
+    State(state): State<AppState>,
+    Json(req): Json<WelcomeWhisperRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let recipient = req.recipient_player_id.trim();
+    if recipient.is_empty() {
+        return Err(ApiError::bad_request(
+            "recipient_player_id must not be empty",
+        ));
+    }
+    let message = req.message.trim();
+    if message.is_empty() {
+        return Err(ApiError::bad_request("message must not be empty"));
+    }
+    if message.len() > 1000 {
+        return Err(ApiError::bad_request("message must be <= 1000 characters"));
+    }
+
+    let cluster = state.env.cluster.get().await?;
+    let result = crate::tasks::welcome_package::send_welcome_whisper_now(
+        &state.env,
+        &cluster.namespace,
+        req.source_player_id.trim(),
+        recipient,
+        message,
+    )
+    .await;
+
+    let (ok, output, error) = match result {
+        Ok(pr) => (pr.ok, pr.output, None),
+        Err(err) => {
+            let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
+            (false, String::new(), Some(scrubbed))
+        }
+    };
+
+    let payload = serde_json::json!({
+        "sourcePlayerId": req.source_player_id.trim(),
+        "recipientPlayerId": recipient,
+        "message": message,
+    });
+    let _ = state.store.record_admin_command(
+        "WelcomePackage.SendWelcomeWhisper",
+        &payload,
+        ok,
+        error
+            .as_deref()
+            .or(if ok { None } else { Some(output.as_str()) }),
+    );
+
+    Ok(Json(serde_json::json!({
+        "ok": ok,
+        "command": "WelcomePackage.SendWelcomeWhisper",
+        "output": output,
+        "error": error,
+        "inner": payload,
+    })))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PublishRequest {
     pub command: String,
