@@ -109,6 +109,15 @@ LEFT JOIN dune.items i ON i.inventory_id = inv.id
 WHERE acct.\"user\"::text = $1
 ";
 
+const PLAYER_ANY_INVENTORY_ITEM_QUANTITY_SQL: &str = "
+SELECT COALESCE(SUM(CASE WHEN i.id IS NULL THEN 0 ELSE GREATEST(i.stack_size, 1) END), 0)::int8
+FROM dune.player_state ps
+JOIN dune.accounts acct ON acct.id = ps.account_id
+JOIN dune.inventories inv ON inv.actor_id = ps.player_pawn_id
+LEFT JOIN dune.items i ON i.inventory_id = inv.id
+WHERE acct.\"user\"::text = $1
+";
+
 const CHAT_PLAYER_SQL: &str = "
 SELECT
     acct.id::int8 AS account_id,
@@ -301,6 +310,20 @@ pub async fn player_backpack_item_quantity(
         .query_one(PLAYER_BACKPACK_ITEM_QUANTITY_SQL, &[&fls_id])
         .await
         .context("querying player backpack item quantity")?;
+    Ok(row.try_get::<_, i64>(0).unwrap_or_default())
+}
+
+pub async fn player_any_inventory_item_quantity(
+    pg: &PgClient,
+    namespace: &str,
+    fls_id: &str,
+) -> Result<i64> {
+    let state = pg.client(namespace).await?;
+    let row = state
+        .client()
+        .query_one(PLAYER_ANY_INVENTORY_ITEM_QUANTITY_SQL, &[&fls_id])
+        .await
+        .context("querying player any-inventory item quantity")?;
     Ok(row.try_get::<_, i64>(0).unwrap_or_default())
 }
 

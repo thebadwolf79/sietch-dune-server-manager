@@ -238,6 +238,32 @@ impl Task for WelcomePackageTask {
                 continue;
             }
 
+            // Don't start the chain until the player actually has something
+            // in any inventory. An empty pawn means the character hasn't
+            // finished loading and MQ server-commands would be silently
+            // dropped. Only enforced before the first action is published —
+            // once the chain has started, confirmation runs to completion
+            // even if the snapshot momentarily reads empty.
+            if !ctx.store.welcome_package_chain_started(
+                &player.fls_id,
+                &ctx.env.welcome_package_version,
+            )? {
+                let inventory_total = crate::postgres::player_any_inventory_item_quantity(
+                    &ctx.env.pg,
+                    &cluster.namespace,
+                    &player.fls_id,
+                )
+                .await?;
+                if inventory_total <= 0 {
+                    ctx.log_info(&format!(
+                        "welcome package waiting for player inventory to populate player={}",
+                        player.fls_id
+                    ))?;
+                    pending += 1;
+                    continue;
+                }
+            }
+
             if ctx.dry_run {
                 ctx.log_info(&format!(
                     "[dry-run] would run welcome package version={} player={} actions={}",
@@ -325,6 +351,13 @@ async fn run_configured_actions(
     recipient_funcom_id: &str,
     recipient_name: &str,
 ) -> Result<bool> {
+    // Track whether every step is fully confirmed in this tick. Steps that
+    // publish-and-await (grant_item between publish and Postgres readback,
+    // refill_water before its delay elapses, welcome_message after publish)
+    // flip this to false but the chain keeps going so all grant_item actions
+    // fire in one scan tick instead of one-per-tick.
+    let mut all_confirmed = true;
+
     if ctx.env.welcome_message_enabled {
         let record = ctx.store.ensure_welcome_action(
             player_id,
@@ -345,7 +378,7 @@ async fn run_configured_actions(
             .await
             {
                 Ok(true) => {}
-                Ok(false) => return Ok(false),
+                Ok(false) => all_confirmed = false,
                 Err(err) => {
                     let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
                     ctx.store.mark_welcome_action_failed(
@@ -361,7 +394,7 @@ async fn run_configured_actions(
     }
 
     if !ctx.env.welcome_package_enabled {
-        return Ok(true);
+        return Ok(all_confirmed);
     }
 
     if ctx.env.welcome_package_require_empty_backpack
@@ -412,7 +445,7 @@ async fn run_configured_actions(
                 .await
                 {
                     Ok(true) => {}
-                    Ok(false) => return Ok(false),
+                    Ok(false) => all_confirmed = false,
                     Err(err) => {
                         let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
                         ctx.store.mark_welcome_action_failed(
@@ -440,7 +473,7 @@ async fn run_configured_actions(
                 .await
                 {
                     Ok(true) => {}
-                    Ok(false) => return Ok(false),
+                    Ok(false) => all_confirmed = false,
                     Err(err) => {
                         let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
                         ctx.store.mark_welcome_action_failed(
@@ -466,7 +499,7 @@ async fn run_configured_actions(
                 .await
                 {
                     Ok(true) => {}
-                    Ok(false) => return Ok(false),
+                    Ok(false) => all_confirmed = false,
                     Err(err) => {
                         let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
                         ctx.store.mark_welcome_action_failed(
@@ -481,7 +514,7 @@ async fn run_configured_actions(
             }
         }
     }
-    Ok(true)
+    Ok(all_confirmed)
 }
 
 #[allow(clippy::too_many_arguments)]
