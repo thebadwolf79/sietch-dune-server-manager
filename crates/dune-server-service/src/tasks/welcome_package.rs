@@ -4,15 +4,11 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::time::{sleep, Duration, Instant};
-
 use crate::scheduler::{Schedule, Task, TaskCtx, TaskOutcome};
 use crate::store::{WelcomeActionStatus, WelcomeGrantStatus};
 use crate::tasks::TaskEnv;
 
 const DEFAULT_CANDIDATE_LIMIT: u32 = 500;
-const ITEM_VERIFY_TIMEOUT: Duration = Duration::from_secs(30);
-const ITEM_VERIFY_INTERVAL: Duration = Duration::from_secs(2);
 const WELCOME_MESSAGE_ACTION_INDEX: i64 = -1;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -562,50 +558,14 @@ async fn process_grant_item(
         .store
         .record_admin_command("WelcomePackage.AddItemToInventory", &inner, true, None);
 
-    if wait_for_item_quantity(ctx, namespace, player_id, item_name, expected).await? {
-        ctx.store.mark_welcome_action_confirmed(
-            player_id,
-            &ctx.env.welcome_package_version,
-            index,
-        )?;
-        ctx.log_info(&format!(
-            "welcome action confirmed player={} version={} action={} item={} expected={}",
-            player_id, ctx.env.welcome_package_version, index, item_name, expected
-        ))?;
-        Ok(true)
-    } else {
-        ctx.log_info(&format!(
-            "welcome action awaiting item confirmation player={} version={} action={} item={} expected={}",
-            player_id,
-            ctx.env.welcome_package_version,
-            index,
-            item_name,
-            expected
-        ))?;
-        Ok(false)
-    }
-}
-
-async fn wait_for_item_quantity(
-    ctx: &TaskCtx,
-    namespace: &str,
-    player_id: &str,
-    item_name: &str,
-    expected: i64,
-) -> Result<bool> {
-    let deadline = Instant::now() + ITEM_VERIFY_TIMEOUT;
-    loop {
-        let current =
-            crate::postgres::player_item_quantity(&ctx.env.pg, namespace, player_id, item_name)
-                .await?;
-        if current >= expected {
-            return Ok(true);
-        }
-        if Instant::now() >= deadline {
-            return Ok(false);
-        }
-        sleep(ITEM_VERIFY_INTERVAL).await;
-    }
+    // The grant was published. Don't block the scan loop polling Postgres
+    // for confirmation — the early `current >= expected` check at the top
+    // of this function will pick it up on the next tick.
+    ctx.log_info(&format!(
+        "welcome action published; awaiting confirmation on next tick player={} version={} action={} item={} expected={}",
+        player_id, ctx.env.welcome_package_version, index, item_name, expected
+    ))?;
+    Ok(false)
 }
 
 async fn process_refill_water(

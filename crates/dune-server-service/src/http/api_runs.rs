@@ -352,8 +352,16 @@ pub async fn set_config(
                 "welcome_package_version must not be empty",
             ));
         }
-        // Kept for compatibility with older clients, but package version is
-        // intentionally fixed to v1 while the feature is experimental.
+        // Pinned to the daemon's current env value while the feature is
+        // experimental. A no-op when the client echoes the same value back
+        // (e.g. from a prior GET); a 400 on mismatch so silent drift is
+        // visible instead of looking like a successful save.
+        if trimmed != state.env.welcome_package_version {
+            return Err(ApiError::bad_request(format!(
+                "welcome_package_version is currently fixed to {} and cannot be changed",
+                state.env.welcome_package_version
+            )));
+        }
     }
     if let Some(secs) = req.welcome_package_poll_secs {
         if secs < 5 {
@@ -382,8 +390,9 @@ pub async fn set_config(
         state
             .store
             .set_config("welcome_package_actions_json", trimmed)?;
-    }
-    if let Some(raw) = req.welcome_package_items_json.as_deref() {
+    } else if let Some(raw) = req.welcome_package_items_json.as_deref() {
+        // Legacy alias: only applied when actions_json is absent so a mixed
+        // payload from a stale client can't clobber the canonical field.
         let trimmed = raw.trim();
         crate::tasks::welcome_package::parse_welcome_actions(trimmed)
             .map_err(|err| ApiError::bad_request(err.to_string()))?;
