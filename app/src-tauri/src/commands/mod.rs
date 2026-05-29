@@ -25,7 +25,7 @@ pub use management_api::{
     ms_health, ms_history, ms_list_commands, ms_list_logs, ms_list_runs, ms_list_timezones,
     ms_player_location, ms_publish, ms_search_items, ms_search_journey_nodes, ms_search_players,
     ms_search_skill_modules, ms_search_vehicles, ms_search_xp_event_tags, ms_set_config,
-    ms_trigger_run, ms_welcome_grants, ms_welcome_whisper,
+    ms_trigger_run, ms_welcome_grant_retry, ms_welcome_grants, ms_welcome_whisper,
 };
 pub use management_service::{
     install_management_service, management_service_bundled_version, management_service_status,

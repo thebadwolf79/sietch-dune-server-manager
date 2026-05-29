@@ -246,6 +246,7 @@ async fn run() -> Result<()> {
         welcome_message_enabled,
         welcome_package_version = %welcome_package_version,
         welcome_package_scan_secs = 2_u64,
+        welcome_message_scan_secs = 60_u64,
         welcome_package_actions = welcome_package_actions.len(),
         welcome_whisper_source_player = %welcome_whisper_source_player,
         welcome_message_configured = !welcome_message.trim().is_empty(),

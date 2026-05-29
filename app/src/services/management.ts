@@ -79,6 +79,18 @@ export const managementApi = {
     invoke<HistoryDto[]>("ms_history", { tunnelId, limit }),
   welcomeGrants: (tunnelId: string, limit?: number) =>
     invoke<WelcomeGrantDto[]>("ms_welcome_grants", { tunnelId, limit }),
+  retryWelcomeGrant: (
+    tunnelId: string,
+    playerId: string,
+    packageVersion: string,
+    accountId: number,
+  ) =>
+    invoke<{ ok: boolean; removed: number }>("ms_welcome_grant_retry", {
+      tunnelId,
+      playerId,
+      packageVersion,
+      accountId,
+    }),
   sendWelcomeWhisper: (
     tunnelId: string,
     recipientPlayerId: string,

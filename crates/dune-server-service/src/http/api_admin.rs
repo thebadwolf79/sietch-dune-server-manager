@@ -133,6 +133,34 @@ pub async fn welcome_grants(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RetryWelcomeGrantRequest {
+    pub player_id: String,
+    pub package_version: String,
+    pub account_id: i64,
+}
+
+/// Clears a failed welcome-grant ledger row so the next scan re-attempts it.
+pub async fn retry_welcome_grant(
+    State(state): State<AppState>,
+    Json(req): Json<RetryWelcomeGrantRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let player_id = req.player_id.trim();
+    if player_id.is_empty() {
+        return Err(ApiError::bad_request("playerId must not be empty"));
+    }
+    let package_version = req.package_version.trim();
+    if package_version.is_empty() {
+        return Err(ApiError::bad_request("packageVersion must not be empty"));
+    }
+    let removed =
+        state
+            .store
+            .delete_welcome_grant(player_id, package_version, req.account_id)?;
+    Ok(Json(serde_json::json!({ "ok": removed > 0, "removed": removed })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WelcomeWhisperRequest {
     pub recipient_player_id: String,
     #[serde(default)]

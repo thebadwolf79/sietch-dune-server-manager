@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 const WELCOME_PACKAGE_SCAN_INTERVAL_SECS: u64 = 2;
+const WELCOME_MESSAGE_SCAN_INTERVAL_SECS: u64 = 60;
 const WELCOME_MESSAGE_ACTION_INDEX: i64 = -1;
 const WELCOME_MESSAGE_VERSION_SUFFIX: &str = ":message";
 
@@ -149,7 +150,7 @@ impl Task for WelcomePackageTask {
     }
 
     fn schedule(&self) -> Schedule {
-        if self.env.welcome_package_enabled || self.env.welcome_message_enabled {
+        if self.env.welcome_package_enabled {
             Schedule::interval_secs(WELCOME_PACKAGE_SCAN_INTERVAL_SECS)
         } else {
             Schedule::Disabled
@@ -157,33 +158,23 @@ impl Task for WelcomePackageTask {
     }
 
     async fn run(&self, ctx: &TaskCtx) -> Result<TaskOutcome> {
-        if !ctx.env.welcome_package_enabled && !ctx.env.welcome_message_enabled {
-            ctx.log_info("welcome package and message disabled")?;
+        if !ctx.env.welcome_package_enabled {
+            ctx.log_info("welcome package disabled")?;
             return Ok(TaskOutcome::Done);
         }
-        if ctx.env.welcome_package_enabled && ctx.env.welcome_package_actions.is_empty() {
+        if ctx.env.welcome_package_actions.is_empty() {
             ctx.log_warn("welcome package enabled but action list is empty")?;
-            if !ctx.env.welcome_message_enabled {
-                return Ok(TaskOutcome::Done);
-            }
+            return Ok(TaskOutcome::Done);
         }
 
         let cluster = ctx.env.cluster.get().await?;
         let accounts =
             crate::postgres::list_welcome_accounts(&ctx.env.pg, &cluster.namespace).await?;
 
-        let mut seen = 0usize;
-        let mut skipped = 0usize;
-        let mut not_ready = 0usize;
-        let mut granted = 0usize;
-        let mut failed = 0usize;
-        let mut messages = 0usize;
-
         for account in accounts {
             if account.fls_id.trim().is_empty() {
                 continue;
             }
-            seen += 1;
 
             if ctx.dry_run {
                 ctx.log_info(&format!(
@@ -196,67 +187,125 @@ impl Task for WelcomePackageTask {
                 continue;
             }
 
-            if ctx.env.welcome_package_enabled && !ctx.env.welcome_package_actions.is_empty() {
-                if ctx.store.welcome_grant_exists(
-                    &account.fls_id,
-                    &ctx.env.welcome_package_version,
-                    account.account_id,
-                )? {
-                    skipped += 1;
-                } else {
-                    match process_item_package(ctx, &cluster.namespace, &account).await {
-                        Ok(Some(character_name)) => {
-                            ctx.store.insert_welcome_grant_granted(
-                                &account.fls_id,
-                                &ctx.env.welcome_package_version,
-                                account.account_id,
-                                Some(character_name.as_str()),
-                            )?;
-                            granted += 1;
-                        }
-                        Ok(None) => {
-                            not_ready += 1;
-                        }
-                        Err(err) => {
-                            let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
-                            ctx.store.insert_welcome_grant_failed(
-                                &account.fls_id,
-                                &ctx.env.welcome_package_version,
-                                account.account_id,
-                                None,
-                                &scrubbed,
-                            )?;
-                            failed += 1;
-                            ctx.log_warn(&format!(
-                                "welcome package failed player={} account_id={} version={} error={}",
-                                account.fls_id,
-                                account.account_id,
-                                ctx.env.welcome_package_version,
-                                scrubbed
-                            ))?;
-                        }
-                    }
-                }
+            // Cheap sqlite gate: a granted OR failed ledger row means we are
+            // done with this account. Failed rows are cleared by the operator
+            // via the "retry" action, which deletes the row so it re-attempts.
+            if ctx.store.welcome_grant_exists(
+                &account.fls_id,
+                &ctx.env.welcome_package_version,
+                account.account_id,
+            )? {
+                continue;
             }
 
-            if ctx.env.welcome_message_enabled {
-                match process_account_welcome_message(ctx, &cluster.namespace, &account).await {
-                    Ok(true) => messages += 1,
-                    Ok(false) => {}
-                    Err(err) => {
-                        let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
-                        ctx.log_warn(&format!(
-                            "welcome message failed player={} account_id={} error={}",
-                            account.fls_id, account.account_id, scrubbed
-                        ))?;
-                    }
+            match process_item_package(ctx, &cluster.namespace, &account).await {
+                Ok(Some(character_name)) => {
+                    ctx.store.insert_welcome_grant_granted(
+                        &account.fls_id,
+                        &ctx.env.welcome_package_version,
+                        account.account_id,
+                        Some(character_name.as_str()),
+                    )?;
+                }
+                // Backpack inventory row not present yet — leave no ledger row
+                // so a later scan retries once the character finishes loading.
+                Ok(None) => {}
+                Err(err) => {
+                    let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
+                    ctx.store.insert_welcome_grant_failed(
+                        &account.fls_id,
+                        &ctx.env.welcome_package_version,
+                        account.account_id,
+                        None,
+                        &scrubbed,
+                    )?;
+                    ctx.log_warn(&format!(
+                        "welcome package failed player={} account_id={} version={} error={}",
+                        account.fls_id, account.account_id, ctx.env.welcome_package_version, scrubbed
+                    ))?;
                 }
             }
         }
 
-        ctx.log_info(&format!(
-            "welcome package scan complete seen={seen} skipped={skipped} not_ready={not_ready} granted={granted} failed={failed} messages={messages}"
-        ))?;
+        Ok(TaskOutcome::Done)
+    }
+}
+
+/// Sends the welcome whisper on its own slower cadence. Split out from the
+/// package worker so the 2s item-grant scan does not hit Postgres for a chat
+/// lookup on every account every tick.
+pub struct WelcomeMessageTask {
+    env: Arc<TaskEnv>,
+}
+
+impl WelcomeMessageTask {
+    pub fn new(env: Arc<TaskEnv>) -> Self {
+        Self { env }
+    }
+}
+
+#[async_trait]
+impl Task for WelcomeMessageTask {
+    fn id(&self) -> &'static str {
+        "welcome-message"
+    }
+
+    fn schedule(&self) -> Schedule {
+        if self.env.welcome_message_enabled {
+            Schedule::interval_secs(WELCOME_MESSAGE_SCAN_INTERVAL_SECS)
+        } else {
+            Schedule::Disabled
+        }
+    }
+
+    async fn run(&self, ctx: &TaskCtx) -> Result<TaskOutcome> {
+        if !ctx.env.welcome_message_enabled {
+            ctx.log_info("welcome message disabled")?;
+            return Ok(TaskOutcome::Done);
+        }
+
+        let cluster = ctx.env.cluster.get().await?;
+        let accounts =
+            crate::postgres::list_welcome_accounts(&ctx.env.pg, &cluster.namespace).await?;
+        let message_version = format!(
+            "{}{}",
+            ctx.env.welcome_package_version, WELCOME_MESSAGE_VERSION_SUFFIX
+        );
+
+        for account in accounts {
+            if account.fls_id.trim().is_empty() {
+                continue;
+            }
+
+            if ctx.dry_run {
+                ctx.log_info(&format!(
+                    "[dry-run] would send welcome whisper player={} account_id={}",
+                    account.fls_id, account.account_id
+                ))?;
+                continue;
+            }
+
+            // Cheap sqlite gate before any Postgres chat lookup: skip accounts
+            // whose whisper is already confirmed.
+            if ctx.store.welcome_action_confirmed(
+                &account.fls_id,
+                &message_version,
+                account.account_id,
+                WELCOME_MESSAGE_ACTION_INDEX,
+            )? {
+                continue;
+            }
+
+            if let Err(err) = process_account_welcome_message(ctx, &cluster.namespace, &account).await
+            {
+                let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
+                ctx.log_warn(&format!(
+                    "welcome message failed player={} account_id={} error={}",
+                    account.fls_id, account.account_id, scrubbed
+                ))?;
+            }
+        }
+
         Ok(TaskOutcome::Done)
     }
 }

@@ -4,6 +4,7 @@ import {
   ChevronRightIcon,
   PlusIcon,
   PaperPlaneIcon,
+  ReloadIcon,
   TrashIcon,
 } from "@radix-ui/react-icons";
 import {
@@ -58,6 +59,7 @@ export default function WelcomePackageTab({
   const [running, setRunning] = useState(false);
   const [sendingWhisper, setSendingWhisper] = useState(false);
   const [whisperResult, setWhisperResult] = useState<PublishResultDto | null>(null);
+  const [retryingKey, setRetryingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -90,6 +92,28 @@ export default function WelcomePackageTab({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const retryGrant = useCallback(
+    async (grant: WelcomeGrantDto) => {
+      const key = `${grant.playerId}:${grant.packageVersion}:${grant.accountId}`;
+      setRetryingKey(key);
+      setError(null);
+      try {
+        await managementApi.retryWelcomeGrant(
+          tunnelId,
+          grant.playerId,
+          grant.packageVersion,
+          grant.accountId,
+        );
+        await refresh();
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setRetryingKey(null);
+      }
+    },
+    [refresh, tunnelId],
+  );
 
   const actionsJson = useMemo(() => JSON.stringify(actions, null, 2), [actions]);
 
@@ -459,32 +483,58 @@ export default function WelcomePackageTab({
               <Table.ColumnHeaderCell>Status</Table.ColumnHeaderCell>
               <Table.ColumnHeaderCell>Player</Table.ColumnHeaderCell>
               <Table.ColumnHeaderCell>Updated</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell width="64px"></Table.ColumnHeaderCell>
             </Table.Row>
           </Table.Header>
           <Table.Body>
             {grants.length === 0 ? (
               <Table.Row>
-                <Table.Cell colSpan={3}>
+                <Table.Cell colSpan={4}>
                   <Text size="1" color="gray">No grants recorded yet.</Text>
                 </Table.Cell>
               </Table.Row>
             ) : (
-              grants.map((grant) => (
-                <Table.Row key={`${grant.playerId}:${grant.packageVersion}`}>
-                  <Table.Cell>
-                    <Badge color={grant.status === "granted" ? "green" : grant.status === "failed" ? "red" : "amber"}>
-                      {grant.status}
-                    </Badge>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <Text size="1" className="mono">{grant.playerId}</Text>
-                    {grant.characterName ? (
-                      <Text size="1" color="gray" as="div">{grant.characterName}</Text>
-                    ) : null}
-                  </Table.Cell>
-                  <Table.Cell className="mono">{fmtDateTime(grant.updatedAt)}</Table.Cell>
-                </Table.Row>
-              ))
+              grants.map((grant) => {
+                const key = `${grant.playerId}:${grant.packageVersion}:${grant.accountId}`;
+                return (
+                  <Table.Row key={key}>
+                    <Table.Cell>
+                      <Badge color={grant.status === "granted" ? "green" : grant.status === "failed" ? "red" : "amber"}>
+                        {grant.status}
+                      </Badge>
+                      {grant.status === "failed" && grant.lastError ? (
+                        <Text size="1" color="red" as="div" style={{ maxWidth: 320 }}>
+                          {grant.lastError}
+                        </Text>
+                      ) : null}
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Text size="1" className="mono">{grant.playerId}</Text>
+                      {grant.characterName ? (
+                        <Text size="1" color="gray" as="div">{grant.characterName}</Text>
+                      ) : null}
+                    </Table.Cell>
+                    <Table.Cell className="mono">{fmtDateTime(grant.updatedAt)}</Table.Cell>
+                    <Table.Cell>
+                      {grant.status === "failed" ? (
+                        <Tooltip content="Clear the failed record so the next scan retries">
+                          <Button
+                            size="1"
+                            variant="ghost"
+                            color="gray"
+                            disabled={retryingKey === key}
+                            onClick={() => void retryGrant(grant)}
+                            aria-label="Retry welcome package"
+                          >
+                            <ReloadIcon />
+                            {retryingKey === key ? "Retrying..." : "Retry"}
+                          </Button>
+                        </Tooltip>
+                      ) : null}
+                    </Table.Cell>
+                  </Table.Row>
+                );
+              })
             )}
           </Table.Body>
         </Table.Root>

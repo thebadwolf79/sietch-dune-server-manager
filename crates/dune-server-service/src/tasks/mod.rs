@@ -73,6 +73,7 @@ pub fn build_all(env: Arc<TaskEnv>) -> Vec<Arc<dyn crate::scheduler::Task>> {
         Arc::new(update_apply::UpdateApplyTask),
         Arc::new(restart_notice::RestartNoticeTask::new(env.clone())),
         Arc::new(restart::RestartTask::new(env.clone())),
-        Arc::new(welcome_package::WelcomePackageTask::new(env)),
+        Arc::new(welcome_package::WelcomePackageTask::new(env.clone())),
+        Arc::new(welcome_package::WelcomeMessageTask::new(env)),
     ]
 }

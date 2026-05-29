@@ -392,6 +392,30 @@ pub async fn ms_welcome_grants(
 }
 
 #[tauri::command]
+pub async fn ms_welcome_grant_retry(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    player_id: String,
+    package_version: String,
+    account_id: i64,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    post_json(
+        &client,
+        port,
+        "/api/admin/welcome-grants/retry",
+        &serde_json::json!({
+            "playerId": player_id,
+            "packageVersion": package_version,
+            "accountId": account_id,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn ms_publish(
     app: tauri::AppHandle,
     registry: tauri::State<'_, TunnelRegistry>,

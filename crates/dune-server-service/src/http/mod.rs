@@ -93,6 +93,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::get(api_admin::welcome_grants),
         )
         .route(
+            "/api/admin/welcome-grants/retry",
+            axum::routing::post(api_admin::retry_welcome_grant),
+        )
+        .route(
             "/api/admin/welcome-whisper",
             axum::routing::post(api_admin::welcome_whisper),
         )

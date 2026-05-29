@@ -119,6 +119,32 @@ impl Store {
         })
     }
 
+    /// Cheap sqlite check used by the welcome-message worker to skip accounts
+    /// whose whisper is already confirmed before paying for a Postgres chat
+    /// lookup on every scan.
+    pub fn welcome_action_confirmed(
+        &self,
+        player_id: &str,
+        package_version: &str,
+        account_id: i64,
+        action_index: i64,
+    ) -> Result<bool> {
+        self.with_conn(|c| {
+            let confirmed = c
+                .query_row(
+                    "SELECT 1 FROM welcome_grant_actions
+                     WHERE player_id = ?1 AND package_version = ?2 AND account_id = ?3
+                       AND action_index = ?4 AND status = 'confirmed'
+                     LIMIT 1",
+                    params![player_id, package_version, account_id, action_index],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            Ok(confirmed)
+        })
+    }
+
     pub fn insert_welcome_grant_granted(
         &self,
         player_id: &str,
@@ -212,47 +238,24 @@ impl Store {
         })
     }
 
-    pub fn mark_welcome_grant_granted(
+    /// Clears a `failed` welcome-grant ledger row so the next scan re-attempts
+    /// it. Only `failed` rows are removed — `granted` rows are left in place so
+    /// a retry can never duplicate a successful package. Returns the number of
+    /// rows deleted (0 if the grant was not failed or does not exist).
+    pub fn delete_welcome_grant(
         &self,
         player_id: &str,
         package_version: &str,
         account_id: i64,
-    ) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
+    ) -> Result<usize> {
         self.with_conn(|c| {
-            c.execute(
-                "UPDATE welcome_grants
-                 SET status = 'granted',
-                     updated_at = ?3,
-                     granted_at = ?3,
-                     attempts = attempts + 1,
-                     last_error = NULL
-                 WHERE player_id = ?1 AND package_version = ?2 AND account_id = ?4",
-                params![player_id, package_version, now, account_id],
+            let removed = c.execute(
+                "DELETE FROM welcome_grants
+                 WHERE player_id = ?1 AND package_version = ?2 AND account_id = ?3
+                   AND status = 'failed'",
+                params![player_id, package_version, account_id],
             )?;
-            Ok(())
-        })
-    }
-
-    pub fn mark_welcome_grant_failed(
-        &self,
-        player_id: &str,
-        package_version: &str,
-        account_id: i64,
-        error: &str,
-    ) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
-        self.with_conn(|c| {
-            c.execute(
-                "UPDATE welcome_grants
-                 SET status = 'failed',
-                     updated_at = ?3,
-                     attempts = attempts + 1,
-                     last_error = ?4
-                 WHERE player_id = ?1 AND package_version = ?2 AND account_id = ?5",
-                params![player_id, package_version, now, error, account_id],
-            )?;
-            Ok(())
+            Ok(removed)
         })
     }
 
@@ -476,33 +479,27 @@ mod tests {
     fn welcome_grant_lifecycle() {
         let s = Store::open(&tempdir().join("s.sqlite")).unwrap();
         assert!(!s.welcome_grant_exists("P1", "v1", 10).unwrap());
+
         s.insert_welcome_grant_granted("P0", "v1", 9, Some("Duncan"))
             .unwrap();
         assert!(s.welcome_grant_exists("P0", "v1", 9).unwrap());
 
-        let rec = s
-            .ensure_welcome_grant("P1", "v1", 10, Some("Chani"), "Offline")
+        s.insert_welcome_grant_failed("P1", "v1", 10, Some("Chani"), "db timeout")
             .unwrap();
-        assert_eq!(rec.status, WelcomeGrantStatus::Pending);
+        assert!(s.welcome_grant_exists("P1", "v1", 10).unwrap());
 
-        let rec = s
-            .ensure_welcome_grant("P1", "v1", 10, Some("Chani"), "Online")
-            .unwrap();
-        assert_eq!(rec.last_online_status.as_deref(), Some("Online"));
-        assert!(rec.first_online_at.is_some());
-
-        s.mark_welcome_grant_granted("P1", "v1", 10).unwrap();
         let rows = s.list_welcome_grants(10).unwrap();
         assert_eq!(rows.len(), 2);
         let p1 = rows.iter().find(|row| row.player_id == "P1").unwrap();
-        assert_eq!(p1.status, WelcomeGrantStatus::Granted);
-        assert!(p1.granted_at.is_some());
-        s.ensure_welcome_grant("P1", "v1", 11, Some("Paul"), "Online")
-            .unwrap();
-        let rows = s.list_welcome_grants(10).unwrap();
-        assert_eq!(rows.len(), 3);
-        assert!(rows.iter().any(|row| row.account_id == 10));
-        assert!(rows.iter().any(|row| row.account_id == 11));
+        assert_eq!(p1.status, WelcomeGrantStatus::Failed);
+        assert_eq!(p1.last_error.as_deref(), Some("db timeout"));
+
+        // Retry clears only the failed row so the next scan re-attempts it.
+        assert_eq!(s.delete_welcome_grant("P1", "v1", 10).unwrap(), 1);
+        assert!(!s.welcome_grant_exists("P1", "v1", 10).unwrap());
+        // A granted row is never removed by retry, so items cannot duplicate.
+        assert_eq!(s.delete_welcome_grant("P0", "v1", 9).unwrap(), 0);
+        assert!(s.welcome_grant_exists("P0", "v1", 9).unwrap());
     }
 
     #[test]
