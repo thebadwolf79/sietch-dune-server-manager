@@ -77,6 +77,12 @@ impl PgClient {
         Ok(arc)
     }
 
+    /// Create a fresh connection for operations that need exclusive session
+    /// state, such as an explicit SQL transaction.
+    pub async fn dedicated_client(&self, namespace: &str) -> Result<ClientState> {
+        self.connect(namespace).await
+    }
+
     async fn connect(&self, namespace: &str) -> Result<ClientState> {
         let creds = self.resolve_credentials(namespace).await?;
         let endpoint = self.resolve_endpoint(namespace).await?;
@@ -202,6 +208,10 @@ impl PgClient {
 impl ClientState {
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    pub fn client_mut(&mut self) -> &mut Client {
+        &mut self.client
     }
 }
 

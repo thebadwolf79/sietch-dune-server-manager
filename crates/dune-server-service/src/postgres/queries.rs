@@ -30,7 +30,7 @@ SELECT
     a.class
 FROM dune.player_state ps
 JOIN dune.actors a       ON a.id = ps.player_pawn_id
-JOIN dune.accounts acct  ON acct.id = ps.account_id
+JOIN dune.encrypted_accounts acct ON acct.id = ps.account_id
 WHERE acct.\"user\"::text = $1
 LIMIT 1
 ";
@@ -50,13 +50,16 @@ pub struct Player {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WelcomeCandidate {
+pub struct WelcomeAccount {
     pub account_id: i64,
     pub fls_id: String,
-    pub funcom_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountBackpack {
+    pub inventory_id: i64,
     pub character_name: Option<String>,
-    pub online_status: String,
-    pub last_login_time: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +71,13 @@ pub struct ChatPlayer {
     pub character_name: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct BackpackGrantItem {
+    pub template_id: String,
+    pub quantity: i64,
+    pub stats_json: String,
+}
+
 const PLAYER_STATE_COLUMN_SQL: &str = "
 SELECT column_name
 FROM information_schema.columns
@@ -76,46 +86,64 @@ WHERE table_schema = 'dune'
   AND column_name = ANY($1)
 ";
 
-const WELCOME_CANDIDATES_SQL: &str = "
+const WELCOME_ACCOUNTS_SQL: &str = "
 SELECT
     acct.id::int8 AS account_id,
-    COALESCE(acct.\"user\"::text, '') AS fls_id,
-    COALESCE(acct.funcom_id::text, '') AS funcom_id,
-    NULLIF(ps.character_name, '') AS character_name,
-    COALESCE(ps.online_status::text, '') AS online_status,
-    COALESCE(to_char(ps.last_login_time AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'), '') AS last_login_time
-FROM dune.player_state ps
-JOIN dune.accounts acct ON acct.id = ps.account_id
+    COALESCE(acct.\"user\"::text, '') AS fls_id
+FROM dune.encrypted_accounts acct
 WHERE COALESCE(acct.\"user\"::text, '') <> ''
-ORDER BY ps.last_login_time DESC NULLS LAST, acct.id DESC
-LIMIT $1
+ORDER BY acct.id ASC
 ";
 
-const PLAYER_ITEM_QUANTITY_SQL: &str = "
-SELECT COALESCE(SUM(CASE WHEN i.id IS NULL THEN 0 ELSE GREATEST(i.stack_size, 1) END), 0)::int8
+const PLAYER_BACKPACK_INVENTORY_SQL: &str = "
+SELECT
+    inv.id::int8 AS inventory_id,
+    NULLIF(ps.character_name, '') AS character_name
 FROM dune.player_state ps
-JOIN dune.accounts acct ON acct.id = ps.account_id
+JOIN dune.actors pawn ON pawn.id = ps.player_pawn_id
 JOIN dune.inventories inv ON inv.actor_id = ps.player_pawn_id
-LEFT JOIN dune.items i ON i.inventory_id = inv.id AND i.template_id::text = $2
-WHERE acct.\"user\"::text = $1
+                         AND inv.inventory_type = 0
+WHERE ps.account_id = $1::int8
+  AND pawn.class = '/Game/Dune/Characters/Player/BP_DunePlayerCharacter.BP_DunePlayerCharacter_C'
+ORDER BY ps.last_login_time DESC NULLS LAST, inv.id DESC
+LIMIT 1
 ";
 
-const PLAYER_BACKPACK_ITEM_QUANTITY_SQL: &str = "
-SELECT COALESCE(SUM(CASE WHEN i.id IS NULL THEN 0 ELSE GREATEST(i.stack_size, 1) END), 0)::int8
-FROM dune.player_state ps
-JOIN dune.accounts acct ON acct.id = ps.account_id
-JOIN dune.inventories inv ON inv.actor_id = ps.player_pawn_id AND inv.inventory_type = 0
-LEFT JOIN dune.items i ON i.inventory_id = inv.id
-WHERE acct.\"user\"::text = $1
+const PLAYER_BACKPACK_FREE_SLOTS_SQL: &str = "
+SELECT gs::int8 AS position_index
+FROM generate_series(0, 10000) AS gs
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM dune.items i
+    WHERE i.inventory_id = $1::int8
+      AND i.position_index = gs
+)
+ORDER BY gs
+LIMIT $2
 ";
 
-const PLAYER_ANY_INVENTORY_ITEM_QUANTITY_SQL: &str = "
-SELECT COALESCE(SUM(CASE WHEN i.id IS NULL THEN 0 ELSE GREATEST(i.stack_size, 1) END), 0)::int8
-FROM dune.player_state ps
-JOIN dune.accounts acct ON acct.id = ps.account_id
-JOIN dune.inventories inv ON inv.actor_id = ps.player_pawn_id
-LEFT JOIN dune.items i ON i.inventory_id = inv.id
-WHERE acct.\"user\"::text = $1
+const PLAYER_BACKPACK_INSERT_ITEM_SQL: &str = "
+INSERT INTO dune.items (
+    inventory_id,
+    stack_size,
+    position_index,
+    template_id,
+    is_new,
+    acquisition_time,
+    stats,
+    quality_level
+)
+VALUES (
+    $1::int8,
+    $2::int8,
+    $3::int8,
+    $4::text,
+    TRUE,
+    EXTRACT(EPOCH FROM now())::int8,
+    $5::text::jsonb,
+    0
+)
+RETURNING id::int8
 ";
 
 const CHAT_PLAYER_SQL: &str = "
@@ -125,13 +153,14 @@ SELECT
     COALESCE(acct.funcom_id::text, '') AS funcom_id,
     COALESCE(ps.character_name, '') AS character_name
 FROM dune.player_state ps
-JOIN dune.accounts acct ON acct.id = ps.account_id
-WHERE lower(COALESCE(acct.\"user\"::text, '')) = lower($1)
+JOIN dune.encrypted_accounts enc ON enc.id = ps.account_id
+LEFT JOIN dune.accounts acct ON acct.id = ps.account_id
+WHERE lower(COALESCE(enc.\"user\"::text, '')) = lower($1)
    OR lower(COALESCE(acct.funcom_id::text, '')) = lower($1)
    OR lower(COALESCE(ps.character_name, '')) = lower($1)
 ORDER BY
     CASE
-        WHEN lower(COALESCE(acct.\"user\"::text, '')) = lower($1) THEN 0
+        WHEN lower(COALESCE(enc.\"user\"::text, '')) = lower($1) THEN 0
         WHEN lower(COALESCE(acct.funcom_id::text, '')) = lower($1) THEN 1
         ELSE 2
     END,
@@ -153,7 +182,7 @@ fn players_sql(level_expr: &str) -> String {
         r#"
 WITH matches AS (
     SELECT DISTINCT
-        COALESCE(acct."user"::text, '') AS fls_id,
+        COALESCE(enc."user"::text, '') AS fls_id,
         COALESCE(ps.character_name, '')   AS character_name,
         COALESCE(ps.online_status::text, '') AS online_status,
         COALESCE(
@@ -167,7 +196,8 @@ WITH matches AS (
     LEFT JOIN dune.encrypted_accounts enc  ON enc.id  = ps.account_id
     LEFT JOIN dune.actors a                ON a.id     = ps.player_pawn_id
     WHERE lower(ps.character_name) LIKE lower($1)
-       OR lower(convert_from(enc.encrypted_funcom_id, 'UTF8')) LIKE lower($1)
+       OR lower(COALESCE(enc."user"::text, '')) LIKE lower($1)
+       OR lower(COALESCE(acct.funcom_id::text, '')) LIKE lower($1)
 )
 SELECT fls_id, character_name, online_status, last_seen, player_level, partition_id
 FROM matches
@@ -252,79 +282,97 @@ pub async fn search_players(
     Ok(out)
 }
 
-pub async fn list_welcome_candidates(
-    pg: &PgClient,
-    namespace: &str,
-    limit: u32,
-) -> Result<Vec<WelcomeCandidate>> {
-    let safe_limit = limit.clamp(1, 1000) as i64;
+pub async fn list_welcome_accounts(pg: &PgClient, namespace: &str) -> Result<Vec<WelcomeAccount>> {
     let state = pg.client(namespace).await?;
     let rows = state
         .client()
-        .query(WELCOME_CANDIDATES_SQL, &[&safe_limit])
+        .query(WELCOME_ACCOUNTS_SQL, &[])
         .await
-        .context("querying welcome package candidates")?;
+        .context("querying welcome package accounts")?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let last_login_raw = row.try_get::<_, String>(5).unwrap_or_default();
-        out.push(WelcomeCandidate {
+        out.push(WelcomeAccount {
             account_id: row.try_get::<_, i64>(0).unwrap_or_default(),
             fls_id: row.try_get::<_, String>(1).unwrap_or_default(),
-            funcom_id: row.try_get::<_, String>(2).unwrap_or_default(),
-            character_name: row.try_get::<_, Option<String>>(3).ok().flatten(),
-            online_status: row.try_get::<_, String>(4).unwrap_or_default(),
-            last_login_time: if last_login_raw.trim().is_empty() {
-                None
-            } else {
-                Some(last_login_raw)
-            },
         });
     }
     Ok(out)
 }
 
-pub async fn player_item_quantity(
+pub async fn resolve_account_backpack(
     pg: &PgClient,
     namespace: &str,
-    fls_id: &str,
-    item_name: &str,
-) -> Result<i64> {
+    account_id: i64,
+) -> Result<Option<AccountBackpack>> {
     let state = pg.client(namespace).await?;
     let row = state
         .client()
-        .query_one(PLAYER_ITEM_QUANTITY_SQL, &[&fls_id, &item_name])
+        .query_opt(PLAYER_BACKPACK_INVENTORY_SQL, &[&account_id])
         .await
-        .with_context(|| format!("querying player inventory quantity for {item_name}"))?;
-    Ok(row.try_get::<_, i64>(0).unwrap_or_default())
+        .context("resolving account backpack inventory")?;
+    Ok(row.map(|row| AccountBackpack {
+        inventory_id: row.try_get::<_, i64>(0).unwrap_or_default(),
+        character_name: row.try_get::<_, Option<String>>(1).ok().flatten(),
+    }))
 }
 
-pub async fn player_backpack_item_quantity(
+pub async fn insert_items_to_backpack(
     pg: &PgClient,
     namespace: &str,
-    fls_id: &str,
-) -> Result<i64> {
-    let state = pg.client(namespace).await?;
-    let row = state
-        .client()
-        .query_one(PLAYER_BACKPACK_ITEM_QUANTITY_SQL, &[&fls_id])
+    inventory_id: i64,
+    items: &[BackpackGrantItem],
+) -> Result<Vec<i64>> {
+    let mut state = pg.dedicated_client(namespace).await?;
+    let tx = state
+        .client_mut()
+        .transaction()
         .await
-        .context("querying player backpack item quantity")?;
-    Ok(row.try_get::<_, i64>(0).unwrap_or_default())
-}
+        .context("starting welcome item grant transaction")?;
 
-pub async fn player_any_inventory_item_quantity(
-    pg: &PgClient,
-    namespace: &str,
-    fls_id: &str,
-) -> Result<i64> {
-    let state = pg.client(namespace).await?;
-    let row = state
-        .client()
-        .query_one(PLAYER_ANY_INVENTORY_ITEM_QUANTITY_SQL, &[&fls_id])
+    let slot_limit = items.len() as i64;
+    let slot_rows = tx
+        .query(
+            PLAYER_BACKPACK_FREE_SLOTS_SQL,
+            &[&inventory_id, &slot_limit],
+        )
         .await
-        .context("querying player any-inventory item quantity")?;
-    Ok(row.try_get::<_, i64>(0).unwrap_or_default())
+        .context("finding free backpack slots")?;
+    if slot_rows.len() != items.len() {
+        return Err(anyhow::anyhow!(
+            "not enough free backpack slots for welcome package: needed {}, found {}",
+            items.len(),
+            slot_rows.len()
+        ));
+    }
+
+    let insert = tx
+        .prepare(PLAYER_BACKPACK_INSERT_ITEM_SQL)
+        .await
+        .context("preparing welcome item insert")?;
+    let mut inserted_ids = Vec::with_capacity(items.len());
+    for (item, slot) in items.iter().zip(slot_rows.iter()) {
+        let position_index = slot.try_get::<_, i64>(0).unwrap_or_default();
+        let row = tx
+            .query_one(
+                &insert,
+                &[
+                    &inventory_id,
+                    &item.quantity,
+                    &position_index,
+                    &item.template_id,
+                    &item.stats_json,
+                ],
+            )
+            .await
+            .with_context(|| format!("inserting welcome item {}", item.template_id))?;
+        inserted_ids.push(row.try_get::<_, i64>(0).unwrap_or_default());
+    }
+
+    tx.commit()
+        .await
+        .context("committing welcome item grant transaction")?;
+    Ok(inserted_ids)
 }
 
 pub async fn resolve_chat_player(

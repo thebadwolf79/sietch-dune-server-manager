@@ -158,10 +158,7 @@ async fn run() -> Result<()> {
     let mut restart_warning_duration_secs: u64 = 1800;
     let mut welcome_package_enabled = false;
     let mut welcome_message_enabled = false;
-    let mut welcome_package_require_empty_backpack = false;
     let welcome_package_version = String::from("v1");
-    let mut welcome_package_poll_secs: u64 = 30;
-    let mut welcome_package_online_grace_secs: u64 = 20;
     let mut welcome_package_actions_json = String::from("[]");
     let mut welcome_whisper_source_player = String::new();
     let mut welcome_message = String::new();
@@ -189,15 +186,6 @@ async fn run() -> Result<()> {
     }
     if let Ok(Some(v)) = store.get_config_i64("welcome_message_enabled") {
         welcome_message_enabled = v != 0;
-    }
-    if let Ok(Some(v)) = store.get_config_i64("welcome_package_require_empty_backpack") {
-        welcome_package_require_empty_backpack = v != 0;
-    }
-    if let Ok(Some(v)) = store.get_config_i64("welcome_package_poll_secs") {
-        welcome_package_poll_secs = (v as u64).max(5);
-    }
-    if let Ok(Some(v)) = store.get_config_i64("welcome_package_online_grace_secs") {
-        welcome_package_online_grace_secs = (v as u64).min(300);
     }
     if let Ok(Some(v)) = store.get_config("welcome_package_actions_json") {
         welcome_package_actions_json = v;
@@ -256,10 +244,8 @@ async fn run() -> Result<()> {
         backup_cron = backup_cron_raw.as_deref().unwrap_or("(disabled)"),
         welcome_package_enabled,
         welcome_message_enabled,
-        welcome_package_require_empty_backpack,
         welcome_package_version = %welcome_package_version,
-        welcome_package_poll_secs,
-        welcome_package_online_grace_secs,
+        welcome_package_scan_secs = 2_u64,
         welcome_package_actions = welcome_package_actions.len(),
         welcome_whisper_source_player = %welcome_whisper_source_player,
         welcome_message_configured = !welcome_message.trim().is_empty(),
@@ -286,10 +272,7 @@ async fn run() -> Result<()> {
         backup_cron_raw,
         welcome_package_enabled,
         welcome_message_enabled,
-        welcome_package_require_empty_backpack,
         welcome_package_version,
-        welcome_package_poll_secs,
-        welcome_package_online_grace_secs,
         welcome_package_actions,
         welcome_package_actions_json,
         welcome_whisper_source_player,

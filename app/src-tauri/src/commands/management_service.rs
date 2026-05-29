@@ -468,7 +468,13 @@ fn install_inner(
             } else {
                 // Keep the tail short so the toast/log stays readable; full
                 // detail is still on the host via `journalctl -u ...`.
-                let tail: Vec<String> = diagnostic_lines.iter().rev().take(6).rev().cloned().collect();
+                let tail: Vec<String> = diagnostic_lines
+                    .iter()
+                    .rev()
+                    .take(6)
+                    .rev()
+                    .cloned()
+                    .collect();
                 Some(format!("{header}\n{}", tail.join("\n")))
             }
         }

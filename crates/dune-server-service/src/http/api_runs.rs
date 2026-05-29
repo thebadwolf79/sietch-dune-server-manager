@@ -107,10 +107,7 @@ pub struct ConfigResponse {
     pub backup_cron: Option<String>,
     pub welcome_message_enabled: bool,
     pub welcome_package_enabled: bool,
-    pub welcome_package_require_empty_backpack: bool,
     pub welcome_package_version: String,
-    pub welcome_package_poll_secs: u64,
-    pub welcome_package_online_grace_secs: u64,
     pub welcome_package_actions_json: String,
     pub welcome_package_items_json: String,
     pub welcome_whisper_source_player: String,
@@ -154,18 +151,6 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
         .store
         .get_config_i64("welcome_message_enabled")?
         .map(|v| v != 0);
-    let stored_welcome_require_empty_backpack = state
-        .store
-        .get_config_i64("welcome_package_require_empty_backpack")?
-        .map(|v| v != 0);
-    let stored_welcome_poll = state
-        .store
-        .get_config_i64("welcome_package_poll_secs")?
-        .map(|v| v as u64);
-    let stored_welcome_grace = state
-        .store
-        .get_config_i64("welcome_package_online_grace_secs")?
-        .map(|v| v as u64);
     let stored_welcome_actions_json = state.store.get_config("welcome_package_actions_json")?;
     let stored_welcome_items_json = state.store.get_config("welcome_package_items_json")?;
     let stored_welcome_whisper_source = state.store.get_config("welcome_whisper_source_player")?;
@@ -195,15 +180,6 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
         || stored_welcome_message_enabled
             .map(|v| v != env.welcome_message_enabled)
             .unwrap_or(false)
-        || stored_welcome_require_empty_backpack
-            .map(|v| v != env.welcome_package_require_empty_backpack)
-            .unwrap_or(false)
-        || stored_welcome_poll
-            .map(|v| v != env.welcome_package_poll_secs)
-            .unwrap_or(false)
-        || stored_welcome_grace
-            .map(|v| v != env.welcome_package_online_grace_secs)
-            .unwrap_or(false)
         || stored_welcome_actions_json
             .as_deref()
             .map(|v| v != env.welcome_package_actions_json)
@@ -232,10 +208,7 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
         backup_cron: env.backup_cron_raw.clone(),
         welcome_message_enabled: env.welcome_message_enabled,
         welcome_package_enabled: env.welcome_package_enabled,
-        welcome_package_require_empty_backpack: env.welcome_package_require_empty_backpack,
         welcome_package_version: env.welcome_package_version.clone(),
-        welcome_package_poll_secs: env.welcome_package_poll_secs,
-        welcome_package_online_grace_secs: env.welcome_package_online_grace_secs,
         welcome_package_actions_json: env.welcome_package_actions_json.clone(),
         welcome_package_items_json: env.welcome_package_actions_json.clone(),
         welcome_whisper_source_player: env.welcome_whisper_source_player.clone(),
@@ -258,10 +231,7 @@ pub struct ConfigUpdate {
     pub backup_cron: Option<String>,
     pub welcome_message_enabled: Option<bool>,
     pub welcome_package_enabled: Option<bool>,
-    pub welcome_package_require_empty_backpack: Option<bool>,
     pub welcome_package_version: Option<String>,
-    pub welcome_package_poll_secs: Option<u64>,
-    pub welcome_package_online_grace_secs: Option<u64>,
     pub welcome_package_actions_json: Option<String>,
     pub welcome_package_items_json: Option<String>,
     pub welcome_whisper_source_player: Option<String>,
@@ -339,12 +309,6 @@ pub async fn set_config(
             .store
             .set_config("welcome_message_enabled", if enabled { "1" } else { "0" })?;
     }
-    if let Some(enabled) = req.welcome_package_require_empty_backpack {
-        state.store.set_config(
-            "welcome_package_require_empty_backpack",
-            if enabled { "1" } else { "0" },
-        )?;
-    }
     if let Some(version) = req.welcome_package_version.as_deref() {
         let trimmed = version.trim();
         if trimmed.is_empty() {
@@ -362,26 +326,6 @@ pub async fn set_config(
                 state.env.welcome_package_version
             )));
         }
-    }
-    if let Some(secs) = req.welcome_package_poll_secs {
-        if secs < 5 {
-            return Err(ApiError::bad_request(
-                "welcome_package_poll_secs must be at least 5",
-            ));
-        }
-        state
-            .store
-            .set_config("welcome_package_poll_secs", &secs.to_string())?;
-    }
-    if let Some(secs) = req.welcome_package_online_grace_secs {
-        if secs > 300 {
-            return Err(ApiError::bad_request(
-                "welcome_package_online_grace_secs must be <= 300",
-            ));
-        }
-        state
-            .store
-            .set_config("welcome_package_online_grace_secs", &secs.to_string())?;
     }
     if let Some(raw) = req.welcome_package_actions_json.as_deref() {
         let trimmed = raw.trim();

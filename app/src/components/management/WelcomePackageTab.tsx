@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronDownIcon,
-  ChevronUpIcon,
+  ChevronRightIcon,
   PlusIcon,
   PaperPlaneIcon,
   TrashIcon,
@@ -27,9 +27,7 @@ import type { RemoteServerRecord } from "../../types/server";
 import Combobox from "./Combobox";
 import ItemCombobox from "./ItemCombobox";
 
-type WelcomeAction =
-  | { type: "grantItem"; itemName: string; quantity: number; durability: number }
-  | { type: "refillWater"; waterAmount: number; delayAfterPreviousSecs: number };
+type WelcomeAction = { type: "grantItem"; itemName: string; quantity: number };
 
 export type WelcomePackageTabProps = {
   tunnelId: string;
@@ -46,15 +44,13 @@ export default function WelcomePackageTab({
   const [grants, setGrants] = useState<WelcomeGrantDto[]>([]);
   const [enabled, setEnabled] = useState(false);
   const [messageEnabled, setMessageEnabled] = useState(false);
-  const [requireEmptyBackpack, setRequireEmptyBackpack] = useState(false);
-  const [pollSecs, setPollSecs] = useState(30);
-  const [onlineGraceSecs, setOnlineGraceSecs] = useState(20);
   const [whisperSourcePlayer, setWhisperSourcePlayer] = useState("");
   const [welcomeMessage, setWelcomeMessage] = useState("");
   const [testRecipientPlayer, setTestRecipientPlayer] = useState("");
   const [testMessage, setTestMessage] = useState("");
   const [testOpen, setTestOpen] = useState(false);
   const [actions, setActions] = useState<WelcomeAction[]>([]);
+  const [contentsOpen, setContentsOpen] = useState(true);
   const [jsonMode, setJsonMode] = useState(false);
   const [jsonText, setJsonText] = useState("[]");
   const [jsonError, setJsonError] = useState<string | null>(null);
@@ -71,9 +67,6 @@ export default function WelcomePackageTab({
       setConfig(c);
       setEnabled(c.welcomePackageEnabled);
       setMessageEnabled(c.welcomeMessageEnabled ?? false);
-      setRequireEmptyBackpack(c.welcomePackageRequireEmptyBackpack ?? false);
-      setPollSecs(c.welcomePackagePollSecs);
-      setOnlineGraceSecs(c.welcomePackageOnlineGraceSecs);
       setWhisperSourcePlayer(c.welcomeWhisperSourcePlayer ?? "");
       setWelcomeMessage(c.welcomeMessage ?? "");
       const rawJson = c.welcomePackageActionsJson || c.welcomePackageItemsJson || "[]";
@@ -120,10 +113,7 @@ export default function WelcomePackageTab({
       await managementApi.setConfig(tunnelId, {
         welcomeMessageEnabled: messageEnabled,
         welcomePackageEnabled: enabled,
-        welcomePackageRequireEmptyBackpack: requireEmptyBackpack,
         welcomePackageVersion: "v1",
-        welcomePackagePollSecs: pollSecs,
-        welcomePackageOnlineGraceSecs: onlineGraceSecs,
         welcomePackageActionsJson: outgoingActionsJson,
         welcomeWhisperSourcePlayer: whisperSourcePlayer,
         welcomeMessage,
@@ -149,9 +139,6 @@ export default function WelcomePackageTab({
     jsonMode,
     jsonText,
     messageEnabled,
-    onlineGraceSecs,
-    pollSecs,
-    requireEmptyBackpack,
     refresh,
     server.host,
     server.keyPath,
@@ -212,9 +199,6 @@ export default function WelcomePackageTab({
             <Badge color={enabled ? "green" : "gray"}>
               package {enabled ? "enabled" : "off"}
             </Badge>
-            <Text size="1" color="gray" className="mono">
-              {pollSecs}s poll · {onlineGraceSecs}s grace
-            </Text>
           </Flex>
         </Box>
         <Flex gap="2" align="center" wrap="wrap">
@@ -261,7 +245,7 @@ export default function WelcomePackageTab({
               checked={messageEnabled}
               onCheckedChange={(checked) => setMessageEnabled(Boolean(checked))}
             />
-            <Text size="2">Send to new players</Text>
+            <Text size="2">Enabled</Text>
           </Flex>
           <Flex gap="3" align="end" wrap="wrap">
             <Box style={{ flex: "1 1 280px", minWidth: 240 }}>
@@ -285,154 +269,140 @@ export default function WelcomePackageTab({
         </Flex>
       </Box>
 
-      <Box mt="4">
+      <Separator size="4" my="4" />
+
+      <Box className="run-row-body">
         <Flex direction="column" gap="2" mb="2">
           <Text size="2" weight="medium">Welcome package</Text>
           <Flex align="center" gap="2">
             <Checkbox checked={enabled} onCheckedChange={(checked) => setEnabled(Boolean(checked))} />
-            <Text size="2">Grant to new players</Text>
-          </Flex>
-          <Flex align="center" gap="2">
-            <Checkbox
-              checked={requireEmptyBackpack}
-              onCheckedChange={(checked) => setRequireEmptyBackpack(Boolean(checked))}
-            />
-            <Text size="2">Wait for empty backpack</Text>
+            <Text size="2">Enabled</Text>
           </Flex>
         </Flex>
 
-        <Box className="schedule-grid">
-          <Text size="2">Poll seconds</Text>
-          <TextField.Root
-            type="number"
-            value={String(pollSecs)}
-            onChange={(e) => setPollSecs(Number(e.target.value) || 0)}
-          />
-
-          <Text size="2">Online grace seconds</Text>
-          <TextField.Root
-            type="number"
-            value={String(onlineGraceSecs)}
-            onChange={(e) => setOnlineGraceSecs(Number(e.target.value) || 0)}
-          />
-        </Box>
-
-        <Flex justify="between" align="center" gap="3" wrap="wrap" mb="2">
-          <Text size="2" weight="medium">Action chain</Text>
-          <Flex gap="2" wrap="wrap" align="center">
-            <Text as="label" size="1" color="gray">
-              <Flex align="center" gap="1">
-                <Checkbox
-                  checked={jsonMode}
-                  onCheckedChange={(checked) => {
-                    const next = checked === true;
-                    if (next) {
-                      // Visual -> JSON: seed the textarea from the current
-                      // actions so the operator can copy / hand-edit.
-                      setJsonText(JSON.stringify(actions, null, 2));
-                      setJsonError(null);
-                      setJsonMode(true);
-                    } else {
-                      // JSON -> Visual: parse the textarea and only switch
-                      // back if it's valid; otherwise stay in JSON mode and
-                      // show the error so nothing silently drops.
-                      try {
-                        const parsed = parseActions(jsonText);
-                        validateActions(parsed);
-                        setActions(parsed);
-                        setJsonError(null);
-                        setJsonMode(false);
-                      } catch (err) {
-                        setJsonError(String(err));
-                      }
-                    }
-                  }}
-                />
-                JSON mode
+        <Box mt="3">
+          <Flex justify="between" align="center" gap="3" wrap="wrap" mb={contentsOpen ? "3" : "0"}>
+            <Button
+              size="1"
+              variant="ghost"
+              color="gray"
+              onClick={() => setContentsOpen((open) => !open)}
+              aria-expanded={contentsOpen}
+            >
+              {contentsOpen ? <ChevronDownIcon /> : <ChevronRightIcon />}
+              <Text size="2" weight="medium">Package contents</Text>
+              <Badge color="gray">{actions.length} item{actions.length === 1 ? "" : "s"}</Badge>
+            </Button>
+            {contentsOpen ? (
+              <Flex gap="2" wrap="wrap" align="center">
+                <Text as="label" size="1" color="gray">
+                  <Flex align="center" gap="1">
+                    <Checkbox
+                      checked={jsonMode}
+                      onCheckedChange={(checked) => {
+                        const next = checked === true;
+                        if (next) {
+                          // Visual -> JSON: seed the textarea from the current
+                          // actions so the operator can copy / hand-edit.
+                          setJsonText(JSON.stringify(actions, null, 2));
+                          setJsonError(null);
+                          setJsonMode(true);
+                        } else {
+                          // JSON -> Visual: parse the textarea and only switch
+                          // back if it's valid; otherwise stay in JSON mode and
+                          // show the error so nothing silently drops.
+                          try {
+                            const parsed = parseActions(jsonText);
+                            validateActions(parsed);
+                            setActions(parsed);
+                            setJsonError(null);
+                            setJsonMode(false);
+                          } catch (err) {
+                            setJsonError(String(err));
+                          }
+                        }
+                      }}
+                    />
+                    JSON mode
+                  </Flex>
+                </Text>
               </Flex>
-            </Text>
-            {!jsonMode ? (
-              <>
-                <Button
-                  size="1"
-                  variant="surface"
-                  onClick={() =>
-                    setActions((prev) => [
-                      ...prev,
-                      { type: "grantItem", itemName: "", quantity: 1, durability: 1.0 },
-                    ])
-                  }
-                >
-                  <PlusIcon />
-                  Add item grant
-                </Button>
-                <Button
-                  size="1"
-                  variant="surface"
-                  onClick={() =>
-                    setActions((prev) => [
-                      ...prev,
-                      { type: "refillWater", waterAmount: 1_000_000, delayAfterPreviousSecs: 30 },
-                    ])
-                  }
-                >
-                  <PlusIcon />
-                  Add water refill
-                </Button>
-              </>
             ) : null}
           </Flex>
-        </Flex>
 
-        {jsonMode ? (
-          <Flex direction="column" gap="2">
-            <TextArea
-              value={jsonText}
-              onChange={(e) => {
-                setJsonText(e.target.value);
-                if (jsonError) setJsonError(null);
-              }}
-              placeholder='[{"type":"grantItem","itemName":"PlantFiber","quantity":1,"durability":1.0}]'
-              rows={16}
-              style={{ fontFamily: "var(--code-font-family, monospace)", fontSize: 12 }}
-            />
-            {jsonError ? (
-              <Text size="1" color="red">{jsonError}</Text>
-            ) : (
-              <Text size="1" color="gray">
-                Raw JSON of the action chain. Saved verbatim after validation. Toggle JSON mode off to switch back to the visual editor.
-              </Text>
-            )}
-          </Flex>
-        ) : (
-          <Flex direction="column" gap="2">
-            {actions.length === 0 ? (
-              <Text size="2" color="gray">No actions configured.</Text>
-            ) : (
-              actions.map((action, index) => (
-                <ActionRow
-                  key={`${index}:${action.type}`}
-                  tunnelId={tunnelId}
-                  index={index}
-                  actionCount={actions.length}
-                  action={action}
-                  onChange={(next) =>
-                    setActions((prev) => prev.map((row, i) => (i === index ? next : row)))
+          {contentsOpen && jsonMode ? (
+            <Flex direction="column" gap="2">
+              <TextArea
+                value={jsonText}
+                onChange={(e) => {
+                  setJsonText(e.target.value);
+                  if (jsonError) setJsonError(null);
+                }}
+                placeholder='[{"type":"grantItem","itemName":"PlantFiber","quantity":1}]'
+                rows={16}
+                style={{ fontFamily: "var(--code-font-family, monospace)", fontSize: 12 }}
+              />
+              {jsonError ? (
+                <Text size="1" color="red">{jsonError}</Text>
+              ) : (
+                <Text size="1" color="gray">
+                  Raw JSON of package contents. Saved after validation. Toggle JSON mode off to switch back to the visual editor.
+                </Text>
+              )}
+            </Flex>
+          ) : null}
+
+          {contentsOpen && !jsonMode ? (
+            <Flex direction="column" gap="3">
+              {actions.length === 0 ? (
+                <Text size="2" color="gray">No items configured.</Text>
+              ) : (
+                <Table.Root variant="surface" size="1">
+                  <Table.Header>
+                    <Table.Row>
+                      <Table.ColumnHeaderCell>Item</Table.ColumnHeaderCell>
+                      <Table.ColumnHeaderCell width="120px">Qty</Table.ColumnHeaderCell>
+                      <Table.ColumnHeaderCell width="44px"></Table.ColumnHeaderCell>
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {actions.map((action, index) => (
+                      <ActionRow
+                        key={`${index}:${action.itemName}`}
+                        tunnelId={tunnelId}
+                        action={action}
+                        onChange={(next) =>
+                          setActions((prev) => prev.map((row, i) => (i === index ? next : row)))
+                        }
+                        onRemove={() => setActions((prev) => prev.filter((_, i) => i !== index))}
+                      />
+                    ))}
+                  </Table.Body>
+                </Table.Root>
+              )}
+              <Box>
+                <Button
+                  size="1"
+                  variant="surface"
+                  onClick={() =>
+                    setActions((prev) => [
+                      ...prev,
+                      { type: "grantItem", itemName: "", quantity: 1 },
+                    ])
                   }
-                  onRemove={() => setActions((prev) => prev.filter((_, i) => i !== index))}
-                  onMove={(direction) => {
-                    setActions((prev) => moveAction(prev, index, direction));
-                  }}
-                />
-              ))
-            )}
-          </Flex>
-        )}
+                >
+                  <PlusIcon />
+                  Add item
+                </Button>
+              </Box>
+            </Flex>
+          ) : null}
+        </Box>
       </Box>
 
       {restartRequired ? (
         <Text size="1" color="amber" as="div" mt="3">
-          Saved values differ from the running service; save/restart applies the active chain.
+          Saved values differ from the running service; save/restart applies the current package.
         </Text>
       ) : null}
       {error ? (
@@ -525,113 +495,48 @@ export default function WelcomePackageTab({
 
 function ActionRow({
   tunnelId,
-  index,
-  actionCount,
   action,
   onChange,
   onRemove,
-  onMove,
 }: {
   tunnelId: string;
-  index: number;
-  actionCount: number;
   action: WelcomeAction;
   onChange: (action: WelcomeAction) => void;
   onRemove: () => void;
-  onMove: (direction: -1 | 1) => void;
 }) {
   return (
-    <Box className="run-row-body">
-      <Flex gap="3" align="end" wrap="wrap">
-        <Box style={{ flex: "0 0 70px" }}>
-          <Text size="1" color="gray">Step</Text>
-          <Text size="2" className="mono" as="div">{index + 1}</Text>
-        </Box>
-        {action.type === "grantItem" ? (
-          <>
-            <Box style={{ flex: "1 1 320px", minWidth: 260 }}>
-              <Text size="1" color="gray">Grant item</Text>
-              <ItemCombobox
-                tunnelId={tunnelId}
-                value={action.itemName}
-                onChange={(itemName) => onChange({ ...action, itemName })}
-              />
-            </Box>
-            <NumberField
-              label="Qty"
-              value={action.quantity}
-              width={90}
-              onChange={(quantity) => onChange({ ...action, quantity })}
-            />
-            <NumberField
-              label="Durability"
-              value={action.durability}
-              width={110}
-              step="0.1"
-              onChange={(durability) => onChange({ ...action, durability })}
-            />
-          </>
-        ) : (
-          <>
-            <Box style={{ flex: "1 1 320px", minWidth: 260 }}>
-              <Text size="1" color="gray">Refill water</Text>
-              <Text size="2" as="div">UpdateAllWaterFillables</Text>
-            </Box>
-            <NumberField
-              label="Amount"
-              value={action.waterAmount}
-              width={150}
-              onChange={(waterAmount) => onChange({ ...action, waterAmount })}
-            />
-            <NumberField
-              label="Delay"
-              value={action.delayAfterPreviousSecs}
-              width={110}
-              onChange={(delayAfterPreviousSecs) =>
-                onChange({ ...action, delayAfterPreviousSecs })
-              }
-            />
-          </>
-        )}
-        <Flex gap="1" align="center" style={{ marginLeft: "auto" }}>
-          <Tooltip content="Move up">
-            <Button
-              size="1"
-              variant="ghost"
-              color="gray"
-              onClick={() => onMove(-1)}
-              disabled={index === 0}
-              aria-label="Move action up"
-            >
-              <ChevronUpIcon />
-            </Button>
-          </Tooltip>
-          <Tooltip content="Move down">
-            <Button
-              size="1"
-              variant="ghost"
-              color="gray"
-              onClick={() => onMove(1)}
-              disabled={index >= actionCount - 1}
-              aria-label="Move action down"
-            >
-              <ChevronDownIcon />
-            </Button>
-          </Tooltip>
-          <Tooltip content="Remove action">
+    <Table.Row>
+      <Table.Cell>
+        <ItemCombobox
+          tunnelId={tunnelId}
+          value={action.itemName}
+          onChange={(itemName) => onChange({ ...action, itemName })}
+        />
+      </Table.Cell>
+      <Table.Cell>
+        <TextField.Root
+          type="number"
+          min="1"
+          value={String(action.quantity)}
+          onChange={(e) => onChange({ ...action, quantity: Number(e.target.value) || 1 })}
+        />
+      </Table.Cell>
+      <Table.Cell>
+        <Flex justify="center" align="center">
+          <Tooltip content="Remove item">
             <Button
               size="1"
               variant="ghost"
               color="red"
               onClick={onRemove}
-              aria-label="Remove action"
+              aria-label="Remove item"
             >
               <TrashIcon />
             </Button>
           </Tooltip>
         </Flex>
-      </Flex>
-    </Box>
+      </Table.Cell>
+    </Table.Row>
   );
 }
 
@@ -685,32 +590,6 @@ function PlayerCombobox({
   );
 }
 
-function NumberField({
-  label,
-  value,
-  width,
-  step,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  width: number;
-  step?: string;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <Box style={{ flex: `0 0 ${width}px` }}>
-      <Text size="1" color="gray">{label}</Text>
-      <TextField.Root
-        type="number"
-        step={step}
-        value={String(value)}
-        onChange={(e) => onChange(Number(e.target.value) || 0)}
-      />
-    </Box>
-  );
-}
-
 function parseActions(raw: string): WelcomeAction[] {
   try {
     const parsed = JSON.parse(raw || "[]");
@@ -723,15 +602,6 @@ function parseActions(raw: string): WelcomeAction[] {
               type: "grantItem",
               itemName: String(row.itemName ?? row.item_name ?? ""),
               quantity: Number(row.quantity ?? 1) || 1,
-              durability: Number(row.durability ?? 1.0) || 1.0,
-            };
-          }
-          if (row?.type === "refillWater") {
-            return {
-              type: "refillWater",
-              waterAmount: Number(row.waterAmount ?? row.water_amount ?? 1_000_000) || 1_000_000,
-              delayAfterPreviousSecs:
-                Number(row.delayAfterPreviousSecs ?? row.delay_after_previous_secs ?? 30) || 0,
             };
           }
           return null;
@@ -743,7 +613,6 @@ function parseActions(raw: string): WelcomeAction[] {
         type: "grantItem",
         itemName: String(row?.itemName ?? row?.item_name ?? ""),
         quantity: Number(row?.quantity ?? 1) || 1,
-        durability: Number(row?.durability ?? 1.0) || 1.0,
       }))
       .filter((row): row is WelcomeAction => !!row && row.type === "grantItem" && row.itemName.trim().length > 0);
   } catch {
@@ -756,22 +625,8 @@ function validateActions(actions: WelcomeAction[]) {
     if (action.type === "grantItem") {
       if (!action.itemName.trim()) throw new Error("Every item grant needs an item.");
       if (action.quantity <= 0) throw new Error(`Quantity for ${action.itemName} must be greater than 0.`);
-      if (action.durability <= 0) throw new Error(`Durability for ${action.itemName} must be greater than 0.`);
-    } else if (action.type === "refillWater" && action.waterAmount <= 0) {
-      throw new Error("Water refill amount must be greater than 0.");
-    } else if (action.type === "refillWater" && (action.delayAfterPreviousSecs < 0 || action.delayAfterPreviousSecs > 600)) {
-      throw new Error("Water refill delay must be between 0 and 600 seconds.");
     }
   }
-}
-
-function moveAction(actions: WelcomeAction[], index: number, direction: -1 | 1): WelcomeAction[] {
-  const target = index + direction;
-  if (target < 0 || target >= actions.length) return actions;
-  const next = [...actions];
-  const [row] = next.splice(index, 1);
-  next.splice(target, 0, row);
-  return next;
 }
 
 async function waitForConfig(tunnelId: string) {

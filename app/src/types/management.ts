@@ -154,10 +154,7 @@ export type ScheduleConfig = {
   backupCron: string | null;
   welcomeMessageEnabled: boolean;
   welcomePackageEnabled: boolean;
-  welcomePackageRequireEmptyBackpack: boolean;
   welcomePackageVersion: string;
-  welcomePackagePollSecs: number;
-  welcomePackageOnlineGraceSecs: number;
   welcomePackageActionsJson: string;
   /** Backward-compatible alias returned by older service builds. */
   welcomePackageItemsJson: string;
@@ -177,10 +174,7 @@ export type ScheduleConfigUpdate = Partial<{
   backupCron: string;
   welcomeMessageEnabled: boolean;
   welcomePackageEnabled: boolean;
-  welcomePackageRequireEmptyBackpack: boolean;
   welcomePackageVersion: string;
-  welcomePackagePollSecs: number;
-  welcomePackageOnlineGraceSecs: number;
   welcomePackageActionsJson: string;
   /** Older service builds accept this; newer builds map it to actions. */
   welcomePackageItemsJson: string;

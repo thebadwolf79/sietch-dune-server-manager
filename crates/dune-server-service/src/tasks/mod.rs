@@ -49,18 +49,10 @@ pub struct TaskEnv {
     /// Enables the welcome whisper worker independently from item/package
     /// grants.
     pub welcome_message_enabled: bool,
-    /// When enabled, package actions wait until the player's backpack is
-    /// empty. Welcome whispers are not gated by this.
-    pub welcome_package_require_empty_backpack: bool,
     /// Operator-controlled package version. Changing it grants the package
-    /// again because the ledger key is `(player_id, package_version)`.
+    /// again because the package ledger key is
+    /// `(player_id, package_version, account_id)`.
     pub welcome_package_version: String,
-    /// Poll cadence for the welcome-package worker.
-    pub welcome_package_poll_secs: u64,
-    /// How long a pending player must remain Online before the worker grants.
-    /// This avoids publishing during the login/loading handoff where MQ
-    /// accepts the message but no active player controller applies it.
-    pub welcome_package_online_grace_secs: u64,
     /// JSON config for welcome-package actions. Kept as parsed data in the env
     /// so scheduled fires don't re-parse sqlite state.
     pub welcome_package_actions: Vec<welcome_package::WelcomePackageAction>,

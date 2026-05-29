@@ -105,7 +105,112 @@ fn migrate_schema(conn: &Connection) -> rusqlite::Result<()> {
         "first_online_at",
         "ALTER TABLE welcome_grants ADD COLUMN first_online_at TEXT",
     )?;
+    migrate_welcome_ledger_account_id_key(conn)?;
     Ok(())
+}
+
+fn migrate_welcome_ledger_account_id_key(conn: &Connection) -> rusqlite::Result<()> {
+    let grants_pk = primary_key_columns(conn, "welcome_grants")?;
+    let actions_pk = primary_key_columns(conn, "welcome_grant_actions")?;
+    if grants_pk == ["player_id", "package_version", "account_id"]
+        && actions_pk == ["player_id", "package_version", "account_id", "action_index"]
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        "
+PRAGMA foreign_keys=OFF;
+ALTER TABLE welcome_grant_actions RENAME TO welcome_grant_actions_old;
+ALTER TABLE welcome_grants RENAME TO welcome_grants_old;
+
+CREATE TABLE welcome_grants (
+    player_id TEXT NOT NULL,
+    package_version TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    character_name TEXT,
+    status TEXT NOT NULL,
+    detected_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    granted_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_online_status TEXT,
+    first_online_at TEXT,
+    last_error TEXT,
+    PRIMARY KEY (player_id, package_version, account_id)
+);
+
+CREATE TABLE welcome_grant_actions (
+    player_id TEXT NOT NULL,
+    package_version TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    action_index INTEGER NOT NULL,
+    action_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    published_at TEXT,
+    confirmed_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    item_name TEXT,
+    baseline_quantity INTEGER,
+    expected_quantity INTEGER,
+    last_error TEXT,
+    PRIMARY KEY (player_id, package_version, account_id, action_index),
+    FOREIGN KEY (player_id, package_version, account_id)
+        REFERENCES welcome_grants(player_id, package_version, account_id)
+        ON DELETE CASCADE
+);
+
+INSERT OR IGNORE INTO welcome_grants (
+    player_id, package_version, account_id, character_name, status,
+    detected_at, updated_at, granted_at, attempts, last_online_status,
+    first_online_at, last_error
+)
+SELECT
+    player_id, package_version, account_id, character_name, status,
+    detected_at, updated_at, granted_at, attempts, last_online_status,
+    first_online_at, last_error
+FROM welcome_grants_old;
+
+INSERT OR IGNORE INTO welcome_grant_actions (
+    player_id, package_version, account_id, action_index, action_type, status,
+    created_at, updated_at, published_at, confirmed_at, attempts,
+    item_name, baseline_quantity, expected_quantity, last_error
+)
+SELECT
+    a.player_id, a.package_version, COALESCE(g.account_id, 0),
+    a.action_index, a.action_type, a.status, a.created_at, a.updated_at,
+    a.published_at, a.confirmed_at, a.attempts,
+    a.item_name, a.baseline_quantity, a.expected_quantity, a.last_error
+FROM welcome_grant_actions_old a
+LEFT JOIN welcome_grants_old g
+  ON g.player_id = a.player_id
+ AND g.package_version = a.package_version;
+
+DROP TABLE welcome_grant_actions_old;
+DROP TABLE welcome_grants_old;
+CREATE INDEX IF NOT EXISTS idx_welcome_grants_status ON welcome_grants(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_welcome_grant_actions_status ON welcome_grant_actions(status, updated_at DESC);
+PRAGMA foreign_keys=ON;
+",
+    )
+}
+
+fn primary_key_columns(conn: &Connection, table: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+    })?;
+    let mut cols = Vec::new();
+    for row in rows {
+        let (name, pk) = row?;
+        if pk > 0 {
+            cols.push((pk, name));
+        }
+    }
+    cols.sort_by_key(|(pk, _)| *pk);
+    Ok(cols.into_iter().map(|(_, name)| name).collect())
 }
 
 fn add_column_if_missing(
@@ -127,7 +232,11 @@ fn add_column_if_missing(
         exists
     };
     if !exists {
-        conn.execute(sql, [])?;
+        match conn.execute(sql, []) {
+            Ok(_) => {}
+            Err(err) if err.to_string().contains("duplicate column name") => {}
+            Err(err) => return Err(err),
+        }
     }
     Ok(())
 }
@@ -224,12 +333,13 @@ CREATE TABLE IF NOT EXISTS welcome_grants (
     last_online_status TEXT,
     first_online_at TEXT,
     last_error TEXT,
-    PRIMARY KEY (player_id, package_version)
+    PRIMARY KEY (player_id, package_version, account_id)
 );
 
 CREATE TABLE IF NOT EXISTS welcome_grant_actions (
     player_id TEXT NOT NULL,
     package_version TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
     action_index INTEGER NOT NULL,
     action_type TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -242,9 +352,9 @@ CREATE TABLE IF NOT EXISTS welcome_grant_actions (
     baseline_quantity INTEGER,
     expected_quantity INTEGER,
     last_error TEXT,
-    PRIMARY KEY (player_id, package_version, action_index),
-    FOREIGN KEY (player_id, package_version)
-        REFERENCES welcome_grants(player_id, package_version)
+    PRIMARY KEY (player_id, package_version, account_id, action_index),
+    FOREIGN KEY (player_id, package_version, account_id)
+        REFERENCES welcome_grants(player_id, package_version, account_id)
         ON DELETE CASCADE
 );
 
@@ -280,6 +390,86 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn open_migrates_welcome_ledger_to_account_scoped_key() {
+        let dir = tempdir();
+        let path = dir.join("s.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "
+CREATE TABLE welcome_grants (
+    player_id TEXT NOT NULL,
+    package_version TEXT NOT NULL,
+    account_id INTEGER NOT NULL,
+    character_name TEXT,
+    status TEXT NOT NULL,
+    detected_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    granted_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_online_status TEXT,
+    last_error TEXT,
+    PRIMARY KEY (player_id, package_version)
+);
+CREATE TABLE welcome_grant_actions (
+    player_id TEXT NOT NULL,
+    package_version TEXT NOT NULL,
+    action_index INTEGER NOT NULL,
+    action_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    published_at TEXT,
+    confirmed_at TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    item_name TEXT,
+    baseline_quantity INTEGER,
+    expected_quantity INTEGER,
+    last_error TEXT,
+    PRIMARY KEY (player_id, package_version, action_index)
+);
+INSERT INTO welcome_grants (
+    player_id, package_version, account_id, character_name, status,
+    detected_at, updated_at
+) VALUES ('P1', 'v1', 10, 'Chani', 'granted', 'now', 'now');
+INSERT INTO welcome_grant_actions (
+    player_id, package_version, action_index, action_type, status,
+    created_at, updated_at, published_at
+) VALUES ('P1', 'v1', -1, 'welcome_message', 'published', 'now', 'now', 'now');
+",
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&path).unwrap();
+        store
+            .with_conn(|conn| {
+                assert_eq!(
+                    primary_key_columns(conn, "welcome_grants")?,
+                    ["player_id", "package_version", "account_id"]
+                );
+                assert_eq!(
+                    primary_key_columns(conn, "welcome_grant_actions")?,
+                    ["player_id", "package_version", "account_id", "action_index"]
+                );
+                Ok(())
+            })
+            .unwrap();
+        let existing = store
+            .ensure_welcome_action("P1", "v1", 10, -1, "welcome_message")
+            .unwrap();
+        assert_eq!(existing.status, WelcomeActionStatus::Published);
+
+        store
+            .ensure_welcome_grant("P1", "v1", 11, Some("Paul"), "Online")
+            .unwrap();
+        let fresh = store
+            .ensure_welcome_action("P1", "v1", 11, -1, "welcome_message")
+            .unwrap();
+        assert_eq!(fresh.status, WelcomeActionStatus::Pending);
     }
 
     pub(crate) fn tempdir() -> std::path::PathBuf {
