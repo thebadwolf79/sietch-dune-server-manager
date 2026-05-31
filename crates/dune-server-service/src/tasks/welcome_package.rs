@@ -160,16 +160,22 @@ impl Task for WelcomePackageTask {
     async fn run(&self, ctx: &TaskCtx) -> Result<TaskOutcome> {
         if !ctx.env.welcome_package_enabled {
             ctx.log_info("welcome package disabled")?;
-            return Ok(TaskOutcome::Done);
+            return Ok(TaskOutcome::Noop);
         }
         if ctx.env.welcome_package_actions.is_empty() {
             ctx.log_warn("welcome package enabled but action list is empty")?;
-            return Ok(TaskOutcome::Done);
+            return Ok(TaskOutcome::Noop);
         }
 
         let cluster = ctx.env.cluster.get().await?;
         let accounts =
             crate::postgres::list_welcome_accounts(&ctx.env.pg, &cluster.namespace).await?;
+
+        // Only keep a run row when this scan actually did something (granted a
+        // package, recorded a failure, or, for a manual dry-run, previewed an
+        // account). The 2s scan is otherwise a no-op for already-handled or
+        // still-loading accounts and would flood the recent-runs history.
+        let mut acted = false;
 
         for account in accounts {
             if account.fls_id.trim().is_empty() {
@@ -184,6 +190,7 @@ impl Task for WelcomePackageTask {
                     account.account_id,
                     ctx.env.welcome_package_actions.len()
                 ))?;
+                acted = true;
                 continue;
             }
 
@@ -206,6 +213,7 @@ impl Task for WelcomePackageTask {
                         account.account_id,
                         Some(character_name.as_str()),
                     )?;
+                    acted = true;
                 }
                 // Backpack inventory row not present yet — leave no ledger row
                 // so a later scan retries once the character finishes loading.
@@ -223,11 +231,16 @@ impl Task for WelcomePackageTask {
                         "welcome package failed player={} account_id={} version={} error={}",
                         account.fls_id, account.account_id, ctx.env.welcome_package_version, scrubbed
                     ))?;
+                    acted = true;
                 }
             }
         }
 
-        Ok(TaskOutcome::Done)
+        Ok(if acted {
+            TaskOutcome::Done
+        } else {
+            TaskOutcome::Noop
+        })
     }
 }
 
@@ -261,7 +274,7 @@ impl Task for WelcomeMessageTask {
     async fn run(&self, ctx: &TaskCtx) -> Result<TaskOutcome> {
         if !ctx.env.welcome_message_enabled {
             ctx.log_info("welcome message disabled")?;
-            return Ok(TaskOutcome::Done);
+            return Ok(TaskOutcome::Noop);
         }
 
         let cluster = ctx.env.cluster.get().await?;
@@ -271,6 +284,12 @@ impl Task for WelcomeMessageTask {
             "{}{}",
             ctx.env.welcome_package_version, WELCOME_MESSAGE_VERSION_SUFFIX
         );
+
+        // Only keep a run row when this scan actually whispered someone,
+        // recorded a failure, or previewed during a manual dry-run. The 60s
+        // scan is otherwise a no-op for already-greeted or absent players and
+        // would flood the recent-runs history.
+        let mut acted = false;
 
         for account in accounts {
             if account.fls_id.trim().is_empty() {
@@ -282,6 +301,7 @@ impl Task for WelcomeMessageTask {
                     "[dry-run] would send welcome whisper player={} account_id={}",
                     account.fls_id, account.account_id
                 ))?;
+                acted = true;
                 continue;
             }
 
@@ -296,17 +316,27 @@ impl Task for WelcomeMessageTask {
                 continue;
             }
 
-            if let Err(err) = process_account_welcome_message(ctx, &cluster.namespace, &account).await
-            {
-                let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
-                ctx.log_warn(&format!(
-                    "welcome message failed player={} account_id={} error={}",
-                    account.fls_id, account.account_id, scrubbed
-                ))?;
+            match process_account_welcome_message(ctx, &cluster.namespace, &account).await {
+                // Whisper published/confirmed this scan.
+                Ok(true) => acted = true,
+                // Recipient not resolvable yet or already confirmed — no action.
+                Ok(false) => {}
+                Err(err) => {
+                    let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
+                    ctx.log_warn(&format!(
+                        "welcome message failed player={} account_id={} error={}",
+                        account.fls_id, account.account_id, scrubbed
+                    ))?;
+                    acted = true;
+                }
             }
         }
 
-        Ok(TaskOutcome::Done)
+        Ok(if acted {
+            TaskOutcome::Done
+        } else {
+            TaskOutcome::Noop
+        })
     }
 }
 

@@ -3,6 +3,30 @@ import type { RemoteServerRecord, RemoteServerStatus } from "../types/server";
 import type { TunnelService } from "../types/tunnel";
 import type { UpdateStatus } from "../types/update";
 
+// Backend timestamps are RFC3339 with a UTC offset (chrono `Utc::now().to_rfc3339()`),
+// so `new Date(iso)` parses them as UTC. `toLocale*` then renders in the operator's
+// local timezone. Never slice `.toISOString()` for display — that leaks raw UTC.
+export function formatTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.toLocaleDateString([], {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  })} ${formatTime(iso)}`;
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "unknown";
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;

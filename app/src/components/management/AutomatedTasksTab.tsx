@@ -20,6 +20,7 @@ import type {
   RunDto,
   ScheduleConfig,
 } from "../../types/management";
+import { formatDateTime, formatTime } from "../../utils/formatting";
 import Combobox from "./Combobox";
 import DumpPruneDialog from "./DumpPruneDialog";
 
@@ -650,7 +651,7 @@ function RunRow({
         </Text>
         <Badge color={statusColor(run.status)}>{run.status}</Badge>
         <Text size="1" className="mono" style={{ color: "var(--gray-10)" }}>
-          {fmtDateTime(run.startedAt)}
+          {formatDateTime(run.startedAt)}
         </Text>
         <Text size="1" className="mono" style={{ color: "var(--gray-10)", marginLeft: "auto" }}>
           {run.durationMs != null ? `${(run.durationMs / 1000).toFixed(1)}s` : "—"}
@@ -692,7 +693,7 @@ function RunRow({
             logsState.logs.map((log) => (
               <div key={log.id}>
                 <span className={`log-level-${log.level}`}>{log.level.toUpperCase()}</span>
-                <span className="log-ts">{fmtTime(log.createdAt)}</span>
+                <span className="log-ts">{formatTime(log.createdAt)}</span>
                 {log.message}
               </div>
             ))
@@ -756,18 +757,6 @@ function statusColor(s: string): "gray" | "green" | "red" | "amber" {
   return "gray";
 }
 
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toISOString().slice(11, 19);
-}
-
 function pad2(n: number): string {
   return n.toString().padStart(2, "0");
-}
-
-function fmtDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 19)}`;
 }

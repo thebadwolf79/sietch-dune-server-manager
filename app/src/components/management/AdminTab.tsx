@@ -21,6 +21,7 @@ import type {
   HistoryDto,
   PublishResultDto,
 } from "../../types/management";
+import { formatTime } from "../../utils/formatting";
 import Combobox from "./Combobox";
 
 export type AdminTabPrefill = {
@@ -342,7 +343,7 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
                   <Badge color={h.ok ? "green" : "red"}>{h.ok ? "ok" : "fail"}</Badge>
                 </Table.Cell>
                 <Table.Cell className="mono" style={{ fontSize: 11 }}>
-                  {fmtTime(h.createdAt)}
+                  {formatTime(h.createdAt)}
                 </Table.Cell>
               </Table.Row>
             ))}
@@ -385,12 +386,6 @@ function groupByCategory(specs: CommandSpec[]): Record<string, CommandSpec[]> {
     out[spec.category].push(spec);
   }
   return out;
-}
-
-function fmtTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toISOString().slice(11, 19);
 }
 
 function compareText(a: string | undefined | null, b: string | undefined | null): number {

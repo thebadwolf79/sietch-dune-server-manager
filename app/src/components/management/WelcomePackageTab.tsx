@@ -25,6 +25,7 @@ import {
 import { managementApi, managementService } from "../../services/management";
 import type { PlayerDto, PublishResultDto, ScheduleConfig, WelcomeGrantDto } from "../../types/management";
 import type { RemoteServerRecord } from "../../types/server";
+import { formatDateTime } from "../../utils/formatting";
 import Combobox from "./Combobox";
 import ItemCombobox from "./ItemCombobox";
 
@@ -514,7 +515,7 @@ export default function WelcomePackageTab({
                         <Text size="1" color="gray" as="div">{grant.characterName}</Text>
                       ) : null}
                     </Table.Cell>
-                    <Table.Cell className="mono">{fmtDateTime(grant.updatedAt)}</Table.Cell>
+                    <Table.Cell className="mono">{formatDateTime(grant.updatedAt)}</Table.Cell>
                     <Table.Cell>
                       {grant.status === "failed" ? (
                         <Tooltip content="Clear the failed record so the next scan retries">
@@ -692,10 +693,4 @@ async function waitForConfig(tunnelId: string) {
     }
   }
   throw new Error(`service did not come back up: ${lastErr}`);
-}
-
-function fmtDateTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return `${d.toISOString().slice(0, 10)} ${d.toISOString().slice(11, 19)}`;
 }
