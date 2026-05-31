@@ -26,6 +26,7 @@ export default function UsersTab({ tunnelId, onSwitchToAdmin }: UsersTabProps) {
   const [users, setUsers] = useState<PlayerDto[]>([]);
   const [query, setQuery] = useState("");
   const [onlineOnly, setOnlineOnly] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,6 +57,17 @@ export default function UsersTab({ tunnelId, onSwitchToAdmin }: UsersTabProps) {
     return () => clearTimeout(handle);
   }, [query, reload]);
 
+  // Poll for live player-status changes. Without this the list only refreshed
+  // on mount / manual click, so logins and logouts went unseen until the app
+  // was reopened (#13). Toggleable per #14; on by default.
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const handle = setInterval(() => {
+      void reload(query.trim());
+    }, 5000);
+    return () => clearInterval(handle);
+  }, [autoRefresh, query, reload]);
+
   const visible = useMemo(
     () => (onlineOnly ? users.filter((u) => u.online.toLowerCase() === "online") : users),
     [users, onlineOnly],
@@ -73,6 +85,10 @@ export default function UsersTab({ tunnelId, onSwitchToAdmin }: UsersTabProps) {
         <Flex align="center" gap="2">
           <Switch checked={onlineOnly} onCheckedChange={setOnlineOnly} />
           <Text size="2">Online only</Text>
+        </Flex>
+        <Flex align="center" gap="2">
+          <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
+          <Text size="2">Auto-refresh</Text>
         </Flex>
         <Button size="1" variant="ghost" onClick={() => void reload(query.trim())} disabled={busy}>
           {busy ? "Loading…" : "Refresh"}

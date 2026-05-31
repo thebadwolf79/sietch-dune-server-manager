@@ -96,7 +96,17 @@ impl TaskRunner {
                 Ok(TaskOutcome::Done)
             }
             Ok(TaskOutcome::Noop) => {
-                self.store.delete_run(run_id)?;
+                if trigger == TaskTrigger::Manual {
+                    // A manual trigger is an explicit operator action, so it
+                    // always leaves a visible record — otherwise the run flashes
+                    // up and vanishes, looking broken (#9). Scheduled/startup
+                    // Noops are still deleted to keep recent-runs uncluttered.
+                    ctx.log_info(&format!("{id} had nothing to do."))?;
+                    self.store
+                        .finish_run(run_id, TaskRunStatus::Skipped, None)?;
+                } else {
+                    self.store.delete_run(run_id)?;
+                }
                 Ok(TaskOutcome::Noop)
             }
             Err(err) => {
