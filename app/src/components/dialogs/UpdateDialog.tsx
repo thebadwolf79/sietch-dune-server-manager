@@ -53,7 +53,14 @@ export default function UpdateDialog({
             <Text size="2" weight="medium">
               What&apos;s new
             </Text>
-            <ul style={{ margin: "var(--space-1) 0 0", paddingLeft: "1.1rem" }}>
+            <ul
+              style={{
+                margin: "var(--space-1) 0 0",
+                paddingLeft: "1.1rem",
+                maxHeight: 180,
+                overflowY: "auto",
+              }}
+            >
               {shownNotes.map((item, i) => (
                 <li key={i}>
                   <Text size="2">{item}</Text>
