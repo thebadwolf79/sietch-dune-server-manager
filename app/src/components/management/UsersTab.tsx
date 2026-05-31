@@ -100,10 +100,26 @@ export default function UsersTab({ tunnelId, onSwitchToAdmin }: UsersTabProps) {
           <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
           <Text size="2">Auto-refresh</Text>
         </Flex>
-        <Button size="1" variant="ghost" onClick={() => void reload(query.trim())} disabled={busy}>
+        <Button
+          size="1"
+          variant="ghost"
+          onClick={() => void reload(query.trim())}
+          disabled={busy}
+          style={{ minWidth: 64, justifyContent: "center" }}
+        >
           {busy ? "Loading…" : "Refresh"}
         </Button>
-        <Text size="1" color="gray" style={{ marginLeft: "auto" }}>
+        <Text
+          size="1"
+          color="gray"
+          style={{
+            marginLeft: "auto",
+            flexShrink: 0,
+            minWidth: 96,
+            textAlign: "right",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
           {visible.length} of {users.length}
         </Text>
       </Flex>
