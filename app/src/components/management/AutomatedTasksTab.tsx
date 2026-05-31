@@ -7,6 +7,7 @@ import {
   Checkbox,
   Dialog,
   Flex,
+  Link,
   Separator,
   Text,
   TextArea,
@@ -14,6 +15,7 @@ import {
 } from "@radix-ui/themes";
 
 import { managementApi, managementService } from "../../services/management";
+import { openExternal } from "../../services/tauri";
 import type { RemoteServerRecord } from "../../types/server";
 import type {
   LogDto,
@@ -399,6 +401,9 @@ function ScheduleSettings({
     setError(null);
     try {
       setBusyLabel("Saving…");
+      if (backupEnabled && !backupCron.trim()) {
+        throw new Error("A cron expression is required while auto backup is enabled.");
+      }
       if (backupCron.trim() && backupCronStatus.state === "error") {
         throw new Error(`Cron expression invalid: ${backupCronStatus.message}`);
       }
@@ -526,16 +531,18 @@ function ScheduleSettings({
           <Text size="2">Daily restart (HH:MM)</Text>
           <Flex gap="2" align="center">
             <TextField.Root
-              type="number"
-              value={String(hour)}
-              onChange={(e) => setHour(Number(e.target.value) || 0)}
+              inputMode="numeric"
+              value={pad2(hour)}
+              onChange={(e) => setHour(clampInt(e.target.value, 23))}
+              onFocus={(e) => e.target.select()}
               style={{ width: 70 }}
             />
             <Text>:</Text>
             <TextField.Root
-              type="number"
-              value={String(minute)}
-              onChange={(e) => setMinute(Number(e.target.value) || 0)}
+              inputMode="numeric"
+              value={pad2(minute)}
+              onChange={(e) => setMinute(clampInt(e.target.value, 59))}
+              onFocus={(e) => e.target.select()}
               style={{ width: 70 }}
             />
           </Flex>
@@ -597,7 +604,19 @@ function ScheduleSettings({
             </Text>
           </Flex>
 
-          <Text size="2">Backup cron (5-field; leave empty to disable)</Text>
+          <Text size="2">
+            Backup cron (5-field){" "}
+            <Link
+              size="1"
+              href="https://crontab.guru/"
+              onClick={(e) => {
+                e.preventDefault();
+                void openExternal("https://crontab.guru/");
+              }}
+            >
+              crontab.guru
+            </Link>
+          </Text>
           <Box>
             <TextField.Root
               value={backupCron}
@@ -605,7 +624,13 @@ function ScheduleSettings({
               placeholder="e.g. 0 4 * * *  (every day at 04:00)"
             />
             <Box mt="1">
-              <CronStatusHint status={backupCronStatus} />
+              {backupEnabled && !backupCron.trim() ? (
+                <Text size="1" color="red">
+                  A cron expression is required while auto backup is enabled.
+                </Text>
+              ) : (
+                <CronStatusHint status={backupCronStatus} />
+              )}
             </Box>
           </Box>
 
@@ -824,4 +849,13 @@ function statusColor(s: string): "gray" | "green" | "red" | "amber" {
 
 function pad2(n: number): string {
   return n.toString().padStart(2, "0");
+}
+
+// Parse a numeric text field, ignoring non-digits, and clamp to [0, max].
+// Used by the HH:MM restart fields so they can show zero-padded values
+// (a native number input strips leading zeros).
+function clampInt(raw: string, max: number): number {
+  const n = Number(raw.replace(/\D/g, ""));
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(Math.trunc(n), max);
 }
