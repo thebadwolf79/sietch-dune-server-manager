@@ -642,7 +642,9 @@ fn normalize_chat_message(message: &str) -> String {
 
 fn welcome_item_stats_json(item_name: &str, durability: f64) -> Result<String> {
     let durability_stats = if durability >= 1.0 {
-        json!({"DecayedMaxDurability": 0.0})
+        // Full durability: write no durability fields. The game treats an absent
+        // entry as undamaged; an explicit DecayedMaxDurability must not be set.
+        json!({})
     } else {
         json!({"CurrentDurability": durability})
     };
@@ -661,6 +663,9 @@ fn welcome_item_stats_json(item_name: &str, durability: f64) -> Result<String> {
                 "bIsContainer": true,
             }]),
         );
+    } else {
+        // Non-fillable items (weapons/equipment) carry an empty customization block.
+        stats.insert("FCustomizationStats".to_string(), json!([[], {}]));
     }
     Ok(serde_json::to_string(&serde_json::Value::Object(stats))?)
 }
@@ -797,6 +802,38 @@ mod tests {
             "Water"
         );
         assert_eq!(stats["FFillableItemStats"][1]["bIsContainer"], true);
+        // Fillable containers get no customization block.
+        assert!(stats.get("FCustomizationStats").is_none());
+    }
+
+    #[test]
+    fn full_durability_weapon_omits_durability_fields() {
+        let stats: serde_json::Value =
+            serde_json::from_str(&welcome_item_stats_json("JabalSwordUnique", 1.0).unwrap())
+                .unwrap();
+        // Durability entry exists but carries no fields at full durability.
+        let durability = &stats["FItemStackAndDurabilityStats"][1];
+        assert!(durability.is_object());
+        assert!(durability.get("DecayedMaxDurability").is_none());
+        assert!(durability.get("CurrentDurability").is_none());
+        // A weapon is not a fillable container.
+        assert!(stats.get("FFillableItemStats").is_none());
+        // Non-fillable items carry an empty customization block.
+        assert!(stats["FCustomizationStats"][0].as_array().unwrap().is_empty());
+        assert!(stats["FCustomizationStats"][1]
+            .as_object()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn partial_durability_weapon_sets_current_durability() {
+        let stats: serde_json::Value =
+            serde_json::from_str(&welcome_item_stats_json("JabalSwordUnique", 0.5).unwrap())
+                .unwrap();
+        let durability = &stats["FItemStackAndDurabilityStats"][1];
+        assert_eq!(durability["CurrentDurability"], 0.5);
+        assert!(durability.get("DecayedMaxDurability").is_none());
     }
 
     #[test]
