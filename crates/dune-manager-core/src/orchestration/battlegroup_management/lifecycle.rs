@@ -170,7 +170,15 @@ where
         let mut elapsed = 0;
         let mut last = None;
         while elapsed <= timeout_seconds {
-            match self.status(battlegroup) {
+            // Read started-ness from the stable Kubernetes schema, not the
+            // vendor wrapper's `status` text. That text layout drifts across
+            // Funcom releases (status="World", director="2/2", etc.) and was
+            // misparsed into unrecognised phases, so the wait never saw the BG
+            // as started and stalled until timeout even when it was up (#19).
+            match self
+                .kubernetes
+                .battlegroup_state(&battlegroup.namespace, &battlegroup.name)
+            {
                 Ok(state) => {
                     if is_started_state(&state) {
                         return Ok(state);
@@ -178,8 +186,8 @@ where
                     last = Some(state);
                 }
                 Err(_) => {
-                    // Keep polling on transient errors; the wrapper exits
-                    // non-zero briefly while the BG is reconciling.
+                    // Keep polling on transient errors; kubectl can briefly
+                    // fail while the BG is reconciling.
                 }
             }
             thread::sleep(Duration::from_secs(2));

@@ -1,11 +1,11 @@
 use dune_manager_core::orchestration::{
-    is_started_state, BattlegroupManagementOrchestrator, BattlegroupRef, RusshRunner,
-    StructuredKubectl, VendorBattlegroupWrapper,
+    is_started_state, BattlegroupManagementOrchestrator, BattlegroupRef, BattlegroupState,
+    RusshRunner, StructuredKubectl, VendorBattlegroupWrapper,
 };
 
 use crate::commands::shared::{command_error_message, runner_for_remote_kind};
 use crate::commands::status_data::read_remote_server_status;
-use crate::dto::{RemoteServerActionRequest, RemoteServerStatus};
+use crate::dto::{RemoteBattlegroupStatus, RemoteServerActionRequest, RemoteServerStatus};
 use crate::logging::TauriOperationSink;
 
 type Manager = BattlegroupManagementOrchestrator<
@@ -140,18 +140,24 @@ fn run_battlegroup_action_with_runner(
         name: battlegroup_name,
     };
     let manager = manager_from_runner(runner);
-    let before = manager
-        .status(&battlegroup)
+    // Pre-flight no-op guard. Read the BattleGroup state from the stable
+    // kubectl JSON schema (same source as the dashboard) rather than the
+    // vendor wrapper's `status` text: that text layout drifts across Funcom
+    // releases and was being misparsed into bogus phases (e.g. status="World",
+    // director="2/2"), which made `is_started_state` wrongly report the BG as
+    // not running and refuse a perfectly valid Stop (#19).
+    let before = read_remote_server_status(runner, &battlegroup.namespace, &battlegroup.name)
         .map_err(command_error_message)?;
-    let before_started = is_started_state(&before);
+    let before_bg = &before.battlegroup;
+    let before_started = is_started_state(&battlegroup_state_from_status(before_bg));
     if stop && !before_started {
         return Err(format!(
             "Battlegroup is not running (status={}, stop={}, database={}, gateway={}, director={}).",
-            before.phase,
-            before.stop,
-            before.database_phase,
-            before.server_group_phase,
-            before.director_phase
+            before_bg.phase,
+            before_bg.stop,
+            before_bg.database_phase,
+            before_bg.server_group_phase,
+            before_bg.director_phase
         ));
     }
     if !stop && before_started {
@@ -169,6 +175,22 @@ fn run_battlegroup_action_with_runner(
     sink.info("bg.check", "Refreshing battlegroup state.");
     read_remote_server_status(runner, &battlegroup.namespace, &battlegroup.name)
         .map_err(command_error_message)
+}
+
+/// Adapts the structured `RemoteBattlegroupStatus` (read from the BattleGroup
+/// CR JSON) into the core `BattlegroupState` so the shared `is_started_state`
+/// phase vocabulary stays the single source of truth. `server_stats` is not
+/// consulted by `is_started_state`, so it is left empty.
+fn battlegroup_state_from_status(status: &RemoteBattlegroupStatus) -> BattlegroupState {
+    BattlegroupState {
+        stop: status.stop,
+        phase: status.phase.clone(),
+        database_phase: status.database_phase.clone(),
+        server_group_phase: status.server_group_phase.clone(),
+        director_phase: status.director_phase.clone(),
+        uptime: status.uptime.clone(),
+        server_stats: Vec::new(),
+    }
 }
 
 fn run_battlegroup_update_with_runner(
@@ -195,4 +217,38 @@ fn run_battlegroup_update_with_runner(
     sink.info("bg.update", "Refreshing battlegroup state.");
     read_remote_server_status(runner, &battlegroup.namespace, &battlegroup.name)
         .map_err(command_error_message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn status(phase: &str, sgp: &str, director: &str, stop: bool) -> RemoteBattlegroupStatus {
+        RemoteBattlegroupStatus {
+            stop,
+            phase: phase.to_string(),
+            database_phase: "Ready".to_string(),
+            server_group_phase: sgp.to_string(),
+            director_phase: director.to_string(),
+            uptime: "8h45m".to_string(),
+            server_stats: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn reconciling_bg_counts_as_started_so_stop_is_allowed() {
+        // #19: the structured kubectl read reports phase=Reconciling,
+        // serverGroupPhase=Running, directorPhase=Healthy while the BG is up.
+        // The stop guard must treat this as started (previously the wrapper
+        // text-parse produced status="World"/director="2/2" and refused).
+        let s = status("Reconciling", "Running", "Healthy", false);
+        assert!(is_started_state(&battlegroup_state_from_status(&s)));
+    }
+
+    #[test]
+    fn stopped_bg_is_not_started() {
+        assert!(!is_started_state(&battlegroup_state_from_status(&status(
+            "Stopped", "Stopped", "", true
+        ))));
+    }
 }

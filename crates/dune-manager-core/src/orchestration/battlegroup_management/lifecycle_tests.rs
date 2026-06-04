@@ -190,20 +190,56 @@ fn start_waits_for_director_node_port_after_wrapper_start() {
 
 #[test]
 fn start_wait_rejects_stopped_phase_even_when_stop_flag_is_false() {
+    // The wait reads from Kubernetes (the stable schema), so the stopped
+    // state must come from the kubernetes mock, not the vendor wrapper.
     let stopped_state = BattlegroupState {
         phase: "Stopped".to_string(),
         server_group_phase: "Stopped".to_string(),
         director_phase: "Suspended".to_string(),
         ..BattlegroupState::default()
     };
-    let wrapper = MockWrapper {
-        statuses: Rc::new(RefCell::new(vec![stopped_state])),
+    let kubernetes = MockKubernetes {
+        battlegroup_states: Rc::new(RefCell::new(vec![stopped_state])),
         ..Default::default()
     };
-    let orchestrator = BattlegroupManagementOrchestrator::new(MockKubernetes::default(), wrapper);
+    let orchestrator = BattlegroupManagementOrchestrator::new(kubernetes, MockWrapper::default());
     let mut sink = VecOperationSink::default();
     let result = orchestrator.wait_for_battlegroup_started(&sample_bg(), 0, &mut sink);
     assert!(result.is_err());
+}
+
+#[test]
+fn start_wait_accepts_reconciling_state_from_kubernetes() {
+    // #19/#20: a BG up but lingering at phase=Reconciling (serverGroupPhase
+    // Running, director Healthy) must satisfy the wait instead of stalling
+    // until timeout. The wrapper status is deliberately left as the broken
+    // shape it would produce in the field to prove it is no longer consulted.
+    let reconciling = BattlegroupState {
+        phase: "Reconciling".to_string(),
+        server_group_phase: "Running".to_string(),
+        director_phase: "Healthy".to_string(),
+        ..BattlegroupState::default()
+    };
+    let kubernetes = MockKubernetes {
+        battlegroup_states: Rc::new(RefCell::new(vec![reconciling])),
+        ..Default::default()
+    };
+    let broken_wrapper_state = BattlegroupState {
+        phase: "World".to_string(),
+        server_group_phase: "Ready".to_string(),
+        director_phase: "2/2".to_string(),
+        ..BattlegroupState::default()
+    };
+    let wrapper = MockWrapper {
+        statuses: Rc::new(RefCell::new(vec![broken_wrapper_state])),
+        ..Default::default()
+    };
+    let orchestrator = BattlegroupManagementOrchestrator::new(kubernetes, wrapper);
+    let mut sink = VecOperationSink::default();
+    let state = orchestrator
+        .wait_for_battlegroup_started(&sample_bg(), 0, &mut sink)
+        .expect("reconciling BG should satisfy the wait");
+    assert_eq!(state.phase, "Reconciling");
 }
 
 #[test]
