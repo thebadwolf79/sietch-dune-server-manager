@@ -56,6 +56,10 @@ pub struct HyperVVmSetupRequest {
     pub clear_destination: bool,
     /// Final virtual disk size in bytes.
     pub disk_size_bytes: u64,
+    /// Whether to convert the virtual disk to a fixed-size type.
+    pub convert_to_fixed_disk: bool,
+    /// Whether to disable dynamic memory for the VM.
+    pub disable_dynamic_memory: bool,
 }
 
 impl HyperVVmSetupRequest {
@@ -98,6 +102,8 @@ impl Default for HyperVVmSetupRequest {
             replace_existing_vm: false,
             clear_destination: false,
             disk_size_bytes: DEFAULT_VM_DISK_BYTES,
+            convert_to_fixed_disk: false,
+            disable_dynamic_memory: false,
         }
     }
 }

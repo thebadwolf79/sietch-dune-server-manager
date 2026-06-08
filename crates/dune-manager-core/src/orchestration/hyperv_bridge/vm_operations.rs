@@ -288,4 +288,38 @@ Set-VMFirmware -VMName {vm_name} -FirstBootDevice $drive -ErrorAction Stop
             ),
         )
     }
+
+    fn convert_first_vhd_to_fixed(&self, vm_name: &str) -> CommandResult<()> {
+        self.run_unit(
+            "hyperv.vhd.convert-first-to-fixed",
+            format!(
+                r#"
+$ErrorActionPreference = 'Stop'
+$drive = Get-VMHardDiskDrive -VMName {vm_name} | Select-Object -First 1
+if (-not $drive) {{ throw 'VM has no hard disk drive' }}
+$oldPath = $drive.Path
+if ($oldPath -match '-fixed\.vhdx$') {{
+  [pscustomobject]@{{ ok = $true }} | ConvertTo-Json -Compress
+  exit 0
+}}
+$newPath = $oldPath -replace '\.vhdx$', '-fixed.vhdx'
+Convert-VHD -Path $oldPath -DestinationPath $newPath -VhdType Fixed -ErrorAction Stop
+Set-VMHardDiskDrive -VMHardDiskDrive $drive -Path $newPath -ErrorAction Stop
+Remove-Item -Path $oldPath -Force -ErrorAction Stop
+[pscustomobject]@{{ ok = $true }} | ConvertTo-Json -Compress
+"#,
+                vm_name = ps_single_quoted(vm_name)
+            ),
+        )
+    }
+
+    fn disable_dynamic_memory(&self, vm_name: &str) -> CommandResult<()> {
+        self.run_unit(
+            "hyperv.vm.disable-dynamic-memory",
+            format!(
+                "Set-VMMemory -VMName {} -DynamicMemoryEnabled $false -ErrorAction Stop; [pscustomobject]@{{ ok = $true }} | ConvertTo-Json -Compress",
+                ps_single_quoted(vm_name)
+            ),
+        )
+    }
 }

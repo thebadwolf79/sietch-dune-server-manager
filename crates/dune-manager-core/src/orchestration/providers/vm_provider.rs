@@ -39,6 +39,14 @@ pub trait VmProvider {
     fn set_startup_memory(&self, vm_name: &str, bytes: u64) -> CommandResult<()>;
     /// Sets virtual processor count.
     fn set_processor_count(&self, vm_name: &str, count: u32) -> CommandResult<()>;
+    /// Converts the first VHD of a VM to a fixed-size disk.
+    fn convert_first_vhd_to_fixed(&self, _vm_name: &str) -> CommandResult<()> {
+        Ok(())
+    }
+    /// Disables dynamic memory on a VM.
+    fn disable_dynamic_memory(&self, _vm_name: &str) -> CommandResult<()> {
+        Ok(())
+    }
 }
 
 impl<T> VmProvider for &T
@@ -98,5 +106,13 @@ where
 
     fn set_processor_count(&self, vm_name: &str, count: u32) -> CommandResult<()> {
         (*self).set_processor_count(vm_name, count)
+    }
+
+    fn convert_first_vhd_to_fixed(&self, vm_name: &str) -> CommandResult<()> {
+        (*self).convert_first_vhd_to_fixed(vm_name)
+    }
+
+    fn disable_dynamic_memory(&self, vm_name: &str) -> CommandResult<()> {
+        (*self).disable_dynamic_memory(vm_name)
     }
 }

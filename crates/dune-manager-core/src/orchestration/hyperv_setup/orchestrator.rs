@@ -174,6 +174,17 @@ where
         self.vm
             .resize_first_vhd(&imported.name, request.disk_size_bytes)?;
 
+        if request.convert_to_fixed_disk {
+            emit_hyperv_event(
+                sink,
+                "hyperv.convert-vhd-fixed",
+                "Converting VM virtual disk to fixed size.",
+                StepDomain::HyperV,
+                StepAction::Configure,
+            );
+            self.vm.convert_first_vhd_to_fixed(&imported.name)?;
+        }
+
         emit_hyperv_event(
             sink,
             "hyperv.set-first-boot",
@@ -192,6 +203,17 @@ where
         );
         self.vm
             .set_startup_memory(&imported.name, request.memory.bytes())?;
+
+        if request.disable_dynamic_memory {
+            emit_hyperv_event(
+                sink,
+                "hyperv.disable-dynamic-memory",
+                "Disabling VM dynamic memory.",
+                StepDomain::HyperV,
+                StepAction::Configure,
+            );
+            self.vm.disable_dynamic_memory(&imported.name)?;
+        }
 
         emit_hyperv_event(
             sink,

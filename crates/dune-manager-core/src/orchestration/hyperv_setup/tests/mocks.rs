@@ -124,6 +124,16 @@ impl VmProvider for MockVm {
         self.calls.borrow_mut().push("set_processor_count");
         Ok(())
     }
+
+    fn convert_first_vhd_to_fixed(&self, _vm_name: &str) -> CommandResult<()> {
+        self.calls.borrow_mut().push("convert_first_vhd_to_fixed");
+        Ok(())
+    }
+
+    fn disable_dynamic_memory(&self, _vm_name: &str) -> CommandResult<()> {
+        self.calls.borrow_mut().push("disable_dynamic_memory");
+        Ok(())
+    }
 }
 
 pub(super) fn test_dir() -> PathBuf {

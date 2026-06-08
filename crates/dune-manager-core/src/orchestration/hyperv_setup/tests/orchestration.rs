@@ -36,6 +36,8 @@ fn orchestrates_hyperv_vm_import_sequence() {
                 replace_existing_vm: false,
                 clear_destination: false,
                 disk_size_bytes: DEFAULT_VM_DISK_BYTES,
+                convert_to_fixed_disk: false,
+                disable_dynamic_memory: false,
             },
             &mut sink,
         )
@@ -104,6 +106,8 @@ fn refuses_existing_vm_without_replace_flag() {
                 replace_existing_vm: false,
                 clear_destination: false,
                 disk_size_bytes: DEFAULT_VM_DISK_BYTES,
+                convert_to_fixed_disk: false,
+                disable_dynamic_memory: false,
             },
             &mut sink,
         )
@@ -141,6 +145,8 @@ fn allows_existing_destination_folder_without_vm_artifacts() {
                 replace_existing_vm: false,
                 clear_destination: false,
                 disk_size_bytes: DEFAULT_VM_DISK_BYTES,
+                convert_to_fixed_disk: false,
+                disable_dynamic_memory: false,
             },
             &mut sink,
         )
@@ -177,9 +183,74 @@ fn refuses_destination_folder_with_vm_artifacts() {
                 replace_existing_vm: false,
                 clear_destination: false,
                 disk_size_bytes: DEFAULT_VM_DISK_BYTES,
+                convert_to_fixed_disk: false,
+                disable_dynamic_memory: false,
             },
             &mut sink,
         )
         .unwrap_err();
     assert!(err.message.contains("contains VM files"));
+}
+
+#[test]
+fn orchestrates_hyperv_vm_import_sequence_with_tweaks() {
+    let temp = test_dir();
+    let install = temp.join("server");
+    let vm_dir = install.join("Virtual Machines");
+    fs::create_dir_all(&vm_dir).unwrap();
+    fs::write(vm_dir.join("server.vmcx"), "").unwrap();
+    let destination = temp.join("vm");
+
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let vm = MockVm {
+        calls: calls.clone(),
+        existing: None,
+    };
+    let orchestrator = HyperVVmSetupOrchestrator::new(MockHost, vm);
+    let mut sink = VecOperationSink::default();
+    let _result = orchestrator
+        .import_and_prepare_vm(
+            &HyperVVmSetupRequest {
+                install_path: install,
+                vm_name: "test-vm".to_string(),
+                destination_path: destination,
+                switch_name: "switch".to_string(),
+                adapter_name: "Ethernet".to_string(),
+                memory: MemoryProfile::Sietch20Gb,
+                processor_count: 4,
+                replace_existing_vm: false,
+                clear_destination: false,
+                disk_size_bytes: DEFAULT_VM_DISK_BYTES,
+                convert_to_fixed_disk: true,
+                disable_dynamic_memory: true,
+            },
+            &mut sink,
+        )
+        .unwrap();
+
+    assert_eq!(
+        calls.borrow().as_slice(),
+        &[
+            "get_vm",
+            "compare_import",
+            "import_vm",
+            "ensure_external_switch",
+            "connect_network_adapter",
+            "resize_first_vhd",
+            "convert_first_vhd_to_fixed",
+            "set_first_boot_disk",
+            "set_startup_memory",
+            "disable_dynamic_memory",
+            "set_processor_count",
+            "start_vm",
+        ]
+    );
+    assert!(sink
+        .events
+        .iter()
+        .any(|event| event.step_id == "hyperv.convert-vhd-fixed"));
+    assert!(sink
+        .events
+        .iter()
+        .any(|event| event.step_id == "hyperv.disable-dynamic-memory"));
 }

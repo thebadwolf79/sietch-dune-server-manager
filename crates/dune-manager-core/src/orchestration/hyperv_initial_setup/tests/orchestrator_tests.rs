@@ -52,6 +52,8 @@ fn orchestrates_hyperv_initial_setup_across_provider_boundaries() {
                     replace_existing_vm: false,
                     clear_destination: false,
                     disk_size_bytes: DEFAULT_VM_DISK_BYTES,
+                    convert_to_fixed_disk: false,
+                    disable_dynamic_memory: false,
                 },
                 guest_network: GuestNetworkPlan::Dhcp,
                 guest_bootstrap: GuestBootstrapPlan {
