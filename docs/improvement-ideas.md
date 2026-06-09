@@ -137,6 +137,56 @@ currency write).
   backup using the throwaway-DB technique (`pg_restore` into `dune_check`, copy the
   rows into live) — recover one player without a destructive full-world import.
 - Make `import` clearly flagged destructive + auto-handle the stop/drain/start dance.
+- **Scope caveat:** everything above assumes the *same* battlegroup identity. A DB
+  dump alone does **not** survive a from-scratch reinstall — see §3.7.
+
+### 3.7 **Full-stack disaster-recovery backup (survive a from-scratch reinstall)** — **HIGH (user-requested)**
+- **The gap (lived it):** after uninstalling and reinstalling the self-hosted server
+  from Steam, the DB backup *retained the character* but that character **could not be
+  brought into the new battlegroup** — it was bound to the *original* battlegroup's
+  identity, and the clean install minted a new one. A world/DB dump is necessary but
+  **not sufficient** for true disaster recovery.
+- **Root cause — identity is regenerated on every clean install.** In
+  `guest_bootstrap_ssh/world_creation.rs::create_world_script`, a fresh world mints:
+  - `WORLD_UNIQUE_NAME` → battlegroup **name** + namespace `funcom-seabass-<unique>`
+    (deterministic *only* if you deliberately reuse the same unique name).
+  - `FLS_TOKEN` → `fls-secret.yaml` — the world's **Funcom Live Services** registration
+    identity (the most likely thing the saved character is actually bound to).
+  - `RMQ_SECRET`, `WORLD_DUNE_PASS`, `WORLD_POSTGRES_PASS` → **freshly `openssl rand`'d
+    every clean install** (lines 85–87). New secrets ≠ the ones the old DB expects.
+  - The full **world manifest YAML** (the BattleGroup CRD spec) + `.manager-bootstrap-world-name`.
+  All of this lives on the VM under `/home/dune/.dune/` (`$WORLD_UNIQUE_NAME.yaml`,
+  `$WORLD_UNIQUE_NAME-fls-secret.yaml`, `$WORLD_UNIQUE_NAME-rmq-secret.yaml`).
+- **Build — a "Full configuration backup / restore" that captures the identity layer,
+  not just the world:**
+  1. **Config-capture backup:** alongside the DB dump, archive the world manifest YAML,
+     the FLS + RMQ secrets, the DB passwords (from the manifest / k8s Secrets), the
+     `WORLD_UNIQUE_NAME` + namespace, and the `.manager-bootstrap-world-name` marker.
+     Pull secrets via the existing `secret_value()` helper
+     (`kubectl/battlegroup.rs`) rather than re-reading files where possible. **Encrypt
+     at rest** — these are credentials/tokens (mirror how `OPERATIONS.local.md` is kept
+     private; never commit them).
+  2. **Identity-preserving restore path:** on a clean reinstall, *bypass* the
+     regenerate-secrets branch of world-creation and instead **re-apply the captured
+     manifests/secrets verbatim**, recreating the *same* battlegroup name, namespace,
+     FLS registration, and DB credentials — **then** `battlegroup import` the DB dump.
+     Character ↔ battlegroup binding is preserved, no mismatch.
+  3. **Restore preflight / drift check:** before importing, compare the captured identity
+     against the live install and warn loudly on any mismatch (different world unique
+     name, different FLS token, regenerated secrets) — that mismatch *is* the bug class
+     the user hit, so surface it instead of silently producing an orphaned character.
+- **Open question to investigate first (don't guess in the impl):** *which* identifier is
+  the binding one the saved character keys off — the FLS world/server registration
+  (from the self-host token), the DB-internal battlegroup row/UID, or the generated
+  secrets? Determine empirically: do a controlled reinstall reusing the same
+  `WORLD_UNIQUE_NAME` + `FLS_TOKEN` but fresh RMQ/DB secrets, import the dump, and see
+  whether the character loads. That isolates "name + FLS identity is enough" vs "the
+  secrets matter too." Capture the finding here. (Note: the k8s CRD `metadata.uid`
+  changes on recreate but is almost certainly *not* what the character binds to —
+  confirm.)
+- **Why it matters / why upstream-worthy:** turns "I reinstalled Windows / reinstalled
+  from Steam" from a character-loss event into a one-click recover. It's the natural
+  superset of §3.4 and the strongest possible version of the safety net §2.3 protects.
 
 ### 3.5 **Guardrails / safety rails** — **MEDIUM**
 - Refuse (or hard-warn + require typed confirmation) on any operation that writes the
@@ -252,7 +302,9 @@ currency write).
 2. **3.6** VM power-on from the tool + availability gating (kills the daily batch-file
    friction; core `start_vm` already exists, so it's mostly wiring + UX).
 3. **3.1** currency granting + **3.2** filterable item picker (highest user value).
-4. **3.3** character admin panel + **3.4** targeted restore (recovery tooling).
+4. **3.3** character admin panel + **3.4** targeted restore + **3.7** full-stack
+   disaster-recovery backup (recovery tooling; do the §3.7 binding-identifier
+   investigation early since it de-risks both 3.4 and 3.7).
 5. **3.5** guardrails + the full §3.6 Funcom parity audit (close gaps; prevent repeats).
 6. **2.1** support the upstream #23 OOM fix (not our bug, but a good contribution) +
    **§4** niceties as time allows.

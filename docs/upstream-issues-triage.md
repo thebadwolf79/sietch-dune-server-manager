@@ -34,6 +34,27 @@ These tie multiple issues together — fixing the root theme knocks out several 
 
 ## Issues
 
+### #26 — [Feature] Landsraad Goal Amount — lower the house-completion threshold — **OPEN (new, 2026-06-08)**
+- skullrazor-Vyvorant: the Landsraad house-completion goal (~70,000 points) is brutal for a
+  **small community server**; wants either a lower goal *or* more contribution per quest.
+  maurerk1993 (the #16 reporter) **+1'd** and explicitly asked to be able to **change it to a
+  setting of our choosing**.
+- **Direction — feasibility first (read-only), this is a different category from the rest of
+  the tool.** Two unknowns to resolve before promising anything:
+  1. **Is the Landsraad goal tunable at all on a self-hosted server?** Hunt for where the
+     threshold lives — a `ServerSettings`/game `.ini`, a field on the BattleGroup CRD /
+     world manifest, or a DB table — versus baked into the game build / decided FLS-side
+     (in which case the manager genuinely can't touch it; say so on the thread).
+  2. **If adjustable, where + how to write it safely** (prefer an engine/config path over a
+     raw DB poke — same incident lesson as everywhere else).
+- **If it turns out to be an editable server setting,** this becomes the first case for a
+  **"server settings / game-balance editor"** surface — aligns with the `edit` /
+  `edit-advanced` YAML parity gap in [improvement-ideas §3.6](./improvement-ideas.md).
+- **Scope note:** gameplay-balance tuning is a new lane vs. lifecycle/admin ops — worth a
+  quick word with the maintainer on whether it's in scope before building.
+- **Effort:** unknown until feasibility is confirmed; likely a config-surface question, not
+  code-heavy. Lowest-risk first step is the read-only investigation above.
+
 ### #25 — [Bug 0.3.16] Auto Update toggle won't stay off — **OPEN**
 - **Two problems:** (1) the "Auto Update" toggle on the User screen reverts to **on** after
   navigating away and back — state isn't persisted (or the read re-defaults to `true`);
@@ -49,11 +70,21 @@ These tie multiple issues together — fixing the root theme knocks out several 
 ### #24 — [Bug] `battlegroup update` reports failure on success — **OPEN (fix already in our fork)**
 - Root cause confirmed (non-idempotent `ln -s` in `system.sh` → exit 1 even on success).
   Our fork treats exit 1 as OK. **Action: turn the fork fix into a PR.** Cross-ref §2.2.
+- **Update (2026-06-06):** we posted a **live-repro confirmation** comment on the issue —
+  caught `battlegroup update` exiting 1 while reporting success, with the exact
+  `ln: …/bin/battlegroup: File exists` / `ln: …/bin/bg-util: File exists` output. So it's
+  now confirmed in-vivo, not just reasoned from source — strengthens the PR.
 
 ### #23 — [NotVerified Bug] DB Backup OOMKilled — **OPEN (not ours; did not reproduce)**
 - wofnull's: dump pod runs ~600 s then `OOMKilled` (exit 137). Distinct from our exit-1
   stray-table failure. **Direction:** raise dump pod memory limit / stream-compress.
   Cross-ref §2.1. (Leaving the thread alone — we have no OOM data to add.)
+- **Update (2026-06-06):** reporter says it **recurred** — the scheduled 4 AM backup
+  `OOMKilled` again, and a manual backup run right afterward finished fine. So it's a
+  **recurring** pattern for them (idle server, scheduled run fails / manual succeeds), not a
+  one-off. Still distinct from our instant exit-1, and we still can't reproduce the OOM —
+  but it strengthens the case that the dump pod's memory limit is genuinely too low on
+  some installs (theme **C** / §2.1).
 
 ### #22 — [Feature] Auto-refresh the Battlegroup info panel — **OPEN**
 - Wants the BG info/status panel to auto-refresh like the players list does.
@@ -118,3 +149,6 @@ These tie multiple issues together — fixing the root theme knocks out several 
 5. **#21 / #14 / theme A** — Director/BGD status integration (bigger; do together).
 6. **#10** — restart cron (owner already specced it).
 7. **#18** — confirm fixed, nudge to close.
+8. **#26** — read-only **feasibility check** first: is the Landsraad goal even server-tunable?
+   Only commit to building once we know where (if anywhere) the threshold lives. Could seed a
+   "server settings editor" if it pans out; otherwise close with an explanation.
