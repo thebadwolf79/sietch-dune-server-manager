@@ -57,10 +57,13 @@ const CATEGORY_ORDER: Category[] = [
   "exec",
 ];
 
-// Frontend-synthetic grant commands: dedicated, locked forms that publish through a
-// real engine command. Solari is the in-game `solari` item (SolarisCoin), so it
-// publishes AddItemToInventory with ItemName locked — no item picker, ItemName fixed.
-// (House Scrip + Intel will join this "currency" category as DB-write grants.)
+// Frontend-synthetic grant commands: dedicated, locked forms in the "currency"
+// category. Two flavours:
+//  - Solari rides a real engine command — the in-game `solari` item (SolarisCoin),
+//    so it publishes AddItemToInventory with ItemName/Durability locked (no picker).
+//  - House Scrip has no engine command; it's a guarded offline DB write
+//    (dbAction "grant_currency", currencyId locked to 1) the player must be offline for.
+//    (Intel will join Progression later as its own DB write.)
 function withSyntheticGrants(list: CommandSpec[]): CommandSpec[] {
   const addItem = list.find((c) => c.id === "AddItemToInventory");
   if (!addItem) return list;
@@ -77,7 +80,32 @@ function withSyntheticGrants(list: CommandSpec[]): CommandSpec[] {
     publishAs: "AddItemToInventory",
     lockedFields: { ItemName: "solari", Durability: 1.0 },
   };
-  return [...list, solari];
+  // Reuse the engine command's PlayerId field so House Scrip gets the same player
+  // picker (its value is the FLS id). Add a plain Amount field.
+  const playerField = addItem.fields.find((f) => f.key === "PlayerId");
+  const houseScrip: CommandSpec = {
+    id: "GrantHouseScrip",
+    label: "Grant House Scrip",
+    category: "currency",
+    needsPlayer: true,
+    allowAllPlayers: false,
+    describe:
+      "Add House Scrip to a player's balance. Direct database write — the player must be offline (the server overwrites currency edits on logout). The amount is added to any existing balance.",
+    fields: [
+      ...(playerField ? [playerField] : []),
+      {
+        key: "Amount",
+        label: "Amount",
+        kind: "int",
+        required: true,
+        default: 1000,
+        helper: "House Scrip to add to the current balance",
+      },
+    ],
+    dbAction: "grant_currency",
+    lockedFields: { currencyId: 1 },
+  };
+  return [...list, solari, houseScrip];
 }
 
 const CLIENT_DEFAULTS: Record<string, unknown> = {
@@ -230,9 +258,18 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
     setError(null);
     setResult(null);
     try {
-      const publishId = selected.publishAs ?? selected.id;
-      const payload = { ...values, ...(selected.lockedFields ?? {}) };
-      const out = await managementApi.publish(tunnelId, publishId, payload);
+      let out: PublishResultDto;
+      if (selected.dbAction === "grant_currency") {
+        // DB-grant path: route to the dedicated currency endpoint, not MQ publish.
+        const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
+        const currencyId = Number((selected.lockedFields?.currencyId as number | undefined) ?? 1);
+        const amount = Number(values.Amount);
+        out = await managementApi.grantCurrency(tunnelId, flsId, currencyId, amount);
+      } else {
+        const publishId = selected.publishAs ?? selected.id;
+        const payload = { ...values, ...(selected.lockedFields ?? {}) };
+        out = await managementApi.publish(tunnelId, publishId, payload);
+      }
       setResult(out);
       await refreshHistory();
     } catch (err) {

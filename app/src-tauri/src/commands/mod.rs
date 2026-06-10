@@ -23,8 +23,9 @@ pub use discovery::detect_remote_ubuntu_servers;
 pub use logs::{get_logs_folder, record_operation_log};
 pub use management_api::{
     ms_cluster, ms_cron_preview, ms_dump_prune_execute, ms_dump_prune_preview, ms_get_config,
-    ms_health, ms_history, ms_list_commands, ms_list_logs, ms_list_runs, ms_list_timezones,
-    ms_player_location, ms_publish, ms_search_items, ms_search_journey_nodes, ms_search_players,
+    ms_grant_currency, ms_health, ms_history, ms_list_commands, ms_list_logs, ms_list_runs,
+    ms_list_timezones, ms_player_location, ms_publish, ms_search_items, ms_search_journey_nodes,
+    ms_search_players,
     ms_search_skill_modules, ms_search_vehicles, ms_search_xp_event_tags, ms_set_config,
     ms_trigger_run, ms_welcome_grant_retry, ms_welcome_grants, ms_welcome_whisper,
 };

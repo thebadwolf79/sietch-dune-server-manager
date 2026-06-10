@@ -375,6 +375,108 @@ pub async fn insert_items_to_backpack(
     Ok(inserted_ids)
 }
 
+/// Resolve a player's controller id + normalized online status from their FLS
+/// id, locking the `player_state` row so the online check stays consistent for
+/// the grant transaction. Normalizes online_status to lower/trimmed so a
+/// strict `= 'offline'` test fails closed on NULL / 'Loading' / 'Connecting'.
+const CURRENCY_RESOLVE_SQL: &str = "
+SELECT ps.player_controller_id,
+       lower(btrim(COALESCE(ps.online_status::text, ''))) AS online_norm
+FROM dune.player_state ps
+JOIN dune.encrypted_accounts enc ON enc.id = ps.account_id
+WHERE enc.\"user\"::text = $1
+FOR UPDATE OF ps
+";
+
+// ADD semantics: "grant N" adds N to the existing balance, never overwrites it
+// (the player may already hold currency). New row -> balance = N.
+const CURRENCY_UPSERT_SQL: &str = "
+INSERT INTO dune.player_virtual_currency_balances (player_controller_id, currency_id, balance)
+VALUES ($1::int8, $2::int2, $3::int8)
+ON CONFLICT (player_controller_id, currency_id)
+DO UPDATE SET balance = dune.player_virtual_currency_balances.balance + EXCLUDED.balance
+RETURNING balance::int8
+";
+
+#[derive(Debug, Clone)]
+pub struct CurrencyGrantOutcome {
+    pub player_controller_id: i64,
+    pub new_balance: i64,
+}
+
+/// Outcome of a currency grant. Non-`Granted` variants are expected, recoverable
+/// states (not errors) the handler turns into clear messages; `Err` is reserved
+/// for actual DB faults.
+pub enum CurrencyGrantResult {
+    Granted(CurrencyGrantOutcome),
+    /// No `player_state` row for the FLS id.
+    PlayerNotFound,
+    /// More than one `player_state` row matched the FLS id — refuse rather than
+    /// guess which controller to credit.
+    Ambiguous,
+    /// Player is not strictly offline. Carries the normalized status we saw.
+    PlayerOnline(String),
+}
+
+/// Grant currency to a player by UPSERTing `dune.player_virtual_currency_balances`
+/// (`House Scrip` = currency_id 1, `Bank Solari` = 0). There is no engine command
+/// for currency, so this is a guarded offline DB write.
+///
+/// Safety (verified against the live schema; reviewed by QC + Stress):
+/// - one transaction: resolve + `FOR UPDATE` lock the `player_state` row, then UPSERT;
+/// - refuses unless the player is strictly offline (the engine overwrites DB
+///   currency edits on logout, so online/loading is unsafe);
+/// - fails closed on unknown FLS id or >1 matching row.
+///
+/// The caller (HTTP handler) whitelists `currency_id` and clamps `amount`; this
+/// function trusts neither game-state assumption beyond what it can verify here.
+pub async fn grant_currency(
+    pg: &PgClient,
+    namespace: &str,
+    fls_id: &str,
+    currency_id: i16,
+    amount: i64,
+) -> Result<CurrencyGrantResult> {
+    let mut state = pg.dedicated_client(namespace).await?;
+    let tx = state
+        .client_mut()
+        .transaction()
+        .await
+        .context("starting currency grant transaction")?;
+
+    let rows = tx
+        .query(CURRENCY_RESOLVE_SQL, &[&fls_id])
+        .await
+        .context("resolving player for currency grant")?;
+    if rows.is_empty() {
+        return Ok(CurrencyGrantResult::PlayerNotFound);
+    }
+    if rows.len() > 1 {
+        return Ok(CurrencyGrantResult::Ambiguous);
+    }
+
+    let row = &rows[0];
+    let controller_id: i64 = row
+        .try_get(0)
+        .context("reading player_controller_id")?;
+    let online_norm: String = row.try_get(1).unwrap_or_default();
+    if online_norm != "offline" {
+        return Ok(CurrencyGrantResult::PlayerOnline(online_norm));
+    }
+
+    let upserted = tx
+        .query_one(CURRENCY_UPSERT_SQL, &[&controller_id, &currency_id, &amount])
+        .await
+        .context("upserting player currency balance")?;
+    let new_balance: i64 = upserted.try_get(0).context("reading new balance")?;
+
+    tx.commit().await.context("committing currency grant")?;
+    Ok(CurrencyGrantResult::Granted(CurrencyGrantOutcome {
+        player_controller_id: controller_id,
+        new_balance,
+    }))
+}
+
 pub async fn resolve_chat_player(
     pg: &PgClient,
     namespace: &str,

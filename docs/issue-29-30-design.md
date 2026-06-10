@@ -26,7 +26,12 @@ the investigation + design so the build is de-risked and actionable.
     `AddItemToInventory`. No currency path; don't duplicate it.
   - **House Scrip** — a real currency row in `dune.player_virtual_currency_balances`
     (`currency_id 1`, keyed by `player_controller_id`). Bank Solari = `currency_id 0`,
-    same table. Offline DB write (UPSERT).
+    same table. Offline DB write (UPSERT). **✅ IMPLEMENTED (slice 2)** — see below.
+    Live schema verified 2026-06-10 (read-only probe): columns
+    `(player_controller_id bigint, currency_id smallint, balance bigint)`, PK
+    `(player_controller_id, currency_id)`, FK `player_controller_id → dune.actors(id)
+    ON DELETE CASCADE`. No currency lookup table — `1 = House Scrip` / `0 = Bank Solari`
+    is external knowledge, fingerprinted (the one player: scrip 1,000,000 / bank 99,397,106).
   - **Intel ("Tech Knowledge points")** — **not** a currency row. Stored in
     `dune.actors.properties` (JSONB) at `TechKnowledgePlayerComponent.m_TechKnowledgePoints`
     (integer), on the **character actor** (`BP_DunePlayerCharacter_C`, by class — keyed by
@@ -53,8 +58,20 @@ the investigation + design so the build is de-risked and actionable.
      `ItemName` locked to `solari` via the new `publishAs` + `lockedFields` on `CommandSpec`
      (`withSyntheticGrants` in AdminTab). Reuses the MQ path; the item is unchangeable.
      (Replaced the earlier prefill-shortcut, which let the operator change the item.)
-   - **Grant House Scrip** (Currency category) — new management-service **DB write** (UPSERT
-     currency row `id 1`), own form (Player + amount), offline guard.
+   - **Grant House Scrip** (Currency category) — ✅ DONE: management-service **DB write**.
+     New `POST /api/admin/grant-currency {flsId, currencyId, amount}` →
+     `postgres::grant_currency`. One transaction: resolve controller id from the FLS id
+     and `FOR UPDATE` the `player_state` row, refuse unless strictly offline (normalized
+     `lower(btrim(online_status)) = 'offline'`, fail-closed on NULL/Loading/etc.), then
+     UPSERT with **ADD** semantics (`balance = balance + EXCLUDED.balance`, never SET — the
+     player may already hold scrip). Server **whitelists `currency_id = 1`** (never touches
+     Bank Solari) and clamps `amount` to `[1, 1e9]`. Fails closed on unknown / ambiguous
+     (>1 row) FLS id. UI is a frontend-synthetic `CommandSpec` (`dbAction: "grant_currency"`,
+     `lockedFields {currencyId: 1}`, Player + Amount only) routed to `managementApi.grantCurrency`
+     instead of the MQ publish path. Reviewed via the QC + Stress sanity loop; validated
+     against the live offline character with a `BEGIN … ROLLBACK` test (1,000,000 + 1,000 →
+     1,001,000, nothing persisted). Residual: a player logging in during the resolve→commit
+     window — mitigated by strict-offline + operator coordination (no engine session hook).
    - **Award Intel** (**Progression** category, beside Award XP — operator preference; not
      Currency) — new management-service **DB write** (`actors.properties` `jsonb_set`),
      offline guard + incident-blob caution.
