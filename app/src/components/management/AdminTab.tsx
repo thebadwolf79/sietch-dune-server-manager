@@ -224,12 +224,44 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
     }
   }, [selected, doPublish]);
 
+  // Quick grant: Solari is an in-game ITEM (`solari` / SolarisCoin), not a
+  // currency row, so it rides the existing AddItemToInventory MQ command. This
+  // dedicated button selects that command with ItemName pre-filled so nobody has
+  // to scroll the item list to find it; the operator just picks a player +
+  // quantity and publishes. We set appliedRef so the (selected)-change effect
+  // treats this as already-applied and doesn't reset the pre-filled ItemName.
+  const grantSolari = useCallback(() => {
+    const spec = commands.find((c) => c.id === "AddItemToInventory");
+    if (!spec) return;
+    setSelected(spec);
+    setValues({ ...applyDefaults(spec), ItemName: "solari" });
+    appliedRef.current = { selectedId: spec.id, prefillFp: null };
+    setResult(null);
+  }, [commands]);
+
   return (
     <Flex mt="3" gap="3" align="stretch" wrap="wrap">
       <Box style={{ flex: "0 0 240px", minWidth: 0 }}>
         <Text size="2" weight="medium">
           Commands
         </Text>
+        <Box mt="2">
+          <Text size="1" color="gray" style={{ textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Quick grants
+          </Text>
+          <Flex direction="column" gap="1" mt="1">
+            <Button
+              size="1"
+              variant="surface"
+              onClick={grantSolari}
+              disabled={!commands.some((c) => c.id === "AddItemToInventory")}
+              style={{ justifyContent: "flex-start" }}
+              title="Pre-fills Grant item with the Solari item — pick a player + amount, then Publish"
+            >
+              Grant Solari
+            </Button>
+          </Flex>
+        </Box>
         {CATEGORY_ORDER.map((cat) => {
           const specs = grouped[cat];
           if (!specs || specs.length === 0) return null;
