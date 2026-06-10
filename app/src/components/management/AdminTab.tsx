@@ -105,7 +105,30 @@ function withSyntheticGrants(list: CommandSpec[]): CommandSpec[] {
     dbAction: "grant_currency",
     lockedFields: { currencyId: 1 },
   };
-  return [...list, solari, houseScrip];
+  // Intel ("Tech Knowledge points") is a single integer in the character actor's
+  // properties blob — its own DB write, placed under Progression beside Award XP.
+  const intel: CommandSpec = {
+    id: "AwardIntel",
+    label: "Award Intel",
+    category: "progression",
+    needsPlayer: true,
+    allowAllPlayers: false,
+    describe:
+      "Add Intel (Tech Knowledge points) to a player's character. Direct database write — the player must be offline (the server overwrites edits on logout). The amount is added to the current total.",
+    fields: [
+      ...(playerField ? [playerField] : []),
+      {
+        key: "Amount",
+        label: "Amount",
+        kind: "int",
+        required: true,
+        default: 10,
+        helper: "Tech Knowledge points to add to the current total",
+      },
+    ],
+    dbAction: "award_intel",
+  };
+  return [...list, solari, houseScrip, intel];
 }
 
 const CLIENT_DEFAULTS: Record<string, unknown> = {
@@ -265,6 +288,11 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
         const currencyId = Number((selected.lockedFields?.currencyId as number | undefined) ?? 1);
         const amount = Number(values.Amount);
         out = await managementApi.grantCurrency(tunnelId, flsId, currencyId, amount);
+      } else if (selected.dbAction === "award_intel") {
+        // DB-grant path: single-leaf jsonb_set on the character actor.
+        const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
+        const amount = Number(values.Amount);
+        out = await managementApi.awardIntel(tunnelId, flsId, amount);
       } else {
         const publishId = selected.publishAs ?? selected.id;
         const payload = { ...values, ...(selected.lockedFields ?? {}) };

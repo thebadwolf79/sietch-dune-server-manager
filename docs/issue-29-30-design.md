@@ -38,6 +38,10 @@ the investigation + design so the build is de-risked and actionable.
     the **character actor id**, not `player_controller_id`). Granted today via a targeted
     `jsonb_set` (offline). **No engine command exists** — `AwardIntel` is only a *draft*
     (for `Icehunter/dune-admin`), so the engine path is unavailable until Funcom adds a handler.
+    **✅ IMPLEMENTED (slice 3)** — see below. Live structure verified 2026-06-10: the
+    character actor id = `player_state.player_pawn_id` (the `BP_DunePlayerCharacter_C` pawn;
+    the `BP_DunePlayerController_C` actor does **not** hold the component); `m_TechKnowledgePoints`
+    is a JSON number; the component also holds a large `m_TechKnowledge` unlocked-items array.
 
 ### Design
 1. **Backend — two write paths** (both offline, via the existing Postgres layer):
@@ -73,8 +77,21 @@ the investigation + design so the build is de-risked and actionable.
      1,001,000, nothing persisted). Residual: a player logging in during the resolve→commit
      window — mitigated by strict-offline + operator coordination (no engine session hook).
    - **Award Intel** (**Progression** category, beside Award XP — operator preference; not
-     Currency) — new management-service **DB write** (`actors.properties` `jsonb_set`),
-     offline guard + incident-blob caution.
+     Currency) — ✅ DONE: management-service **DB write**. New `POST /api/admin/award-intel
+     {flsId, amount}` → `postgres::grant_intel`. One transaction: resolve `player_pawn_id` +
+     online from the FLS id and `FOR UPDATE` the `player_state` row, refuse unless strictly
+     offline, then a **single-leaf** `jsonb_set` on `{TechKnowledgePlayerComponent,
+     m_TechKnowledgePoints}` with **ADD** semantics. Guards (fail closed on 0 rows): exact
+     `BP_DunePlayerCharacter_C` class match, leaf exists AND `jsonb_typeof = 'number'`,
+     `create_missing = false`; NULL pawn handled. Amount clamped `[1, 1e6]`. The path is a
+     fixed SQL literal (never built from input) and the blob is **never round-tripped** — the
+     incident lesson. UI is a synthetic `CommandSpec` (`dbAction: "award_intel"`, Player +
+     Amount) under Progression, routed to `managementApi.awardIntel`. Reviewed via QC + Stress;
+     validated on the live offline character with a `BEGIN … ROLLBACK` test that fingerprinted
+     the rest of the blob (md5 of everything outside the component AND the component minus the
+     leaf were **byte-identical** before/after; points 60 → 70; nothing persisted). Residual:
+     verify in-game on first real grant that the engine honors a pawn-only write (we verify the
+     DB via RETURNING; the engine-honor path has no public confirmation).
    - **Architecture note:** the AdminTab command list is MQ-publish only. Solari now rides it
      via the `publishAs`/`lockedFields` synthetic-command mechanism. House Scrip + Award Intel
      are **not** MQ commands → new management-service endpoints + a "DB grant" command kind that

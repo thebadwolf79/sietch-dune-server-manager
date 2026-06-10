@@ -120,10 +120,11 @@ export type CommandSpec = {
   /**
    * "DB grant" commands write directly to the game database through a dedicated
    * management-service endpoint instead of publishing an engine MQ command.
-   * `grant_currency` UPSERTs dune.player_virtual_currency_balances (House Scrip);
-   * the target currencyId rides in `lockedFields`.
+   * - `grant_currency` UPSERTs dune.player_virtual_currency_balances (House Scrip);
+   *   the target currencyId rides in `lockedFields`.
+   * - `award_intel` jsonb_sets the Tech Knowledge points leaf on the character actor.
    */
-  dbAction?: "grant_currency";
+  dbAction?: "grant_currency" | "award_intel";
 };
 
 export type ItemDto = {

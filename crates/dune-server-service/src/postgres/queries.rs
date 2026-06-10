@@ -477,6 +477,120 @@ pub async fn grant_currency(
     }))
 }
 
+// Intel ("Tech Knowledge points") is NOT a currency row. It's a single integer
+// inside the player blob: dune.actors.properties (jsonb) at
+// {TechKnowledgePlayerComponent, m_TechKnowledgePoints}, on the CHARACTER actor
+// (class BP_DunePlayerCharacter_C, id = player_state.player_pawn_id). The same
+// component also holds a large m_TechKnowledge unlocked-items array.
+//
+// INCIDENT LESSON: never round-trip / restructure that blob. We resolve the pawn
+// id + online status (locking player_state), then do ONE server-side jsonb_set on
+// exactly that 2-element path — the rest of properties is untouched.
+const INTEL_RESOLVE_SQL: &str = "
+SELECT ps.player_pawn_id,
+       lower(btrim(COALESCE(ps.online_status::text, ''))) AS online_norm
+FROM dune.player_state ps
+JOIN dune.encrypted_accounts enc ON enc.id = ps.account_id
+WHERE enc.\"user\"::text = $1
+FOR UPDATE OF ps
+";
+
+// Single-leaf, ADD semantics. Guards (fail closed on 0 rows):
+//  - id is the resolved pawn,
+//  - class is EXACTLY the player-character class (no subclass/test-actor match),
+//  - the leaf exists AND is a JSON number (so ::bigint can't be fed garbage; a
+//    non-number leaf yields 0 rows rather than a corrupting write).
+// `create_missing` is false — we never invent the path. The path is a fixed
+// literal here, never built from input.
+const INTEL_UPDATE_SQL: &str = "
+UPDATE dune.actors
+SET properties = jsonb_set(
+        properties,
+        '{TechKnowledgePlayerComponent,m_TechKnowledgePoints}',
+        to_jsonb(
+            (properties #>> '{TechKnowledgePlayerComponent,m_TechKnowledgePoints}')::int8 + $2::int8
+        ),
+        false
+    )
+WHERE id = $1::int8
+  AND class = '/Game/Dune/Characters/Player/BP_DunePlayerCharacter.BP_DunePlayerCharacter_C'
+  AND jsonb_typeof(properties #> '{TechKnowledgePlayerComponent,m_TechKnowledgePoints}') = 'number'
+RETURNING (properties #>> '{TechKnowledgePlayerComponent,m_TechKnowledgePoints}')::int8 AS new_points
+";
+
+/// Outcome of an Intel grant. Non-`Granted` variants are expected, recoverable
+/// states the handler turns into clear messages; `Err` is reserved for DB faults.
+pub enum IntelGrantResult {
+    Granted { new_points: i64 },
+    PlayerNotFound,
+    Ambiguous,
+    PlayerOnline(String),
+    /// Pawn id was NULL, or the UPDATE matched 0 rows (wrong class / missing or
+    /// non-numeric TechKnowledge leaf). We refuse rather than create/guess.
+    CharacterActorMissing,
+}
+
+/// Award Intel (Tech Knowledge points) to a player's character via a guarded
+/// offline single-leaf jsonb_set. No engine command exists for Intel.
+///
+/// Safety (verified live; reviewed by QC + Stress):
+/// - one transaction: resolve + `FOR UPDATE` the player_state row, then jsonb_set;
+/// - refuses unless strictly offline (engine overwrites DB edits on logout);
+/// - touches ONLY the m_TechKnowledgePoints leaf — the rest of the blob
+///   (incl. the unlocked-tech array) is left intact (the incident lesson);
+/// - fails closed on unknown / ambiguous FLS id, NULL pawn, wrong actor class,
+///   or a missing/non-numeric leaf.
+///
+/// Caller (HTTP handler) clamps `amount`. NOTE: this verifies the DB write via
+/// RETURNING; whether the engine honors a pawn-only write is confirmed in-game on
+/// first real use.
+pub async fn grant_intel(
+    pg: &PgClient,
+    namespace: &str,
+    fls_id: &str,
+    amount: i64,
+) -> Result<IntelGrantResult> {
+    let mut state = pg.dedicated_client(namespace).await?;
+    let tx = state
+        .client_mut()
+        .transaction()
+        .await
+        .context("starting intel grant transaction")?;
+
+    let rows = tx
+        .query(INTEL_RESOLVE_SQL, &[&fls_id])
+        .await
+        .context("resolving player for intel grant")?;
+    if rows.is_empty() {
+        return Ok(IntelGrantResult::PlayerNotFound);
+    }
+    if rows.len() > 1 {
+        return Ok(IntelGrantResult::Ambiguous);
+    }
+
+    let row = &rows[0];
+    let pawn_id: Option<i64> = row.try_get(0).ok().flatten();
+    let online_norm: String = row.try_get(1).unwrap_or_default();
+    if online_norm != "offline" {
+        return Ok(IntelGrantResult::PlayerOnline(online_norm));
+    }
+    let Some(pawn_id) = pawn_id else {
+        return Ok(IntelGrantResult::CharacterActorMissing);
+    };
+
+    let updated = tx
+        .query_opt(INTEL_UPDATE_SQL, &[&pawn_id, &amount])
+        .await
+        .context("applying intel jsonb_set")?;
+    let Some(updated) = updated else {
+        return Ok(IntelGrantResult::CharacterActorMissing);
+    };
+    let new_points: i64 = updated.try_get(0).context("reading new tech points")?;
+
+    tx.commit().await.context("committing intel grant")?;
+    Ok(IntelGrantResult::Granted { new_points })
+}
+
 pub async fn resolve_chat_player(
     pg: &PgClient,
     namespace: &str,

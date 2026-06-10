@@ -109,4 +109,8 @@ export const managementApi = {
   // currencyId is whitelisted server-side (only House Scrip = 1 is accepted).
   grantCurrency: (tunnelId: string, flsId: string, currencyId: number, amount: number) =>
     invoke<PublishResultDto>("ms_grant_currency", { tunnelId, flsId, currencyId, amount }),
+  // DB-grant path: single-leaf jsonb_set of Tech Knowledge points on the character
+  // actor. Player must be offline.
+  awardIntel: (tunnelId: string, flsId: string, amount: number) =>
+    invoke<PublishResultDto>("ms_award_intel", { tunnelId, flsId, amount }),
 };

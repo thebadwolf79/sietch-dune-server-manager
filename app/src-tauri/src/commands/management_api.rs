@@ -484,6 +484,27 @@ pub async fn ms_grant_currency(
     .await
 }
 
+/// Award Intel (Tech Knowledge points) via the management service's guarded
+/// offline single-leaf jsonb_set on the player's character actor.
+#[tauri::command]
+pub async fn ms_award_intel(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    fls_id: String,
+    amount: i64,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    post_json(
+        &client,
+        port,
+        "/api/admin/award-intel",
+        &serde_json::json!({ "flsId": fls_id, "amount": amount }),
+    )
+    .await
+}
+
 fn search_path(base: &str, q: Option<&str>, limit: Option<u32>) -> String {
     let mut out = base.to_string();
     let mut sep = '?';
