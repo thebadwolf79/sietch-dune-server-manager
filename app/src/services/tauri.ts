@@ -15,6 +15,7 @@ import type {
   RemoteServerStatus,
 } from "../types/server";
 import type { CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus } from "../types/tunnel";
+import type { HostReadiness, SystemState } from "../types/vm";
 
 type RemoteActionRequest = {
   serverType: RemoteServerKind;
@@ -85,6 +86,25 @@ export async function updateRemoteBattlegroup(request: RemoteActionRequest): Pro
 
 export async function restartRemoteBattlegroup(request: RemoteActionRequest): Promise<RemoteServerStatus> {
   return invoke<RemoteServerStatus>("restart_remote_battlegroup", { request });
+}
+
+// --- Hyper-V VM power management (issue #28; host-only) ---
+
+/// Reports whether this machine can manage the Hyper-V VM (connect-only vs power-capable).
+export async function vmHostReadiness(): Promise<HostReadiness> {
+  return invoke<HostReadiness>("vm_host_readiness");
+}
+
+export async function vmGetState(vmName: string): Promise<SystemState> {
+  return invoke<SystemState>("vm_get_state", { vmName });
+}
+
+export async function vmStart(vmName: string): Promise<SystemState> {
+  return invoke<SystemState>("vm_start", { vmName });
+}
+
+export async function vmStop(vmName: string): Promise<SystemState> {
+  return invoke<SystemState>("vm_stop", { vmName });
 }
 
 export async function startServerTunnel(request: ServerTunnelStartRequest): Promise<ServerTunnelStatus> {
