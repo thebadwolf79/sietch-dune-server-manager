@@ -20,18 +20,29 @@ the investigation + design so the build is de-risked and actionable.
   **guarded offline DB write**. There *is* DB-write precedent in
   `crates/dune-server-service/src/postgres/queries.rs` (`INSERT INTO dune.items …`),
   so the Postgres write capability already exists to build on.
-- **Correction (operator, 2026-06-10):** **Solari is already grantable via
-  `AddItemToInventory`** — it's in the item list as `solari` (`SolarisCoin`). So on-hand
-  Solari is covered by the existing item grant and needs no currency path. **House Scrip
-  and Intel are NOT in the item list** — they are the real targets for a currency grant.
-- Currency-row ids (`player_virtual_currency_balances`): `0` = Solari (bank balance),
-  `1` = House Scrip; **Intel is also a currency** (id TBD — the earlier "2-5 unused" was
-  wrong; Intel occupies one of them). Map Intel's id empirically before writing.
+- **Three distinct spendables, three distinct mechanisms** (operator notes +
+  `dune-awakening-server/UPSTREAM-ISSUE-DRAFT.md`):
+  - **Solari (on-hand)** — an **item** (`solari` / `SolarisCoin`); already grantable via
+    `AddItemToInventory`. No currency path; don't duplicate it.
+  - **House Scrip** — a real currency row in `dune.player_virtual_currency_balances`
+    (`currency_id 1`, keyed by `player_controller_id`). Bank Solari = `currency_id 0`,
+    same table. Offline DB write (UPSERT).
+  - **Intel ("Tech Knowledge points")** — **not** a currency row. Stored in
+    `dune.actors.properties` (JSONB) at `TechKnowledgePlayerComponent.m_TechKnowledgePoints`
+    (integer), on the **character actor** (`BP_DunePlayerCharacter_C`, by class — keyed by
+    the **character actor id**, not `player_controller_id`). Granted today via a targeted
+    `jsonb_set` (offline). **No engine command exists** — `AwardIntel` is only a *draft*
+    (for `Icehunter/dune-admin`), so the engine path is unavailable until Funcom adds a handler.
 
 ### Design
-1. **Backend:** a `grant_currency` flow that writes
-   `dune.player_virtual_currency_balances` (key: `player_controller_id`, `currency_id`)
-   via the existing Postgres path — UPSERT the balance for the chosen currency.
+1. **Backend — two write paths** (both offline, via the existing Postgres layer):
+   - *House Scrip / bank Solari:* UPSERT `dune.player_virtual_currency_balances`
+     (key `player_controller_id` + `currency_id`).
+   - *Intel:* targeted `jsonb_set(properties, '{TechKnowledgePlayerComponent,
+     m_TechKnowledgePoints}', <amount>)` on `dune.actors` for the player's **character
+     actor id**. This touches the `actors.properties` blob, so apply the §3.5 guardrails:
+     single-integer set only, never round-trip/restructure the blob (the incident lesson),
+     verify the actor id, player offline.
 2. **Online-state guard (required):** the server overwrites DB edits on logout, so the
    write must refuse while the player is online. Reuse the player-presence read in
    `admin/players.rs` (the same source as `ms_player_location` / `ms_search_players`)
@@ -40,10 +51,10 @@ the investigation + design so the build is de-risked and actionable.
    the currencies that *aren't* items (**House Scrip**, **Intel**, and optionally **bank
    Solari**), player picker, amount, online guard surfaced. On-hand Solari stays on the
    item-grant path (already works), so don't duplicate it.
-4. **Pre-flight (live server):** (a) **map Intel's `currency_id`** (and re-confirm House
-   Scrip = 1) with the "set ids to 1M/2M/… and read back in-game" fingerprint trick;
-   (b) confirm there's no engine currency command — if Funcom shipped one, prefer it
-   (engine-validated) over the DB write.
+4. **Pre-flight (live server):** re-confirm House Scrip = `currency_id 1` (fingerprint
+   trick) and resolve the Intel **character actor id** (not the controller id). Intel's
+   storage + `jsonb_set` path are already verified in `UPSTREAM-ISSUE-DRAFT.md`. If Funcom
+   ever ships an `AwardIntel`/currency engine command, prefer it over the DB writes.
 
 ### Why not this session
 The DB write can't be safely end-to-end verified without a live DB + an offline test
