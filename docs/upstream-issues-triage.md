@@ -8,6 +8,15 @@
 > "Hi, I'm Claude, Adain asked me to reply on his behalf. Banana!"). Several issues are
 > already partly shipped — coordinate before duplicating.
 
+> **Refresh 2026-06-10:** re-pulled all open issues + comments. **No new issues** since the
+> 2026-06-08 snapshot — still 11 open (#7, #10, #14, #16, #18, #21, #22, #23, #24, #25, #26).
+> New activity: **#23** got a 3rd recurrence comment (2026-06-09) confirming the OOM is
+> *intermittent/non-deterministic*, not strictly scheduled-vs-manual. Cross-fork survey added
+> below. The game's **1.4.5.0** self-hosted update (2026-06-10) also landed — its native
+> `change-battlegroup-ip`, per-map "Minimum Servers", and `enable-experimental-swap` features
+> intersect several issues here; see [§1.4.5.0 implications](#1450-self-hosted-update-implications)
+> and the companion doc `dune-awakening-server/PATCH-1.4.x-SELF-HOSTED.md`.
+
 ---
 
 ## Clusters / recurring themes
@@ -85,6 +94,22 @@ These tie multiple issues together — fixing the root theme knocks out several 
   one-off. Still distinct from our instant exit-1, and we still can't reproduce the OOM —
   but it strengthens the case that the dump pod's memory limit is genuinely too low on
   some installs (theme **C** / §2.1).
+- **Update (2026-06-09):** 3rd report — "found **no real pattern**": worked 2 days clean,
+  then a scheduled run failed, an immediate **manual retry also OOM'd**, and ~an hour later a
+  manual run on the same host (0 players, no server-side change) succeeded. So it's
+  **intermittent/non-deterministic, not strictly scheduled-vs-manual** — manual sometimes
+  OOMs too. From the pod describe in the issue body: the dump container ran **~24 min**
+  (05:07:20→05:31:28) before `OOMKilled` (exit 137), while `dumpdb.py` has only a 600 s
+  internal timeout — i.e. it's **memory growth**, not the timeout, that kills it, and the
+  available headroom at dump time varies with whatever else the k3s node is holding.
+- **New angle via 1.4.5.0:** this is the same RAM-pressure class the game's 1.4.5.0 update
+  now gives levers for: **`enable-experimental-swap`** (documented escape hatch for <20 GB
+  VMs) and **per-map "Minimum Servers"** (fewer warm game-server pods → more node headroom
+  for the dump pod). Concrete suggestion to add to the thread (we still can't repro): have
+  the reporter (a) check VM RAM vs. number of warm maps, (b) try reducing Minimum Servers on
+  unused maps, and/or (c) enable experimental swap — alongside the vendor-side fix of raising
+  the dump pod's memory limit / stream-compressing. This turns "can't repro" into an
+  actionable, data-gathering reply.
 
 ### #22 — [Feature] Auto-refresh the Battlegroup info panel — **OPEN**
 - Wants the BG info/status panel to auto-refresh like the players list does.
@@ -103,6 +128,14 @@ These tie multiple issues together — fixing the root theme knocks out several 
 ### #18 — Game Server Update doesn't appear to work — **OPEN (owner says fixed in v0.3.15)**
 - Owner: faulty "already applied" guard; fixed in v0.3.15. **Action:** confirm with
   reporter / likely close. No code work expected.
+- **Full root cause (owner comment, 2026-06-04):** the "already applied" guard compared the
+  live build against a version file that only gets **rewritten later in the same run** — so on
+  a fresh update both sides looked equal, the pending update was cleared, and the manager
+  flipped back to "up to date" *without downloading or restarting*. It then re-detected the
+  update ~15 min later and looped. v0.3.15 only marks an update applied once the Steam download
+  has genuinely advanced **and** the BG is live on the new build. **Note:** the fix is in the
+  **host service**, so users must push it via the **Management Service card → Install/Update**,
+  not just update the desktop app. Reporter (TempestWales) hasn't confirmed yet — nudge to close.
 
 ### #16 — [Feature] Grant Specialization XP (Combat/Crafting/Gathering/Exploration/Sabotage) — **OPEN**
 - Grant XP/levels per specialization (great for onboarding players from public servers).
@@ -137,6 +170,14 @@ These tie multiple issues together — fixing the root theme knocks out several 
   non-`dune` table → `pg_dump` permission-denied** cause (our finding) and the
   cleanup-race that makes the op NotFound. Good place to contribute our §2.3 analysis.
 - **Effort:** medium (error-surfacing) + the §2.3 dump hardening.
+- **Onboarding-friction note (reporter comment):** SkyDrift couldn't run the suggested
+  `kubectl describe` because `hvc ssh dune-awakening` rejected the password; they only got in
+  after discovering `ssh -i <privatekey> dune@<ip>`. Two takeaways: (1) the "run kubectl
+  describe yourself" guidance assumes SSH access many Windows users haven't set up — another
+  reason to **surface the dump pod logs in-app** rather than punting to the CLI; (2) worth a
+  one-line doc/snippet giving the exact `ssh -i %LOCALAPPDATA%\DuneAwakeningServer\sshKey
+  dune@<ip>` command. (1.4.5.0's stock tool now also exposes `shell-vm`/`shell-pod` menu
+  entries that wrap this — see §1.4.5.0 implications.)
 
 ---
 
@@ -152,3 +193,42 @@ These tie multiple issues together — fixing the root theme knocks out several 
 8. **#26** — read-only **feasibility check** first: is the Landsraad goal even server-tunable?
    Only commit to building once we know where (if anywhere) the threshold lives. Could seed a
    "server settings editor" if it pans out; otherwise close with an explanation.
+
+---
+
+## Cross-fork survey (2026-06-10)
+
+`adainrivers/dune-dedicated-server-manager` has **7 forks**. Surveyed all active ones for
+reachable work we could reuse. **Bottom line: no fork is fixing the open issues — the
+contribution lane is clear for us.** Two forks have packaging prior-art worth knowing:
+
+| Fork | Activity | Useful to us? |
+|---|---|---|
+| **bsmr/**`adainrivers---dune-dedicated-server-manager` | Source of merged upstream **PR #4** — Linux/Fedora **WebKitGTK DMABuf Wayland startup-crash fix** (`WEBKIT_DISABLE_DMABUF_RENDERER=1`, already in upstream). | Reference only; already merged. |
+| **Mhynlo/**`dune-dedicated-server-manager` | **PR #2 (closed, unmerged)** — **Linux AppImage build**: Dockerfile (Ubuntu 26.04), `tauri.linux.conf.json`, keyring feature `linux-native-sync-persistent`, docs. Blocked because **the backend is PowerShell-only** ("need to support backend calls that are not based on PowerShell"). | **Yes, as prior art** if we ever pursue Linux/cross-platform — both the starting point *and* the known blocker (abstract the PS backend). |
+| **drkshrk/**`dune-dedicated-server-manager` | Filed #21/#22/#25 but the fork's **4 open PRs are all Dependabot bumps** (vite, openssl, esbuild, tar) — **no feature work**. | No. |
+| **thebadwolf79/**… | Ours. | — |
+
+**Upstream PR history is thin:** only **#4 merged** (bsmr Wayland fix); **#2 closed unmerged**
+(Mhynlo Linux AppImage). So our planned **#24 PR** (battlegroup-update exit-code) would be only
+the 3rd external PR and the first bug-fix contribution — good rapport opportunity, low collision risk.
+
+---
+
+## 1.4.5.0 self-hosted-update implications {#1450-self-hosted-update-implications}
+
+The game's **1.4.5.0** self-hosted update (2026-06-10) shipped native features that overlap
+several issues here. Detail + the Steam-tooling file analysis is in
+`dune-awakening-server/PATCH-1.4.x-SELF-HOSTED.md`; manager-relevant points:
+
+- **#23 (OOM):** 1.4.5.0 adds **`enable-experimental-swap`** and persistent per-map
+  **"Minimum Servers"** — the manager could expose both as the in-UI OOM mitigation (see #23).
+- **New `change-battlegroup-ip` / `change-vm-ip` commands** now manage the broadcast/VM IP
+  natively (logic moved inside the VM). If the manager scripts any IP reconciliation, re-check
+  it against these so we don't fight the VM-side auto-refresh.
+- **"Proper polling for Start/Stop"** (patch note) lives in the **VM-side `battlegroup` binary**,
+  not the host launcher. Worth **re-validating our Stop/Start/Restart wrapper-status fix
+  (`663ea27`) and the #24 exit-code handling against 1.4.5.0 output** — the status text/exit
+  semantics may have changed, which could either simplify our handling or break the status regex.
+- **`shell-vm` / `shell-pod`** menu entries in the stock tool now wrap SSH-into-VM/pod — relevant
+  to the #7 onboarding-friction note (users no longer need to hand-craft the `ssh -i` command).
