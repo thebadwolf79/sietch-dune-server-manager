@@ -194,6 +194,10 @@ pub struct RemoteServerRecord {
 /// Only meaningful when the manager runs *on* the Hyper-V host. In remote
 /// (connect-only) mode the VM-level variants are not produced — see
 /// `HostPermissionUnavailable`.
+// The Battlegroup* variants are part of the architect's full lifecycle model but
+// are not constructed until the battlegroup-status -> SystemState integration
+// (next increment), so allow dead_code on the enum until then.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", content = "data", rename_all = "camelCase")]
 pub enum SystemState {
@@ -221,6 +225,10 @@ pub enum SystemState {
     BattlegroupStopping { step: String },
 }
 
+// `can_start_vm` / `battlegroup_actions_enabled` are gating helpers exercised by
+// the unit tests and consumed by the UI via the serialized state; allow dead_code
+// until a Rust caller (e.g. a start guard) uses them directly.
+#[allow(dead_code)]
 impl SystemState {
     /// Maps a Hyper-V `VMState` string (from `(Get-VM).State.ToString()`) to the
     /// corresponding VM-level `SystemState`. Unrecognized states map to `Unknown`
