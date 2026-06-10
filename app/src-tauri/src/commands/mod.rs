@@ -12,6 +12,7 @@ mod status_helpers;
 mod status_naming;
 mod tunnel;
 mod tunnel_helpers;
+mod vm;
 
 pub use battlegroup::{
     restart_remote_battlegroup, start_remote_battlegroup, stop_remote_battlegroup,
@@ -37,3 +38,4 @@ pub use tunnel::{
     server_tunnel_status, start_custom_tunnel, start_server_tunnel, stop_all_tunnels,
     stop_server_tunnel,
 };
+pub use vm::{vm_get_state, vm_start, vm_stop};
