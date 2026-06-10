@@ -11,6 +11,7 @@ import {
 import ActionButton from "../ui/ActionButton";
 import Metric from "../ui/Metric";
 import ServerStatsTable from "./ServerStatsTable";
+import VmPowerControls from "./VmPowerControls";
 import ServerTunnelControls from "./ServerTunnelControls";
 import CustomTunnelControls from "./CustomTunnelControls";
 import ManagementServiceCard from "../management/ManagementServiceCard";
@@ -94,6 +95,8 @@ export default function ServerDashboard({
       ) : null}
 
       {statusError ? <div className="server-error">{statusError}</div> : null}
+
+      <VmPowerControls />
 
       <div className="action-row">
         {battlegroupStopped || !liveStatus ? (
