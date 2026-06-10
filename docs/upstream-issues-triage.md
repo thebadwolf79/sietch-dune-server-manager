@@ -232,3 +232,39 @@ several issues here. Detail + the Steam-tooling file analysis is in
   semantics may have changed, which could either simplify our handling or break the status regex.
 - **`shell-vm` / `shell-pod`** menu entries in the stock tool now wrap SSH-into-VM/pod — relevant
   to the #7 onboarding-friction note (users no longer need to hand-craft the `ssh -i` command).
+
+---
+
+## Community-sourced self-hosted findings (Steam, 2026-06-10)
+
+Scanned the Steam discussions/guides for `app/1172710`. Most results are noise (GMod, etc.);
+the signal is a community guide ([*Dune: Awakening Self-Hosted Server Setup Guide*](https://steamcommunity.com/sharedfiles/filedetails/?id=3732452392)
+by frograven) plus its comments. Useful, tool-relevant items:
+
+- **Concrete port-forward spec (community-confirmed):** **UDP 7777–7810** (game servers) and
+  **TCP 31982** (RMQ) → forward to the **VM IP**, not the Windows host. Symptom when missing:
+  "server is Healthy in the CLI but doesn't appear in the in-game browser." → supports the
+  **self-host connectivity/health panel** (review item C-12): the tool could show which ports
+  must be open and test reachability.
+- **#1 setup failure = Hyper-V switch is *Internal* not *External* → no DHCP lease**
+  (`udhcpc: failed to get a DHCP lease`, "Could not determine VM IP after 120s"). Fix is to flip
+  the switch to External + share the host NIC. **DHCP reservation** on the router is the
+  recommended way to get a stable VM IP — *not* a static IP inside Windows/Linux. This validates
+  our 1.4.5.0 alignment direction (move off internal-NAT-static toward external + DHCP reservation).
+- **"Settings don't apply after restart"** — multiple users (starrborrn, Zaramoth) changed
+  sandstorm/sandworm ini settings, restarted, and saw no effect. Likely editing the wrong
+  file/world or a change that needs a full world restart/regeneration. → reinforces our note
+  that some values must also be mirrored client-side, and is a candidate **tool feature**: write
+  to the authoritative config and show "applies live" vs "applies next restart."
+- **PTC-vs-Live client confusion** — the self-hosted server tool only appears in Steam with the
+  *Tools* filter enabled, and players must connect with the **Live** client, not the PTC. Several
+  "server healthy but not visible" reports trace to using the wrong client. → a one-line
+  precondition check / docs note.
+- **Transient setup errors seen in the wild (Funcom-side):** webhook TLS failure
+  (`failed calling webhook "mbattlegroup.kb.io" … x509: certificate signed by unknown authority`)
+  → "battlegroup failed to update … No resources found"; and `127.0.0.1:6443 refused` on `status`
+  (k3s API not up yet). Mostly transient/ordering — our startup script's k3s-API + webhook waits
+  already handle this class; worth surfacing as a "still initializing, retry" state rather than a
+  hard error in the tool.
+- **RAM guidance:** community recommends 20/30/40 GB VM presets; 40 GB can push a 64 GB host to
+  90%+ if also running the client — ties to the OOM (#23) / experimental-swap discussion.
