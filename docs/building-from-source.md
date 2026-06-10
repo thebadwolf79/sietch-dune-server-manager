@@ -76,3 +76,25 @@ npm run tauri -- build --bundles dmg
 
 The app manages already-provisioned servers only. Building from source does not
 add any server setup, provisioning, Hyper-V, or installer workflow to the app.
+
+## Local build note: bundled service binaries must exist
+
+`tauri.conf.json` declares three `bundle.resources` under `app/src-tauri/binaries/`:
+`dune-server-service` (Linux musl binary), `dune-server-service.service` (systemd
+unit), and `dune-server-service.openrc` (OpenRC init). With this Tauri version,
+`tauri-build`'s build script validates those paths on **every** `cargo build`/`cargo
+test` of the app crate — so an empty `binaries/` dir fails the build before any app
+source compiles (`resource path 'binaries\dune-server-service.service' doesn't exist`).
+
+For a local debug build/test you do **not** need the real musl binary — the three
+paths just have to exist. The two text files can be copied from the repo and the
+binary stubbed (all three are gitignored, so they stay local):
+
+```powershell
+$src = "crates\dune-server-service"; $dst = "app\src-tauri\binaries"
+Copy-Item "$src\systemd\dune-server-service.service" "$dst\dune-server-service.service" -Force
+Copy-Item "$src\openrc\dune-server-service"          "$dst\dune-server-service.openrc" -Force
+Set-Content "$dst\dune-server-service" "local debug placeholder" -NoNewline
+```
+
+For a real bundle, build the musl binary per `binaries/README.md` (cargo-zigbuild).
