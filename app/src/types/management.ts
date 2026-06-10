@@ -92,6 +92,7 @@ export type FieldSpec = {
 
 export type Category =
   | "items"
+  | "currency"
   | "movement"
   | "broadcast"
   | "progression"
@@ -108,6 +109,14 @@ export type CommandSpec = {
   allowAllPlayers: boolean;
   describe: string;
   fields: FieldSpec[];
+  /**
+   * Frontend-synthetic grant commands present a dedicated locked form but publish
+   * through a real engine command. When set, publish uses `publishAs` as the
+   * ServerCommand id and merges `lockedFields` into the payload (e.g. Grant Solari
+   * publishes AddItemToInventory with ItemName locked to "solari").
+   */
+  publishAs?: string;
+  lockedFields?: Record<string, unknown>;
 };
 
 export type ItemDto = {

@@ -47,19 +47,22 @@ the investigation + design so the build is de-risked and actionable.
    write must refuse while the player is online. Reuse the player-presence read in
    `admin/players.rs` (the same source as `ms_player_location` / `ms_search_players`)
    to check, and return a clear "player must be offline" error otherwise.
-3. **UI — dedicated Admin-tab buttons (operator preference), modeled on the existing
-   "water" command (`UpdateAllWaterFillables`):** give each spendable its **own** button so
-   nobody has to scroll the `AddItemToInventory` list to find Solari. Three buttons, each
-   with a player picker + amount:
-   - **Grant Solari** → reuses `AddItemToInventory` with `ItemName=solari` (the MQ publish
-     path) — exposed as a dedicated entry/prefill, not buried in the item list.
-   - **Grant House Scrip** → new management-service **DB write** (currency row, `id 1`).
-   - **Grant Intel** → new management-service **DB write** (`actors.properties` `jsonb_set`).
-   - **Architecture note:** the current AdminTab command list is **MQ-publish only**
-     (`managementApi.publish` → `CommandSpec`s in `specs.rs`). Solari fits that path; House
-     Scrip + Intel are **not** MQ commands, so they need new management-service endpoints +
-     a distinct "DB grant" button kind in AdminTab (don't shoehorn them into the publish
-     list). All three surface the offline-state guard for the DB-write ones.
+3. **UI — each spendable is its own dedicated, locked command (operator preference):**
+   - **Grant Solari** (Currency category) — ✅ DONE: a frontend-synthetic command with **no
+     ItemName field** (Player + Quantity only) that publishes `AddItemToInventory` with
+     `ItemName` locked to `solari` via the new `publishAs` + `lockedFields` on `CommandSpec`
+     (`withSyntheticGrants` in AdminTab). Reuses the MQ path; the item is unchangeable.
+     (Replaced the earlier prefill-shortcut, which let the operator change the item.)
+   - **Grant House Scrip** (Currency category) — new management-service **DB write** (UPSERT
+     currency row `id 1`), own form (Player + amount), offline guard.
+   - **Award Intel** (**Progression** category, beside Award XP — operator preference; not
+     Currency) — new management-service **DB write** (`actors.properties` `jsonb_set`),
+     offline guard + incident-blob caution.
+   - **Architecture note:** the AdminTab command list is MQ-publish only. Solari now rides it
+     via the `publishAs`/`lockedFields` synthetic-command mechanism. House Scrip + Award Intel
+     are **not** MQ commands → new management-service endpoints + a "DB grant" command kind that
+     routes there (don't shoehorn into the publish list). The "DB grant" kind can reuse the same
+     synthetic-spec shape (a `CommandSpec` with a `dbAction` marker instead of `publishAs`).
 4. **Pre-flight (live server):** re-confirm House Scrip = `currency_id 1` (fingerprint
    trick) and resolve the Intel **character actor id** (not the controller id). Intel's
    storage + `jsonb_set` path are already verified in `UPSTREAM-ISSUE-DRAFT.md`. If Funcom

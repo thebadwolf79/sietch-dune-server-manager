@@ -41,6 +41,7 @@ const CATEGORY_LABEL: Record<Category, string> = {
   progression: "Progression",
   movement: "Teleport & spawn",
   broadcast: "Broadcast",
+  currency: "Currency",
   journey: "Story journey",
   exec: "Server scripts",
 };
@@ -48,12 +49,36 @@ const CATEGORY_LABEL: Record<Category, string> = {
 const CATEGORY_ORDER: Category[] = [
   "broadcast",
   "items",
+  "currency",
   "player",
   "progression",
   "movement",
   "journey",
   "exec",
 ];
+
+// Frontend-synthetic grant commands: dedicated, locked forms that publish through a
+// real engine command. Solari is the in-game `solari` item (SolarisCoin), so it
+// publishes AddItemToInventory with ItemName locked — no item picker, ItemName fixed.
+// (House Scrip + Intel will join this "currency" category as DB-write grants.)
+function withSyntheticGrants(list: CommandSpec[]): CommandSpec[] {
+  const addItem = list.find((c) => c.id === "AddItemToInventory");
+  if (!addItem) return list;
+  const solari: CommandSpec = {
+    ...addItem,
+    id: "GrantSolari",
+    label: "Grant Solari",
+    category: "currency",
+    describe:
+      "Grant Solari to a player. Publishes the engine AddItemToInventory command with the Solari item locked in.",
+    // Hide ItemName (locked to solari) and Durability (meaningless for currency);
+    // both are injected at publish so the engine AddItemToInventory call stays valid.
+    fields: addItem.fields.filter((f) => f.key !== "ItemName" && f.key !== "Durability"),
+    publishAs: "AddItemToInventory",
+    lockedFields: { ItemName: "solari", Durability: 1.0 },
+  };
+  return [...list, solari];
+}
 
 const CLIENT_DEFAULTS: Record<string, unknown> = {
   Quantity: 1,
@@ -106,7 +131,7 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
   useEffect(() => {
     managementApi
       .listCommands(tunnelId)
-      .then(setCommands)
+      .then((list) => setCommands(withSyntheticGrants(list)))
       .catch((err) => setError(String(err)));
     void refreshHistory();
   }, [tunnelId, refreshHistory]);
@@ -205,7 +230,9 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
     setError(null);
     setResult(null);
     try {
-      const out = await managementApi.publish(tunnelId, selected.id, values);
+      const publishId = selected.publishAs ?? selected.id;
+      const payload = { ...values, ...(selected.lockedFields ?? {}) };
+      const out = await managementApi.publish(tunnelId, publishId, payload);
       setResult(out);
       await refreshHistory();
     } catch (err) {
@@ -224,44 +251,12 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
     }
   }, [selected, doPublish]);
 
-  // Quick grant: Solari is an in-game ITEM (`solari` / SolarisCoin), not a
-  // currency row, so it rides the existing AddItemToInventory MQ command. This
-  // dedicated button selects that command with ItemName pre-filled so nobody has
-  // to scroll the item list to find it; the operator just picks a player +
-  // quantity and publishes. We set appliedRef so the (selected)-change effect
-  // treats this as already-applied and doesn't reset the pre-filled ItemName.
-  const grantSolari = useCallback(() => {
-    const spec = commands.find((c) => c.id === "AddItemToInventory");
-    if (!spec) return;
-    setSelected(spec);
-    setValues({ ...applyDefaults(spec), ItemName: "solari" });
-    appliedRef.current = { selectedId: spec.id, prefillFp: null };
-    setResult(null);
-  }, [commands]);
-
   return (
     <Flex mt="3" gap="3" align="stretch" wrap="wrap">
       <Box style={{ flex: "0 0 240px", minWidth: 0 }}>
         <Text size="2" weight="medium">
           Commands
         </Text>
-        <Box mt="2">
-          <Text size="1" color="gray" style={{ textTransform: "uppercase", letterSpacing: 0.5 }}>
-            Quick grants
-          </Text>
-          <Flex direction="column" gap="1" mt="1">
-            <Button
-              size="1"
-              variant="surface"
-              onClick={grantSolari}
-              disabled={!commands.some((c) => c.id === "AddItemToInventory")}
-              style={{ justifyContent: "flex-start" }}
-              title="Pre-fills Grant item with the Solari item — pick a player + amount, then Publish"
-            >
-              Grant Solari
-            </Button>
-          </Flex>
-        </Box>
         {CATEGORY_ORDER.map((cat) => {
           const specs = grouped[cat];
           if (!specs || specs.length === 0) return null;
