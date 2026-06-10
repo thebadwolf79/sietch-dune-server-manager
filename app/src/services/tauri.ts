@@ -62,6 +62,26 @@ export async function detectRemoteUbuntuServers(
   return invoke<RemoteServerRecord[]>("detect_remote_ubuntu_servers", { request });
 }
 
+// Best-effort connection defaults for the local Funcom VM (host-only). Mirrors the
+// Rust VmConnectionDefaults (camelCase). Used to pre-fill the Add Remote Server dialog.
+export type VmConnectionDefaults = {
+  found: boolean;
+  host?: string | null;
+  user: string;
+  port: number;
+  keyPath?: string | null;
+  vmName?: string | null;
+  serverType: string;
+  confidence?: string | null;
+  note?: string | null;
+};
+
+// Auto-detect the running Funcom VM (IP) + the Funcom SSH key path to pre-fill the
+// add-server form. Never throws meaningfully — returns safe defaults when off-host.
+export async function detectLocalVmConnection(): Promise<VmConnectionDefaults> {
+  return invoke<VmConnectionDefaults>("detect_local_vm_connection");
+}
+
 export async function getRemoteServerStatus(request: RemoteActionRequest): Promise<RemoteServerStatus> {
   return invoke<RemoteServerStatus>("remote_server_status", { request });
 }

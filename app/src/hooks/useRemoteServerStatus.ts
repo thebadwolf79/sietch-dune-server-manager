@@ -44,7 +44,7 @@ export function useRemoteServerStatus({ appendLogRow, setRemoteServers }: UseRem
     const detected = await detectRemoteUbuntuServers({
       host: server.host,
       keyPath: server.keyPath,
-      serverType: "ubuntu",
+      serverType: "alpine",
       user: server.user || remoteServerDefaultUser(server.type),
       port: server.port,
     });

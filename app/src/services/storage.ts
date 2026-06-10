@@ -11,7 +11,7 @@ export function isRemoteServerRecord(value: unknown): value is RemoteServerRecor
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<RemoteServerRecord>;
   return (
-    record.type === "ubuntu" &&
+    (record.type === "ubuntu" || record.type === "alpine") &&
     typeof record.id === "string" &&
     typeof record.name === "string" &&
     typeof record.host === "string" &&

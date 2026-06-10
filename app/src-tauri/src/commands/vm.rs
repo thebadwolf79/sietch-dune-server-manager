@@ -12,8 +12,8 @@
 //! waits stream progress to the UI through [`TauriOperationSink`].
 
 use dune_manager_core::orchestration::{
-    wait_for_vm_ipv4, HostProvider, HostReadiness, HyperVVmLifecycleOrchestrator,
-    StrictPowerShellHyperV, VmProvider,
+    wait_for_vm_ipv4, DuneVmConfidence, DuneVmDetector, HostProvider, HostReadiness,
+    HyperVVmLifecycleOrchestrator, StrictPowerShellHyperV, VmProvider,
 };
 
 use crate::commands::shared::{command_error_message, runner_for_remote_kind};
@@ -169,4 +169,107 @@ pub async fn vm_stop(app: tauri::AppHandle, vm_name: String) -> Result<SystemSta
     })
     .await
     .map_err(|err| format!("vm_stop worker failed: {err}"))?
+}
+
+/// Best-effort connection defaults for the local Funcom VM, used to pre-fill the
+/// "Add Remote Server" dialog. Every field is advisory; the user can edit them.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VmConnectionDefaults {
+    /// True when a Dune VM was found on this host.
+    pub found: bool,
+    /// The VM's routable IPv4, when it is running and reports one.
+    pub host: Option<String>,
+    /// SSH user the vendor VM uses.
+    pub user: String,
+    /// Default SSH port.
+    pub port: u16,
+    /// Path to the Funcom-generated SSH key, when present on this machine.
+    pub key_path: Option<String>,
+    /// Detected VM name.
+    pub vm_name: Option<String>,
+    /// The Funcom self-hosted VM is Alpine.
+    pub server_type: String,
+    /// Detection confidence (high/medium/low) when a VM was found.
+    pub confidence: Option<String>,
+    /// Human-readable note (e.g. why host/key couldn't be auto-filled).
+    pub note: Option<String>,
+}
+
+/// Auto-detects the local Funcom VM + SSH key to pre-fill the add-server form.
+/// Assumes the operator has run Funcom's setup at least once (which creates the VM
+/// and the key at `%LOCALAPPDATA%\DuneAwakeningServer\sshKey`). Host-only and
+/// best-effort: it never errors the dialog — on a remote/no-Hyper-V machine it just
+/// returns the safe defaults (user `dune`, port 22) for manual entry.
+#[tauri::command]
+pub async fn detect_local_vm_connection() -> Result<VmConnectionDefaults, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        // SSH key at the vendor location — independent of Hyper-V availability.
+        let key_path = std::env::var("LOCALAPPDATA").ok().and_then(|base| {
+            let p = format!(r"{base}\DuneAwakeningServer\sshKey");
+            std::path::Path::new(&p).exists().then_some(p)
+        });
+
+        let mut defaults = VmConnectionDefaults {
+            found: false,
+            host: None,
+            user: "dune".to_string(),
+            port: 22,
+            key_path,
+            vm_name: None,
+            server_type: "alpine".to_string(),
+            confidence: None,
+            note: None,
+        };
+
+        match DuneVmDetector::new(StrictPowerShellHyperV::new()).detect() {
+            Ok(mut candidates) if !candidates.is_empty() => {
+                candidates.sort_by_key(|c| match c.confidence {
+                    DuneVmConfidence::High => 0,
+                    DuneVmConfidence::Medium => 1,
+                    DuneVmConfidence::Low => 2,
+                });
+                let top = &candidates[0];
+                defaults.found = true;
+                defaults.vm_name = Some(top.vm.name.clone());
+                defaults.confidence = Some(
+                    match top.confidence {
+                        DuneVmConfidence::High => "high",
+                        DuneVmConfidence::Medium => "medium",
+                        DuneVmConfidence::Low => "low",
+                    }
+                    .to_string(),
+                );
+                match top
+                    .vm
+                    .ipv4_addresses
+                    .iter()
+                    .find(|ip| !ip.starts_with("169.254.") && !ip.trim().is_empty())
+                {
+                    Some(ip) => defaults.host = Some(ip.clone()),
+                    None => {
+                        defaults.note = Some(format!(
+                            "Found VM '{}' but it has no IP yet — start it, then reopen this dialog.",
+                            top.vm.name
+                        ));
+                    }
+                }
+            }
+            Ok(_) => {
+                defaults.note = Some(
+                    "No Dune VM found on this host — enter the host details manually.".to_string(),
+                );
+            }
+            Err(_) => {
+                defaults.note = Some(
+                    "Hyper-V isn't available here (remote/connect-only) — enter details manually."
+                        .to_string(),
+                );
+            }
+        }
+
+        Ok(defaults)
+    })
+    .await
+    .map_err(|err| format!("detect_local_vm_connection worker failed: {err}"))?
 }

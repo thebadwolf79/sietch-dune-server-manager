@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
-import { checkRemoteSudo, detectRemoteUbuntuServers, type PreflightCheck } from "../services/tauri";
+import {
+  checkRemoteSudo,
+  detectLocalVmConnection,
+  detectRemoteUbuntuServers,
+  type PreflightCheck,
+} from "../services/tauri";
 import {
   mergeRemoteServers,
   persistRemoteServers,
@@ -80,7 +85,7 @@ export function useRemoteServers({ appendLogRow }: UseRemoteServersArgs) {
       const detected = await detectRemoteUbuntuServers({
         host,
         keyPath,
-        serverType: "ubuntu",
+        serverType: "alpine",
         user,
         port,
       });
@@ -124,6 +129,41 @@ export function useRemoteServers({ appendLogRow }: UseRemoteServersArgs) {
       void refreshRef.current(server);
     }
   }, [remoteServers.map((server) => server.id).join("|")]);
+
+  // When the Add Remote Server dialog opens, auto-detect the local Funcom VM and
+  // pre-fill empty fields (VM IP + SSH key path). Assumes the operator has run
+  // Funcom's setup at least once; on a remote/no-Hyper-V host this is a no-op and
+  // the user fills the fields manually. Only fills blanks, so re-opening never
+  // clobbers an edit in progress.
+  useEffect(() => {
+    if (!remoteAttachOpen) return;
+    let active = true;
+    void (async () => {
+      try {
+        const defaults = await detectLocalVmConnection();
+        if (!active) return;
+        setRemoteAttachForm((prev) => ({
+          host: prev.host || defaults.host || "",
+          user: prev.user || defaults.user || "dune",
+          keyPath: prev.keyPath || defaults.keyPath || "",
+          port: prev.port || defaults.port || 22,
+        }));
+        if (defaults.found) {
+          const where = defaults.host ? ` at ${defaults.host}` : "";
+          appendLogRow(
+            log.info("remote.attach", `Auto-detected VM ${defaults.vmName ?? ""}${where}.`.trim()),
+          );
+        } else if (defaults.note) {
+          appendLogRow(log.info("remote.attach", defaults.note));
+        }
+      } catch {
+        // best-effort; the user can still enter details manually
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [remoteAttachOpen]);
 
   return {
     remoteServers,
