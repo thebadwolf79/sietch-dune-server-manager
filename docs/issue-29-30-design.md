@@ -20,9 +20,13 @@ the investigation + design so the build is de-risked and actionable.
   **guarded offline DB write**. There *is* DB-write precedent in
   `crates/dune-server-service/src/postgres/queries.rs` (`INSERT INTO dune.items …`),
   so the Postgres write capability already exists to build on.
-- Empirically-mapped currency ids on this stack: `0` = Solari (bank balance),
-  `1` = House Scrip, `2–5` unused. (On-hand Solari is a separate `SolarisCoin` inventory
-  item, not a currency row.)
+- **Correction (operator, 2026-06-10):** **Solari is already grantable via
+  `AddItemToInventory`** — it's in the item list as `solari` (`SolarisCoin`). So on-hand
+  Solari is covered by the existing item grant and needs no currency path. **House Scrip
+  and Intel are NOT in the item list** — they are the real targets for a currency grant.
+- Currency-row ids (`player_virtual_currency_balances`): `0` = Solari (bank balance),
+  `1` = House Scrip; **Intel is also a currency** (id TBD — the earlier "2-5 unused" was
+  wrong; Intel occupies one of them). Map Intel's id empirically before writing.
 
 ### Design
 1. **Backend:** a `grant_currency` flow that writes
@@ -32,12 +36,14 @@ the investigation + design so the build is de-risked and actionable.
    write must refuse while the player is online. Reuse the player-presence read in
    `admin/players.rs` (the same source as `ms_player_location` / `ms_search_players`)
    to check, and return a clear "player must be offline" error otherwise.
-3. **UI:** a "Grant currency" admin action beside the item grant — a **named** currency
-   picker (Solari / House Scrip, not raw ids), player picker, amount, and the online
-   guard surfaced in the UI.
-4. **Pre-flight (do first on the live server):** confirm there really is no engine
-   currency command by the "set ids to 1M/2M/… and read back in-game" fingerprint trick
-   (§3.1) — if Funcom shipped one, prefer it (engine-validated) over the DB write.
+3. **UI:** a "Grant currency" admin action beside the item grant — a **named** picker for
+   the currencies that *aren't* items (**House Scrip**, **Intel**, and optionally **bank
+   Solari**), player picker, amount, online guard surfaced. On-hand Solari stays on the
+   item-grant path (already works), so don't duplicate it.
+4. **Pre-flight (live server):** (a) **map Intel's `currency_id`** (and re-confirm House
+   Scrip = 1) with the "set ids to 1M/2M/… and read back in-game" fingerprint trick;
+   (b) confirm there's no engine currency command — if Funcom shipped one, prefer it
+   (engine-validated) over the DB write.
 
 ### Why not this session
 The DB write can't be safely end-to-end verified without a live DB + an offline test
