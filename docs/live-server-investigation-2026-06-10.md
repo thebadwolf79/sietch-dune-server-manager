@@ -53,6 +53,11 @@ but the restarts cascade into full battlegroup bounces and transient task failur
 1. **Add swap** (e.g. a 4–8 GB swapfile). Biggest cheap win: absorbs spikes instead of
    letting the kernel OOM-killer drop Postgres. Zero swap on a 30 GB all-in-one box is
    the clearest gap.
+   **✅ DONE 2026-06-10:** 8 GB `/swapfile` created (ext4, mode 600), activated, persisted
+   in `/etc/fstab` (`/swapfile none swap sw 0 0`) with the OpenRC `swap` service added to
+   the boot runlevel; `vm.swappiness=10` set live + persisted in
+   `/etc/sysctl.d/99-dune-swap.conf` (the `sysctl` service already runs at boot). Verified
+   via `/proc/swaps` (8 GB, 0 used) and `free` (Swap: 8192). Survives reboot.
 2. **Right-size the DB dump** so backups don't balloon: confirm the dump path and, if it
    shells `pg_dump`, cap its working memory / avoid parallelism on the constrained box.
 3. **(Optional) memory requests/limits on the DB pod** so scheduling + node pressure are
