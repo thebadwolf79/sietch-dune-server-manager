@@ -16,8 +16,9 @@ use dune_manager_core::orchestration::{
     StrictPowerShellHyperV, VmProvider,
 };
 
-use crate::commands::shared::command_error_message;
-use crate::dto::SystemState;
+use crate::commands::shared::{command_error_message, runner_for_remote_kind};
+use crate::commands::status_data::read_remote_server_status;
+use crate::dto::{RemoteServerActionRequest, SystemState};
 use crate::logging::TauriOperationSink;
 
 /// Seconds to wait for a freshly started VM to report a routable IPv4 address
@@ -78,14 +79,48 @@ pub async fn vm_get_state(vm_name: String) -> Result<SystemState, String> {
         .map_err(|err| format!("vm_get_state worker failed: {err}"))?
 }
 
+/// Reads the live battlegroup status over SSH and maps it to a battlegroup-level
+/// [`SystemState`] (unified vocabulary with the VM-level states).
+#[tauri::command]
+pub async fn battlegroup_system_state(
+    request: RemoteServerActionRequest,
+) -> Result<SystemState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let runner = runner_for_remote_kind(
+            request.server_type.as_deref(),
+            request.host,
+            request.user,
+            request.key_path,
+            Some(request.port),
+        )?;
+        let status =
+            read_remote_server_status(&runner, &request.namespace, &request.battlegroup_name)
+                .map_err(command_error_message)?;
+        Ok(SystemState::from_battlegroup_status(&status.battlegroup))
+    })
+    .await
+    .map_err(|err| format!("battlegroup_system_state worker failed: {err}"))?
+}
+
 /// Starts the named VM, waits for it to boot and acquire a routable IP (streaming
-/// progress to the UI), then reports the resulting state.
+/// progress to the UI), then reports the resulting state. Idempotent: if the VM is
+/// already running or transitioning, it returns the current state without acting.
 #[tauri::command]
 pub async fn vm_start(app: tauri::AppHandle, vm_name: String) -> Result<SystemState, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut sink = TauriOperationSink::new(app);
-        let provider = StrictPowerShellHyperV::new();
 
+        // Idempotent guard: only Off/Saved/Paused can be started (Grok risk matrix).
+        let current = read_state(&vm_name)?;
+        if !current.can_start_vm() {
+            sink.info(
+                "vm.start",
+                format!("VM '{vm_name}' is already running or transitioning; nothing to start."),
+            );
+            return Ok(current);
+        }
+
+        let provider = StrictPowerShellHyperV::new();
         sink.info("vm.start", format!("Starting VM '{vm_name}'..."));
         HyperVVmLifecycleOrchestrator::new(StrictPowerShellHyperV::new())
             .start(&vm_name, &mut sink)
@@ -114,11 +149,19 @@ pub async fn vm_start(app: tauri::AppHandle, vm_name: String) -> Result<SystemSt
     .map_err(|err| format!("vm_start worker failed: {err}"))?
 }
 
-/// Stops (turns off) the named VM, then reports the resulting state.
+/// Stops (turns off) the named VM, then reports the resulting state. Idempotent:
+/// if the VM is not running there is nothing to stop, so it returns current state.
 #[tauri::command]
 pub async fn vm_stop(app: tauri::AppHandle, vm_name: String) -> Result<SystemState, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut sink = TauriOperationSink::new(app);
+
+        let current = read_state(&vm_name)?;
+        if !current.battlegroup_actions_enabled() {
+            sink.info("vm.stop", format!("VM '{vm_name}' is not running; nothing to stop."));
+            return Ok(current);
+        }
+
         HyperVVmLifecycleOrchestrator::new(StrictPowerShellHyperV::new())
             .stop(&vm_name, &mut sink)
             .map_err(command_error_message)?;

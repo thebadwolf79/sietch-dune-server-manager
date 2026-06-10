@@ -194,10 +194,6 @@ pub struct RemoteServerRecord {
 /// Only meaningful when the manager runs *on* the Hyper-V host. In remote
 /// (connect-only) mode the VM-level variants are not produced — see
 /// `HostPermissionUnavailable`.
-// The Battlegroup* variants are part of the architect's full lifecycle model but
-// are not constructed until the battlegroup-status -> SystemState integration
-// (next increment), so allow dead_code on the enum until then.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", content = "data", rename_all = "camelCase")]
 pub enum SystemState {
@@ -225,10 +221,6 @@ pub enum SystemState {
     BattlegroupStopping { step: String },
 }
 
-// `can_start_vm` / `battlegroup_actions_enabled` are gating helpers exercised by
-// the unit tests and consumed by the UI via the serialized state; allow dead_code
-// until a Rust caller (e.g. a start guard) uses them directly.
-#[allow(dead_code)]
 impl SystemState {
     /// Maps a Hyper-V `VMState` string (from `(Get-VM).State.ToString()`) to the
     /// corresponding VM-level `SystemState`. Unrecognized states map to `Unknown`
@@ -267,11 +259,53 @@ impl SystemState {
                 | SystemState::BattlegroupStopping { .. }
         )
     }
+
+    /// Maps a live battlegroup status (read from the BattleGroup CR) into the
+    /// battlegroup-level `SystemState`, mirroring the dashboard's phase vocabulary.
+    pub fn from_battlegroup_status(bg: &RemoteBattlegroupStatus) -> Self {
+        if bg.stop {
+            return SystemState::BattlegroupStopped;
+        }
+        let phase = bg.phase.to_ascii_lowercase();
+        let director = bg.director_phase.to_ascii_lowercase();
+        let database = bg.database_phase.to_ascii_lowercase();
+
+        let is_error = |s: &str| {
+            s.contains("error") || s.contains("degraded") || s.contains("fail") || s.contains("crash")
+        };
+        if is_error(&phase) || is_error(&director) || is_error(&database) {
+            return SystemState::BattlegroupDegraded {
+                reason: format!(
+                    "phase={}, gateway={}, director={}, database={}",
+                    bg.phase, bg.server_group_phase, bg.director_phase, bg.database_phase
+                ),
+            };
+        }
+        if phase.contains("stop") {
+            return SystemState::BattlegroupStopping {
+                step: bg.phase.clone(),
+            };
+        }
+        let director_ok = director == "healthy" || director == "running";
+        let database_ok = database == "ready" || database.is_empty();
+        if director_ok
+            && database_ok
+            && matches!(phase.as_str(), "healthy" | "running" | "reconciling")
+        {
+            return SystemState::BattlegroupHealthy;
+        }
+        let step = if bg.phase.is_empty() {
+            "Starting".to_string()
+        } else {
+            bg.phase.clone()
+        };
+        SystemState::BattlegroupStarting { step }
+    }
 }
 
 #[cfg(test)]
 mod system_state_tests {
-    use super::SystemState;
+    use super::{RemoteBattlegroupStatus, SystemState};
 
     #[test]
     fn maps_known_vm_states() {
@@ -319,5 +353,52 @@ mod system_state_tests {
         })
         .unwrap();
         assert_eq!(json, r#"{"state":"vmStarting","data":{"step":"Powering on"}}"#);
+    }
+
+    fn bg(
+        stop: bool,
+        phase: &str,
+        gateway: &str,
+        director: &str,
+        database: &str,
+    ) -> RemoteBattlegroupStatus {
+        RemoteBattlegroupStatus {
+            stop,
+            phase: phase.to_string(),
+            database_phase: database.to_string(),
+            server_group_phase: gateway.to_string(),
+            director_phase: director.to_string(),
+            uptime: String::new(),
+            server_stats: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn battlegroup_status_maps_to_system_state() {
+        assert_eq!(
+            SystemState::from_battlegroup_status(&bg(true, "Stopped", "Stopped", "", "")),
+            SystemState::BattlegroupStopped
+        );
+        assert_eq!(
+            SystemState::from_battlegroup_status(&bg(false, "Healthy", "Running", "Healthy", "Ready")),
+            SystemState::BattlegroupHealthy
+        );
+        // Reconciling with healthy gateway/director is the steady running state (#19).
+        assert_eq!(
+            SystemState::from_battlegroup_status(&bg(false, "Reconciling", "Running", "Healthy", "Ready")),
+            SystemState::BattlegroupHealthy
+        );
+        assert!(matches!(
+            SystemState::from_battlegroup_status(&bg(false, "Starting", "Pending", "Initializing", "Ready")),
+            SystemState::BattlegroupStarting { .. }
+        ));
+        assert!(matches!(
+            SystemState::from_battlegroup_status(&bg(false, "Stopping", "", "", "")),
+            SystemState::BattlegroupStopping { .. }
+        ));
+        assert!(matches!(
+            SystemState::from_battlegroup_status(&bg(false, "Error", "", "Error", "Ready")),
+            SystemState::BattlegroupDegraded { .. }
+        ));
     }
 }

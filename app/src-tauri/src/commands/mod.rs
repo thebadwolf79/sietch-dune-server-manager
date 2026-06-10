@@ -38,4 +38,6 @@ pub use tunnel::{
     server_tunnel_status, start_custom_tunnel, start_server_tunnel, stop_all_tunnels,
     stop_server_tunnel,
 };
-pub use vm::{vm_get_state, vm_host_readiness, vm_start, vm_stop};
+pub use vm::{
+    battlegroup_system_state, vm_get_state, vm_host_readiness, vm_start, vm_stop,
+};

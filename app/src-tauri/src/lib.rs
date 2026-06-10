@@ -23,7 +23,8 @@ use crate::commands::{
     restart_management_service, restart_remote_battlegroup, restart_remote_component,
     server_tunnel_status, start_custom_tunnel, start_remote_battlegroup, start_server_tunnel,
     stop_all_tunnels, stop_remote_battlegroup, stop_server_tunnel, uninstall_management_service,
-    update_remote_battlegroup, vm_get_state, vm_host_readiness, vm_start, vm_stop,
+    battlegroup_system_state, update_remote_battlegroup, vm_get_state, vm_host_readiness,
+    vm_start, vm_stop,
 };
 use crate::state::TunnelRegistry;
 
@@ -105,6 +106,7 @@ pub fn run() {
             vm_host_readiness,
             vm_start,
             vm_stop,
+            battlegroup_system_state,
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
