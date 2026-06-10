@@ -7,6 +7,42 @@
 
 ---
 
+## Design philosophy (what this tool *is*) — wrap, don't replace
+
+The guiding principle for everything below:
+
+1. **The tool is a friendly GUI wrapper around Funcom's official self-hosted scripts**
+   (`battlegroup`, `initial-setup`, `vm-ip`, `vm-utilities`, …) — **not** a reimplementation of
+   their server stack. Funcom owns the orchestration; we make it *approachable*.
+2. **Lower the barrier for non-CLI users.** The stock experience is `battlegroup.bat` → a
+   PowerShell menu → SSH → `kubectl`. A GUI is far less intimidating for people who aren't
+   comfortable on the command line. Our value is **accessibility, discoverability, and safety**,
+   not new server technology.
+3. **Prefer *invoking* the vendor command over reimplementing its logic.** When Funcom ships a
+   capability (e.g. 1.4.5.0's `change-vm-ip`, `change-battlegroup-ip`, per-map "Minimum Servers",
+   `enable-experimental-swap`, `backup`/`import`), the tool should **call it and present it well**
+   — so we inherit their fixes and never drift from official behavior. (This is why the 1.4.5.0
+   overlap items are "surface/wrap," not "rebuild" — see the review doc's §B-bis.)
+4. **Add value precisely where the CLI is weakest:** clear error surfacing (auto-fetch the pod
+   logs instead of "run `kubectl describe` yourself"), accurate at-a-glance state, action gating by
+   VM/battlegroup state, persisted preferences, guardrails on destructive ops, and plain-language
+   explanations of what each action does.
+5. **Respect Funcom's work; stay a good citizen.** Don't fork or vendor their scripts unless
+   necessary; track their script versions; when we find a vendor bug (e.g. the `#24` `ln -s`
+   exit-code issue) **report it upstream** rather than silently masking it — while still
+   *tolerating* it gracefully so the user isn't blocked.
+6. **Net-new capability is the exception, and must justify itself.** The few places we go beyond
+   wrapping — e.g. the full-stack disaster-recovery / world-identity backup (§3.7), which the
+   official scripts don't cover — are deliberate value-adds, not reimplementations of existing
+   vendor functionality.
+
+Architecturally this is exactly the **command-runner wrapper** the multi-model review calls for
+(see [`ai-review-2026-06-10.md`](./ai-review-2026-06-10.md) §A1–A2): run the official command,
+capture exit code + stdout + stderr, **verify state rather than trust the exit code**, and present
+the result in the GUI. The wrapper *is* the product.
+
+---
+
 ## 0. Incident in one paragraph (the "why" behind most of this)
 
 A bulk "unlock every cosmetic" operation hand-edited and JSON round-tripped the
