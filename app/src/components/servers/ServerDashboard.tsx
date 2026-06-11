@@ -11,8 +11,35 @@ import {
   phaseTone,
   remoteServerDefaultUser,
 } from "../../utils/remote-server";
+import { vmGetState, vmHostReadiness } from "../../services/tauri";
+import { canManageVm, type SystemState } from "../../types/vm";
 
 import SystemStatusHeader, { type Verdict, type LifecyclePhase, type VmStage } from "./SystemStatusHeader";
+
+// The Hyper-V VM name (matches VmPowerControls' default). The header's VM-stage
+// indicator reflects the *real* VM power state when this machine is the Hyper-V
+// host; on a remote/connect-only machine there is no local VM to read.
+const HYPERV_VM_NAME = "dune-awakening";
+
+function vmStageFromState(s: SystemState): VmStage | null {
+  switch (s.state) {
+    case "vmOff":
+      return "off";
+    case "vmSaved":
+    case "vmPaused":
+      return "saved";
+    case "vmRunning":
+    case "battlegroupStopped":
+    case "battlegroupStarting":
+    case "battlegroupHealthy":
+    case "battlegroupDegraded":
+    case "battlegroupStopping":
+      return "running";
+    default:
+      // unknown / hostPermissionUnavailable / error — not on the host or can't tell.
+      return null;
+  }
+}
 import MetricTile from "../ui/MetricTile";
 import HostHealthPanel from "./HostHealthPanel";
 import VmPowerControls from "./VmPowerControls";
@@ -93,6 +120,32 @@ export default function ServerDashboard({
     });
   }, [activePlayers]);
 
+  // Reflect the REAL Hyper-V VM power state in the header's VM-stage indicator
+  // when this machine is the host (matches the authoritative VmPowerControls
+  // below). On a remote/connect-only machine there's no local VM to read, so we
+  // fall back to the reachability-derived stage computed below. Refreshed with
+  // the status poll rather than on its own timer.
+  const [realVmStage, setRealVmStage] = useState<VmStage | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const readiness = await vmHostReadiness();
+        if (!canManageVm(readiness)) {
+          if (!cancelled) setRealVmStage(null);
+          return;
+        }
+        const vm = await vmGetState(HYPERV_VM_NAME);
+        if (!cancelled) setRealVmStage(vmStageFromState(vm));
+      } catch {
+        if (!cancelled) setRealVmStage(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [status]);
+
   // 3. Synthesize single-glance verdict, details, stage, and lifecycle
   let verdict: Verdict = "operational";
   let detail = "All cluster components and services are operating normally.";
@@ -167,7 +220,7 @@ export default function ServerDashboard({
         capacity={capacity}
         playerTrend={playerHistory}
         vmName={server.worldUniqueName || "dune-awakening"}
-        stage={stage}
+        stage={realVmStage ?? stage}
         lifecycle={lifecycle}
         busy={busy}
         onStartBg={onStartBattlegroup}

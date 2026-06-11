@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
-import { AlertDialog, Badge, Box, Button, Card, Flex, Text } from "@radix-ui/themes";
+import { AlertDialog, Button } from "@radix-ui/themes";
+import { ShieldCheck, ShieldAlert, AlertTriangle, Info, Wrench } from "lucide-react";
 
 import type { RemoteServerRecord } from "../../types/server";
 import type { LogRow } from "../../types/log";
@@ -7,12 +8,41 @@ import type { HealthFinding, HealthSeverity, HostHealthReport } from "../../type
 import { hostApplyFix, hostHealthCheck } from "../../services/tauri";
 import { log } from "../../utils/logging";
 
-const SEVERITY_TONE: Record<HealthSeverity, "green" | "blue" | "orange" | "red"> = {
-  ok: "green",
-  info: "blue",
-  warning: "orange",
-  critical: "red",
+const sevMeta: Record<
+  HealthSeverity,
+  { label: string; color: string; bg: string; border: string; icon: typeof Info }
+> = {
+  ok: {
+    label: "OK",
+    color: "rgb(118,184,118)",
+    bg: "rgba(118,184,118,0.15)",
+    border: "rgba(118,184,118,0.3)",
+    icon: ShieldCheck,
+  },
+  info: {
+    label: "Info",
+    color: "var(--color-text-secondary)",
+    bg: "var(--color-bg-elevated)",
+    border: "var(--color-border-hair)",
+    icon: Info,
+  },
+  warning: {
+    label: "Warning",
+    color: "rgb(212,168,94)",
+    bg: "rgba(212,168,94,0.15)",
+    border: "rgba(212,168,94,0.3)",
+    icon: AlertTriangle,
+  },
+  critical: {
+    label: "Critical",
+    color: "rgb(214,105,94)",
+    bg: "rgba(214,105,94,0.15)",
+    border: "rgba(214,105,94,0.3)",
+    icon: ShieldAlert,
+  },
 };
+
+const severityOrder: Record<HealthSeverity, number> = { critical: 0, warning: 1, info: 2, ok: 3 };
 
 export type HostHealthPanelProps = {
   server: RemoteServerRecord;
@@ -85,86 +115,227 @@ export default function HostHealthPanel({ server, appendLogRow }: HostHealthPane
   );
 
   const m = report?.metrics;
+  const overall = report ? sevMeta[report.overallSeverity] : null;
+  const OverallIcon = overall?.icon ?? ShieldCheck;
+  const chips: { label: string; value: string }[] = m
+    ? [
+        { label: "RAM", value: `${fmtGb(m.memAvailableMb)} free / ${fmtGb(m.memTotalMb)}` },
+        {
+          label: "Swap",
+          value: m.swapTotalMb === 0 ? "none" : `${fmtGb(m.swapUsedMb)} used / ${fmtGb(m.swapTotalMb)}`,
+        },
+        { label: "Swappiness", value: m.swappiness != null ? String(m.swappiness) : "—" },
+        {
+          label: "Disk /",
+          value: `${m.diskRootAvailGb.toFixed(1)} GB free${
+            m.diskRootUsePct != null ? ` · ${m.diskRootUsePct}% used` : ""
+          }`,
+        },
+        ...(report?.clusterChecked && m.dbMaxRestarts != null
+          ? [{ label: "DB restarts", value: String(m.dbMaxRestarts) }]
+          : []),
+      ]
+    : [];
+  const findings = report
+    ? [...report.findings].sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity])
+    : [];
 
   return (
-    <Card>
-      <Flex direction="column" gap="3">
-        <Flex justify="between" align="center" wrap="wrap" gap="2">
-          <Flex align="center" gap="2">
-            <Text size="3" weight="medium">
-              Host health &amp; hardening
-            </Text>
-            {report ? (
-              <Badge color={SEVERITY_TONE[report.overallSeverity]}>{report.overallSeverity}</Badge>
-            ) : null}
-          </Flex>
+    <div
+      style={{
+        border: "1px solid var(--color-border-hair)",
+        backgroundColor: "var(--color-bg-panel)",
+        borderRadius: "8px",
+        overflow: "hidden",
+      }}
+      className="bracket chamfer"
+    >
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "12px",
+          flexWrap: "wrap",
+          borderBottom: "1px solid var(--color-border-hair)",
+          padding: "16px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+          <span
+            className="chamfer-sm"
+            style={{
+              display: "flex",
+              width: 36,
+              height: 36,
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+              backgroundColor: overall?.bg ?? "var(--color-bg-elevated)",
+            }}
+          >
+            <OverallIcon style={{ width: 20, height: 20, color: overall?.color ?? "var(--color-text-muted)" }} />
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <h3
+              style={{
+                fontFamily: "var(--font-display)",
+                fontSize: "14px",
+                margin: 0,
+                color: "var(--color-text-primary)",
+              }}
+            >
+              Host Health &amp; Hardening
+            </h3>
+            <p style={{ fontSize: "12px", margin: "4px 0 0 0", color: "var(--color-text-muted)" }}>
+              {report
+                ? report.summary
+                : "Checks VM memory, swap, disk, and DB restarts / OOMKilled pods, and recommends fixes. Host-OS only — never touches the game stack."}
+            </p>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
+          {overall ? (
+            <span
+              className="font-display"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                borderRadius: "999px",
+                border: `1px solid ${overall.border}`,
+                padding: "2px 10px",
+                fontSize: "11px",
+                letterSpacing: "0.04em",
+                backgroundColor: overall.bg,
+                color: overall.color,
+              }}
+            >
+              <span
+                style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "currentColor" }}
+                aria-hidden="true"
+              />
+              {overall.label}
+            </span>
+          ) : null}
           <Button size="1" variant="surface" onClick={runCheck} disabled={busy}>
-            {busy ? "Checking…" : report ? "Re-check" : "Check host health"}
+            {busy ? "Checking…" : report ? "Re-check" : "Check"}
           </Button>
-        </Flex>
+        </div>
+      </div>
 
-        <Text size="1" color="gray">
-          Checks VM memory, swap, disk, and (if reachable) DB restarts / OOMKilled pods, and
-          recommends fixes. Host-OS only — never touches the game stack.
-        </Text>
+      {error ? (
+        <div
+          style={{
+            padding: "12px 16px",
+            borderBottom: "1px solid var(--color-border-hair)",
+            color: "rgb(214,105,94)",
+            fontSize: "12px",
+          }}
+        >
+          {error}
+        </div>
+      ) : null}
 
-        {error ? (
-          <Text size="1" color="red">
-            {error}
-          </Text>
-        ) : null}
+      {/* Metric chips */}
+      {chips.length > 0 ? (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "8px",
+            borderBottom: "1px solid var(--color-border-hair)",
+            padding: "16px",
+          }}
+        >
+          {chips.map((c) => (
+            <div
+              key={c.label}
+              style={{
+                borderRadius: "6px",
+                border: "1px solid var(--color-border-hair)",
+                backgroundColor: "var(--color-bg-elevated)",
+                padding: "8px 12px",
+                flex: "1 1 100px",
+              }}
+            >
+              <span
+                style={{
+                  display: "block",
+                  fontFamily: "var(--font-display)",
+                  fontSize: "10px",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  color: "var(--color-text-muted)",
+                }}
+              >
+                {c.label}
+              </span>
+              <span className="mono" style={{ fontSize: "13px", color: "var(--color-text-primary)" }}>
+                {c.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
-        {m ? (
-          <Flex gap="3" wrap="wrap">
-            <MetricChip label="RAM" value={`${fmtGb(m.memAvailableMb)} free / ${fmtGb(m.memTotalMb)}`} />
-            <MetricChip
-              label="Swap"
-              value={
-                m.swapTotalMb === 0
-                  ? "none"
-                  : `${fmtGb(m.swapUsedMb)} used / ${fmtGb(m.swapTotalMb)}`
-              }
-            />
-            <MetricChip label="Swappiness" value={m.swappiness != null ? String(m.swappiness) : "—"} />
-            <MetricChip label="Disk /" value={`${m.diskRootAvailGb.toFixed(1)} GB free`} />
-            {report?.clusterChecked && m.dbMaxRestarts != null ? (
-              <MetricChip label="DB restarts" value={String(m.dbMaxRestarts)} />
+      {/* Findings */}
+      {findings.map((f) => {
+        const meta = sevMeta[f.severity];
+        const Icon = meta.icon;
+        return (
+          <div
+            key={f.id}
+            style={{
+              display: "flex",
+              gap: "12px",
+              alignItems: "flex-start",
+              padding: "14px 16px",
+              borderBottom: "1px solid var(--color-border-hair)",
+            }}
+          >
+            <Icon style={{ width: 16, height: 16, color: meta.color, marginTop: 2, flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-text-primary)" }}>
+                  {f.title}
+                </span>
+                <span
+                  className="font-display"
+                  style={{
+                    fontSize: "10px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    color: meta.color,
+                  }}
+                >
+                  {meta.label}
+                </span>
+              </div>
+              <p style={{ fontSize: "12px", margin: "4px 0 0 0", color: "var(--color-text-muted)" }}>
+                {f.detail}
+              </p>
+              {f.recommendation ? (
+                <p style={{ fontSize: "12px", margin: "4px 0 0 0", color: "var(--color-text-secondary)" }}>
+                  → {f.recommendation}
+                </p>
+              ) : null}
+            </div>
+            {f.fixId ? (
+              <Button
+                size="1"
+                onClick={() => setConfirm(f)}
+                disabled={applyingId !== null}
+                style={{ flexShrink: 0 }}
+              >
+                <Wrench style={{ width: 12, height: 12 }} />
+                {applyingId === f.id ? "Applying…" : f.fixLabel ?? "Apply"}
+              </Button>
             ) : null}
-          </Flex>
-        ) : null}
-
-        {report
-          ? report.findings.map((f) => (
-              <Box key={f.id} className="server-error" style={{ background: "var(--color-panel-translucent)" }}>
-                <Flex justify="between" align="start" gap="2">
-                  <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
-                    <Flex align="center" gap="2">
-                      <Badge color={SEVERITY_TONE[f.severity]}>{f.severity}</Badge>
-                      <Text size="2" weight="medium">
-                        {f.title}
-                      </Text>
-                    </Flex>
-                    <Text size="1" color="gray">
-                      {f.detail}
-                    </Text>
-                    {f.recommendation ? (
-                      <Text size="1">→ {f.recommendation}</Text>
-                    ) : null}
-                  </Flex>
-                  {f.fixId ? (
-                    <Button
-                      size="1"
-                      onClick={() => setConfirm(f)}
-                      disabled={applyingId !== null}
-                    >
-                      {applyingId === f.id ? "Applying…" : f.fixLabel ?? "Apply fix"}
-                    </Button>
-                  ) : null}
-                </Flex>
-              </Box>
-            ))
-          : null}
-      </Flex>
+          </div>
+        );
+      })}
 
       <AlertDialog.Root
         open={confirm !== null}
@@ -175,9 +346,10 @@ export default function HostHealthPanel({ server, appendLogRow }: HostHealthPane
         <AlertDialog.Content maxWidth="460px">
           <AlertDialog.Title>Apply “{confirm?.fixLabel ?? confirm?.title}”?</AlertDialog.Title>
           <AlertDialog.Description size="2">
-            This changes the VM&apos;s host OS over SSH (it does not touch the game). {confirm?.recommendation}
+            This changes the VM&apos;s host OS over SSH (it does not touch the game).{" "}
+            {confirm?.recommendation}
           </AlertDialog.Description>
-          <Flex gap="2" mt="4" justify="end">
+          <div style={{ display: "flex", gap: "8px", marginTop: "16px", justifyContent: "flex-end" }}>
             <AlertDialog.Cancel>
               <Button variant="soft" color="gray">
                 Cancel
@@ -192,26 +364,13 @@ export default function HostHealthPanel({ server, appendLogRow }: HostHealthPane
             >
               Apply
             </Button>
-          </Flex>
+          </div>
         </AlertDialog.Content>
       </AlertDialog.Root>
-    </Card>
+    </div>
   );
 }
 
 function fmtGb(mb: number): string {
   return `${(mb / 1024).toFixed(1)} GB`;
-}
-
-function MetricChip({ label, value }: { label: string; value: string }) {
-  return (
-    <Flex direction="column" gap="0">
-      <Text size="1" color="gray" style={{ textTransform: "uppercase", letterSpacing: 0.5 }}>
-        {label}
-      </Text>
-      <Text size="2" weight="medium" className="mono">
-        {value}
-      </Text>
-    </Flex>
-  );
 }
