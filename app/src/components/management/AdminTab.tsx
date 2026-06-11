@@ -43,6 +43,7 @@ const CATEGORY_LABEL: Record<Category, string> = {
   progression: "Progression",
   movement: "Teleport & spawn",
   broadcast: "Broadcast",
+  currency: "Currency",
   journey: "Story journey",
   exec: "Server scripts",
 };
@@ -50,12 +51,87 @@ const CATEGORY_LABEL: Record<Category, string> = {
 const CATEGORY_ORDER: Category[] = [
   "broadcast",
   "items",
+  "currency",
   "player",
   "progression",
   "movement",
   "journey",
   "exec",
 ];
+
+// Frontend-synthetic grant commands: dedicated, locked forms in the "currency"
+// category. Two flavours:
+//  - Solari rides a real engine command — the in-game `solari` item (SolarisCoin),
+//    so it publishes AddItemToInventory with ItemName/Durability locked (no picker).
+//  - House Scrip has no engine command; it's a guarded offline DB write
+//    (dbAction "grant_currency", currencyId locked to 1) the player must be offline for.
+//    (Intel will join Progression later as its own DB write.)
+function withSyntheticGrants(list: CommandSpec[]): CommandSpec[] {
+  const addItem = list.find((c) => c.id === "AddItemToInventory");
+  if (!addItem) return list;
+  const solari: CommandSpec = {
+    ...addItem,
+    id: "GrantSolari",
+    label: "Grant Solari",
+    category: "currency",
+    describe:
+      "Grant Solari to a player. Publishes the engine AddItemToInventory command with the Solari item locked in.",
+    // Hide ItemName (locked to solari) and Durability (meaningless for currency);
+    // both are injected at publish so the engine AddItemToInventory call stays valid.
+    fields: addItem.fields.filter((f) => f.key !== "ItemName" && f.key !== "Durability"),
+    publishAs: "AddItemToInventory",
+    lockedFields: { ItemName: "solari", Durability: 1.0 },
+  };
+  // Reuse the engine command's PlayerId field so House Scrip gets the same player
+  // picker (its value is the FLS id). Add a plain Amount field.
+  const playerField = addItem.fields.find((f) => f.key === "PlayerId");
+  const houseScrip: CommandSpec = {
+    id: "GrantHouseScrip",
+    label: "Grant House Scrip",
+    category: "currency",
+    needsPlayer: true,
+    allowAllPlayers: false,
+    describe:
+      "Add House Scrip to a player's balance. Direct database write — the player must be offline (the server overwrites currency edits on logout). The amount is added to any existing balance.",
+    fields: [
+      ...(playerField ? [playerField] : []),
+      {
+        key: "Amount",
+        label: "Amount",
+        kind: "int",
+        required: true,
+        default: 1000,
+        helper: "House Scrip to add to the current balance",
+      },
+    ],
+    dbAction: "grant_currency",
+    lockedFields: { currencyId: 1 },
+  };
+  // Intel ("Tech Knowledge points") is a single integer in the character actor's
+  // properties blob — its own DB write, placed under Progression beside Award XP.
+  const intel: CommandSpec = {
+    id: "AwardIntel",
+    label: "Award Intel",
+    category: "progression",
+    needsPlayer: true,
+    allowAllPlayers: false,
+    describe:
+      "Add Intel (Tech Knowledge points) to a player's character. Direct database write — the player must be offline (the server overwrites edits on logout). The amount is added to the current total.",
+    fields: [
+      ...(playerField ? [playerField] : []),
+      {
+        key: "Amount",
+        label: "Amount",
+        kind: "int",
+        required: true,
+        default: 10,
+        helper: "Tech Knowledge points to add to the current total",
+      },
+    ],
+    dbAction: "award_intel",
+  };
+  return [...list, solari, houseScrip, intel];
+}
 
 const CLIENT_DEFAULTS: Record<string, unknown> = {
   Quantity: 1,
@@ -214,7 +290,7 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
   useEffect(() => {
     managementApi
       .listCommands(tunnelId)
-      .then(setCommands)
+      .then((list) => setCommands(withSyntheticGrants(list)))
       .catch((err) => setError(String(err)));
     void refreshHistory();
   }, [tunnelId, refreshHistory]);
@@ -299,7 +375,23 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
     setError(null);
     setResult(null);
     try {
-      const out = await managementApi.publish(tunnelId, selected.id, values);
+      let out: PublishResultDto;
+      if (selected.dbAction === "grant_currency") {
+        // DB-grant path: route to the dedicated currency endpoint, not MQ publish.
+        const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
+        const currencyId = Number((selected.lockedFields?.currencyId as number | undefined) ?? 1);
+        const amount = Number(values.Amount);
+        out = await managementApi.grantCurrency(tunnelId, flsId, currencyId, amount);
+      } else if (selected.dbAction === "award_intel") {
+        // DB-grant path: single-leaf jsonb_set on the character actor.
+        const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
+        const amount = Number(values.Amount);
+        out = await managementApi.awardIntel(tunnelId, flsId, amount);
+      } else {
+        const publishId = selected.publishAs ?? selected.id;
+        const payload = { ...values, ...(selected.lockedFields ?? {}) };
+        out = await managementApi.publish(tunnelId, publishId, payload);
+      }
       setResult(out);
       await refreshHistory();
     } catch (err) {

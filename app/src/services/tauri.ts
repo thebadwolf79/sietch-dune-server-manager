@@ -15,6 +15,12 @@ import type {
   RemoteServerStatus,
 } from "../types/server";
 import type { CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus } from "../types/tunnel";
+import type {
+  HostApplyFixResult,
+  HostHealthReport,
+  HostReadiness,
+  SystemState,
+} from "../types/vm";
 
 type RemoteActionRequest = {
   serverType: RemoteServerKind;
@@ -61,6 +67,26 @@ export async function detectRemoteUbuntuServers(
   return invoke<RemoteServerRecord[]>("detect_remote_ubuntu_servers", { request });
 }
 
+// Best-effort connection defaults for the local Funcom VM (host-only). Mirrors the
+// Rust VmConnectionDefaults (camelCase). Used to pre-fill the Add Remote Server dialog.
+export type VmConnectionDefaults = {
+  found: boolean;
+  host?: string | null;
+  user: string;
+  port: number;
+  keyPath?: string | null;
+  vmName?: string | null;
+  serverType: string;
+  confidence?: string | null;
+  note?: string | null;
+};
+
+// Auto-detect the running Funcom VM (IP) + the Funcom SSH key path to pre-fill the
+// add-server form. Never throws meaningfully — returns safe defaults when off-host.
+export async function detectLocalVmConnection(): Promise<VmConnectionDefaults> {
+  return invoke<VmConnectionDefaults>("detect_local_vm_connection");
+}
+
 export async function getRemoteServerStatus(request: RemoteActionRequest): Promise<RemoteServerStatus> {
   return invoke<RemoteServerStatus>("remote_server_status", { request });
 }
@@ -85,6 +111,54 @@ export async function updateRemoteBattlegroup(request: RemoteActionRequest): Pro
 
 export async function restartRemoteBattlegroup(request: RemoteActionRequest): Promise<RemoteServerStatus> {
   return invoke<RemoteServerStatus>("restart_remote_battlegroup", { request });
+}
+
+// --- Hyper-V VM power management (issue #28; host-only) ---
+
+/// Reports whether this machine can manage the Hyper-V VM (connect-only vs power-capable).
+export async function vmHostReadiness(): Promise<HostReadiness> {
+  return invoke<HostReadiness>("vm_host_readiness");
+}
+
+export async function vmGetState(vmName: string): Promise<SystemState> {
+  return invoke<SystemState>("vm_get_state", { vmName });
+}
+
+export async function vmStart(vmName: string): Promise<SystemState> {
+  return invoke<SystemState>("vm_start", { vmName });
+}
+
+export async function vmStop(vmName: string): Promise<SystemState> {
+  return invoke<SystemState>("vm_stop", { vmName });
+}
+
+// --- Host Health & Hardening advisor (SSH-based; works on any reachable VM) ---
+
+export type HostHealthCheckRequest = {
+  serverType?: string;
+  host: string;
+  user: string;
+  keyPath?: string;
+  port?: number;
+  namespace?: string;
+};
+
+export async function hostHealthCheck(request: HostHealthCheckRequest): Promise<HostHealthReport> {
+  return invoke<HostHealthReport>("host_health_check", { request });
+}
+
+export type HostApplyFixRequest = {
+  serverType?: string;
+  host: string;
+  user: string;
+  keyPath?: string;
+  port?: number;
+  fixId: string;
+  param?: number;
+};
+
+export async function hostApplyFix(request: HostApplyFixRequest): Promise<HostApplyFixResult> {
+  return invoke<HostApplyFixResult>("host_apply_fix", { request });
 }
 
 export async function startServerTunnel(request: ServerTunnelStartRequest): Promise<ServerTunnelStatus> {

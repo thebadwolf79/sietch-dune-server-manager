@@ -7,7 +7,8 @@ use crate::dto::ServerTunnelStartRequest;
 
 pub fn tunnel_target(request: &ServerTunnelStartRequest) -> Result<RusshTarget, String> {
     match request.server_kind.trim() {
-        "ubuntu" => {
+        // "alpine" (the Funcom VM) connects identically to "ubuntu".
+        "ubuntu" | "alpine" => {
             let mut target = RusshTarget::new(
                 PathBuf::from(
                     request

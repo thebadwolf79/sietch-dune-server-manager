@@ -1,6 +1,7 @@
 mod battlegroup;
 mod component;
 mod discovery;
+mod host_health;
 mod logs;
 mod management_api;
 mod management_service;
@@ -12,6 +13,7 @@ mod status_helpers;
 mod status_naming;
 mod tunnel;
 mod tunnel_helpers;
+mod vm;
 
 pub use battlegroup::{
     restart_remote_battlegroup, start_remote_battlegroup, stop_remote_battlegroup,
@@ -19,11 +21,13 @@ pub use battlegroup::{
 };
 pub use component::{remote_component_log_tail, restart_remote_component};
 pub use discovery::detect_remote_ubuntu_servers;
+pub use host_health::{host_apply_fix, host_health_check};
 pub use logs::{get_logs_folder, record_operation_log};
 pub use management_api::{
     ms_cluster, ms_cron_preview, ms_dump_prune_execute, ms_dump_prune_preview, ms_get_config,
-    ms_health, ms_history, ms_list_commands, ms_list_logs, ms_list_runs, ms_list_timezones,
-    ms_player_location, ms_publish, ms_search_items, ms_search_journey_nodes, ms_search_players,
+    ms_award_intel, ms_grant_currency, ms_health, ms_history, ms_list_commands, ms_list_logs,
+    ms_list_runs, ms_list_timezones, ms_player_location, ms_publish, ms_search_items,
+    ms_search_journey_nodes, ms_search_players,
     ms_search_skill_modules, ms_search_vehicles, ms_search_xp_event_tags, ms_set_config,
     ms_trigger_run, ms_welcome_grant_retry, ms_welcome_grants, ms_welcome_whisper,
 };
@@ -36,4 +40,8 @@ pub use status::{remote_server_components, remote_server_status};
 pub use tunnel::{
     server_tunnel_status, start_custom_tunnel, start_server_tunnel, stop_all_tunnels,
     stop_server_tunnel,
+};
+pub use vm::{
+    battlegroup_system_state, detect_local_vm_connection, vm_get_state, vm_host_readiness,
+    vm_start, vm_stop,
 };

@@ -92,6 +92,7 @@ export type FieldSpec = {
 
 export type Category =
   | "items"
+  | "currency"
   | "movement"
   | "broadcast"
   | "progression"
@@ -108,6 +109,22 @@ export type CommandSpec = {
   allowAllPlayers: boolean;
   describe: string;
   fields: FieldSpec[];
+  /**
+   * Frontend-synthetic grant commands present a dedicated locked form but publish
+   * through a real engine command. When set, publish uses `publishAs` as the
+   * ServerCommand id and merges `lockedFields` into the payload (e.g. Grant Solari
+   * publishes AddItemToInventory with ItemName locked to "solari").
+   */
+  publishAs?: string;
+  lockedFields?: Record<string, unknown>;
+  /**
+   * "DB grant" commands write directly to the game database through a dedicated
+   * management-service endpoint instead of publishing an engine MQ command.
+   * - `grant_currency` UPSERTs dune.player_virtual_currency_balances (House Scrip);
+   *   the target currencyId rides in `lockedFields`.
+   * - `award_intel` jsonb_sets the Tech Knowledge points leaf on the character actor.
+   */
+  dbAction?: "grant_currency" | "award_intel";
 };
 
 export type ItemDto = {

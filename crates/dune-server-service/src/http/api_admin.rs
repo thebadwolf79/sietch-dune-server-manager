@@ -228,6 +228,208 @@ pub async fn welcome_whisper(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantCurrencyRequest {
+    pub fls_id: String,
+    pub currency_id: i16,
+    pub amount: i64,
+}
+
+/// Only House Scrip is grantable here. Refusing every other id keeps a fat-finger
+/// (or a future caller passing the wrong constant) from ever touching Bank Solari
+/// (currency_id 0) or any other balance.
+const HOUSE_SCRIP_CURRENCY_ID: i16 = 1;
+/// Upper bound on a single grant. Balances live in the 1e6–1e8 range; 1e9 is
+/// generous headroom yet far below bigint, so the ADD can't overflow.
+const MAX_CURRENCY_GRANT: i64 = 1_000_000_000;
+
+/// Grant House Scrip via a guarded offline DB write (no engine command exists).
+/// See `postgres::grant_currency` for the transaction + offline guarantees.
+pub async fn grant_currency(
+    State(state): State<AppState>,
+    Json(req): Json<GrantCurrencyRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let fls_id = req.fls_id.trim().to_string();
+    if fls_id.is_empty() {
+        return Err(ApiError::bad_request("flsId must not be empty"));
+    }
+    if req.currency_id != HOUSE_SCRIP_CURRENCY_ID {
+        return Err(ApiError::bad_request(format!(
+            "unsupported currencyId {}; this endpoint only grants House Scrip (currency_id {})",
+            req.currency_id, HOUSE_SCRIP_CURRENCY_ID
+        )));
+    }
+    if req.amount < 1 || req.amount > MAX_CURRENCY_GRANT {
+        return Err(ApiError::bad_request(format!(
+            "amount must be between 1 and {MAX_CURRENCY_GRANT}"
+        )));
+    }
+
+    let cluster = state.env.cluster.get().await?;
+    let result = crate::postgres::grant_currency(
+        &state.env.pg,
+        &cluster.namespace,
+        &fls_id,
+        req.currency_id,
+        req.amount,
+    )
+    .await;
+
+    use crate::postgres::CurrencyGrantResult as R;
+    let (ok, output, error) = match result {
+        Ok(R::Granted(o)) => (
+            true,
+            format!(
+                "Granted {} House Scrip to controller {} (new balance {})",
+                req.amount, o.player_controller_id, o.new_balance
+            ),
+            None,
+        ),
+        Ok(R::PlayerNotFound) => (
+            false,
+            String::new(),
+            Some(format!("no player found for flsId {fls_id}")),
+        ),
+        Ok(R::Ambiguous) => (
+            false,
+            String::new(),
+            Some(format!(
+                "flsId {fls_id} resolves to multiple players; refusing to guess"
+            )),
+        ),
+        Ok(R::PlayerOnline(status)) => (
+            false,
+            String::new(),
+            Some(format!(
+                "player must be offline to receive currency (status: {}); the server overwrites DB currency edits on logout",
+                if status.is_empty() { "unknown" } else { status.as_str() }
+            )),
+        ),
+        Err(err) => {
+            let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
+            (false, String::new(), Some(scrubbed))
+        }
+    };
+
+    let payload = serde_json::json!({
+        "flsId": fls_id,
+        "currencyId": req.currency_id,
+        "amount": req.amount,
+    });
+    let _ = state.store.record_admin_command(
+        "GrantHouseScrip",
+        &payload,
+        ok,
+        error
+            .as_deref()
+            .or(if ok { None } else { Some(output.as_str()) }),
+    );
+
+    Ok(Json(serde_json::json!({
+        "ok": ok,
+        "command": "GrantHouseScrip",
+        "output": output,
+        "error": error,
+        "inner": payload,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AwardIntelRequest {
+    pub fls_id: String,
+    pub amount: i64,
+}
+
+/// Tech Knowledge points are small (a few per level); 1e6 is far more than anyone
+/// needs yet well under int32, which the in-engine field is assumed to be.
+const MAX_INTEL_GRANT: i64 = 1_000_000;
+
+/// Award Intel (Tech Knowledge points) via a guarded offline single-leaf jsonb_set.
+/// See `postgres::grant_intel` for the blob-safety + offline guarantees.
+pub async fn award_intel(
+    State(state): State<AppState>,
+    Json(req): Json<AwardIntelRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let fls_id = req.fls_id.trim().to_string();
+    if fls_id.is_empty() {
+        return Err(ApiError::bad_request("flsId must not be empty"));
+    }
+    if req.amount < 1 || req.amount > MAX_INTEL_GRANT {
+        return Err(ApiError::bad_request(format!(
+            "amount must be between 1 and {MAX_INTEL_GRANT}"
+        )));
+    }
+
+    let cluster = state.env.cluster.get().await?;
+    let result = crate::postgres::grant_intel(
+        &state.env.pg,
+        &cluster.namespace,
+        &fls_id,
+        req.amount,
+    )
+    .await;
+
+    use crate::postgres::IntelGrantResult as R;
+    let (ok, output, error) = match result {
+        Ok(R::Granted { new_points }) => (
+            true,
+            format!("Awarded {} Intel to {fls_id} (new total {new_points})", req.amount),
+            None,
+        ),
+        Ok(R::PlayerNotFound) => (
+            false,
+            String::new(),
+            Some(format!("no player found for flsId {fls_id}")),
+        ),
+        Ok(R::Ambiguous) => (
+            false,
+            String::new(),
+            Some(format!(
+                "flsId {fls_id} resolves to multiple players; refusing to guess"
+            )),
+        ),
+        Ok(R::PlayerOnline(status)) => (
+            false,
+            String::new(),
+            Some(format!(
+                "player must be offline to receive Intel (status: {}); the server overwrites DB edits on logout",
+                if status.is_empty() { "unknown" } else { status.as_str() }
+            )),
+        ),
+        Ok(R::CharacterActorMissing) => (
+            false,
+            String::new(),
+            Some(format!(
+                "could not find a character actor with a Tech Knowledge component for flsId {fls_id} (character never created, or unexpected blob shape)"
+            )),
+        ),
+        Err(err) => {
+            let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
+            (false, String::new(), Some(scrubbed))
+        }
+    };
+
+    let payload = serde_json::json!({ "flsId": fls_id, "amount": req.amount });
+    let _ = state.store.record_admin_command(
+        "AwardIntel",
+        &payload,
+        ok,
+        error
+            .as_deref()
+            .or(if ok { None } else { Some(output.as_str()) }),
+    );
+
+    Ok(Json(serde_json::json!({
+        "ok": ok,
+        "command": "AwardIntel",
+        "output": output,
+        "error": error,
+        "inner": payload,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PublishRequest {
     pub command: String,
     #[serde(default)]

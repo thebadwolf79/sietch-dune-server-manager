@@ -1,6 +1,6 @@
 import type { BadgeTone } from "./ui";
 
-export type RemoteServerKind = "ubuntu";
+export type RemoteServerKind = "ubuntu" | "alpine";
 
 export type RemoteServerPackageStatus = {
   installedBuildId?: string | null;

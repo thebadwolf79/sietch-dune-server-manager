@@ -84,7 +84,9 @@ fn start_custom_tunnel_inner(
     }
 
     let target = match request.server_kind.trim() {
-        "ubuntu" => {
+        // "alpine" (the Funcom VM) connects identically to "ubuntu" — both are
+        // SSH-to-a-Dune-host; the tunnel target is just host/user/key/port.
+        "ubuntu" | "alpine" => {
             let mut t = RusshTarget::new(
                 PathBuf::from(request.key_path.as_deref().unwrap_or_default().trim()),
                 request.user.trim().to_string(),

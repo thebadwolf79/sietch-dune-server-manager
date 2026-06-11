@@ -85,7 +85,7 @@ export default function ServersListPage({
           ) : (
             <EmptyState
               title="No remote servers attached"
-              body="Add a remote Ubuntu host that already has a Dune battlegroup running."
+              body="Add your Funcom self-hosted VM. If you've run Funcom's setup, its IP and SSH key auto-fill when you click + Add server — editable if needed."
             />
           )}
         </Box>

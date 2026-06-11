@@ -9,8 +9,11 @@ pub async fn detect_remote_ubuntu_servers(
     request: RemoteConnectionRequest,
 ) -> Result<Vec<RemoteServerRecord>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // Every Funcom self-hosted VM is Alpine; label detected servers accordingly.
+        // (runner_for_remote_kind ignores server_type; the management-service install
+        // detects systemd vs OpenRC at runtime, so this is a display/typing label.)
         let request = RemoteConnectionRequest {
-            server_type: Some("ubuntu".to_string()),
+            server_type: Some("alpine".to_string()),
             ..request
         };
         let user = request.user.clone().unwrap_or_default();

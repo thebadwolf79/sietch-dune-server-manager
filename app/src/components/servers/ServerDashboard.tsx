@@ -7,7 +7,6 @@ import type { CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelSt
 import type { LogRow } from "../../types/log";
 import type { ManagementStatusState } from "../management/useManagementStatus";
 import {
-  isBattlegroupStarted,
   isDirectorReadyPhase,
   phaseTone,
   remoteServerDefaultUser,
@@ -16,6 +15,7 @@ import {
 import SystemStatusHeader, { type Verdict, type LifecyclePhase, type VmStage } from "./SystemStatusHeader";
 import MetricTile from "../ui/MetricTile";
 import HostHealthPanel from "./HostHealthPanel";
+import VmPowerControls from "./VmPowerControls";
 import ServerStatsTable from "./ServerStatsTable";
 import ServerTunnelControls from "./ServerTunnelControls";
 import CustomTunnelControls from "./CustomTunnelControls";
@@ -60,7 +60,6 @@ export default function ServerDashboard({
 }: ServerDashboardProps) {
   const liveStatus = statusError ? undefined : status;
   const battlegroup = liveStatus?.battlegroup;
-  const battlegroupStarted = liveStatus ? isBattlegroupStarted(liveStatus.battlegroup) : false;
   const battlegroupStopped = liveStatus ? liveStatus.battlegroup.stop : false;
   const directorReady = !!liveStatus && isDirectorReadyPhase(liveStatus.battlegroup.directorPhase);
   const busy = !!busyLabel;
@@ -93,9 +92,6 @@ export default function ServerDashboard({
       return next;
     });
   }, [activePlayers]);
-
-  // Mock FPS history
-  const [fpsHistory] = useState<number[]>([30, 30, 29, 30, 30, 28, 30, 30, 29, 30]);
 
   // 3. Synthesize single-glance verdict, details, stage, and lifecycle
   let verdict: Verdict = "operational";
@@ -179,6 +175,9 @@ export default function ServerDashboard({
         onRestartBg={onRestartBattlegroup}
       />
 
+      {/* Hyper-V VM power controls (#28) — self-hides when not on the Hyper-V host */}
+      <VmPowerControls />
+
       {/* 2 — Bento metric grid */}
       <div
         style={{
@@ -215,13 +214,6 @@ export default function ServerDashboard({
           mono={false}
         />
         <MetricTile
-          label="Server FPS"
-          value={battlegroupStarted ? "30" : "0"}
-          tone={battlegroupStarted ? "healthy" : "muted"}
-          trend={battlegroupStarted ? fpsHistory : undefined}
-          trendTone="success"
-        />
-        <MetricTile
           label="Uptime"
           value={battlegroup?.uptime ?? "—"}
           icon={Clock}
@@ -243,7 +235,7 @@ export default function ServerDashboard({
           />
         </div>
         <div>
-          <HostHealthPanel />
+          <HostHealthPanel server={server} appendLogRow={appendLogRow} />
         </div>
       </div>
 

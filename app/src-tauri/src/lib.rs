@@ -11,11 +11,13 @@ use tauri::Manager;
 use crate::log_file::LogFile;
 
 use crate::commands::{
-    check_remote_sudo, detect_remote_ubuntu_servers, get_logs_folder, install_management_service,
+    check_remote_sudo, detect_remote_ubuntu_servers, get_logs_folder, host_apply_fix,
+    host_health_check, install_management_service,
     management_service_bundled_version, management_service_status, ms_cluster, ms_cron_preview,
     ms_dump_prune_execute, ms_dump_prune_preview, ms_get_config, ms_health, ms_history,
-    ms_list_commands, ms_list_logs, ms_list_runs, ms_list_timezones, ms_player_location,
-    ms_publish, ms_search_items, ms_search_journey_nodes, ms_search_players,
+    ms_award_intel, ms_grant_currency, ms_list_commands, ms_list_logs, ms_list_runs,
+    ms_list_timezones, ms_player_location, ms_publish, ms_search_items, ms_search_journey_nodes,
+    ms_search_players,
     ms_search_skill_modules, ms_search_vehicles, ms_search_xp_event_tags, ms_set_config,
     ms_trigger_run, ms_welcome_grant_retry, ms_welcome_grants, ms_welcome_whisper,
     record_operation_log,
@@ -23,7 +25,8 @@ use crate::commands::{
     restart_management_service, restart_remote_battlegroup, restart_remote_component,
     server_tunnel_status, start_custom_tunnel, start_remote_battlegroup, start_server_tunnel,
     stop_all_tunnels, stop_remote_battlegroup, stop_server_tunnel, uninstall_management_service,
-    update_remote_battlegroup,
+    battlegroup_system_state, detect_local_vm_connection, update_remote_battlegroup,
+    vm_get_state, vm_host_readiness, vm_start, vm_stop,
 };
 use crate::state::TunnelRegistry;
 
@@ -101,6 +104,16 @@ pub fn run() {
             ms_welcome_grant_retry,
             ms_welcome_whisper,
             ms_publish,
+            ms_grant_currency,
+            ms_award_intel,
+            vm_get_state,
+            vm_host_readiness,
+            vm_start,
+            vm_stop,
+            battlegroup_system_state,
+            detect_local_vm_connection,
+            host_health_check,
+            host_apply_fix,
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {

@@ -104,6 +104,14 @@ pub fn router(state: AppState) -> Router {
             "/api/admin/publish",
             axum::routing::post(api_admin::publish),
         )
+        .route(
+            "/api/admin/grant-currency",
+            axum::routing::post(api_admin::grant_currency),
+        )
+        .route(
+            "/api/admin/award-intel",
+            axum::routing::post(api_admin::award_intel),
+        )
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
