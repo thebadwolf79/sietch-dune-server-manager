@@ -166,7 +166,7 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
           value={sub}
           onValueChange={(value) => onSubChange(value as ServerSubPage)}
         >
-          <Tabs.List size="2" color="bronze">
+          <Tabs.List size="2">
             <Tabs.Trigger value="dashboard">Dashboard</Tabs.Trigger>
             <Tabs.Trigger value="update">Update</Tabs.Trigger>
             <Tabs.Trigger value="pods">Pods</Tabs.Trigger>

@@ -30,7 +30,7 @@ export default function TopNav({
   const activeServerId = activePage.kind === "server" ? activePage.serverId : null;
   return (
     <nav aria-label="Primary navigation" className="top-nav">
-      <TabNav.Root size="2" color="bronze" className="server-tab-strip">
+      <TabNav.Root size="2" className="server-tab-strip">
         <TabNav.Link
           href="#"
           active={serversActive}

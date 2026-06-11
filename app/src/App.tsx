@@ -93,8 +93,8 @@ export function App() {
   return (
     <Theme
       appearance="dark"
-      accentColor="bronze"
-      grayColor="sand"
+      accentColor={theme === "oled" ? "cyan" : "bronze"}
+      grayColor={theme === "oled" ? "slate" : "sand"}
       radius="medium"
       scaling="100%"
       panelBackground="solid"

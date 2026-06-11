@@ -1750,6 +1750,25 @@ button:disabled,
   --color-border-muted: #1a1a1a;
   --color-border-default: #262626;
   --color-border-strong: #383838;
+
+  /* Distinct cool identity (vs the default warm desert bronze): electric cyan
+     accent + cool-white text. This is what makes OLED read as a different
+     interface rather than a darker wallpaper. The Radix accent is flipped to
+     `cyan` in App.tsx so native components shift to match these. */
+  --color-text-primary: #e7edf3;
+  --color-accent: #22d3ee;
+  --color-accent-strong: #67e8f9;
+  --color-accent-dim: rgba(34, 211, 238, 0.16);
+  --color-accent-ring: rgba(34, 211, 238, 0.38);
+
+  /* Status colors retuned brighter/cooler so they pop on true black. */
+  --color-ok: #3fb950;
+  --color-ok-strong: #56d364;
+  --color-ok-dim: rgba(63, 185, 80, 0.16);
+  --color-warn: #d29922;
+  --color-warn-dim: rgba(210, 153, 34, 0.16);
+  --color-err: #f85149;
+  --color-err-dim: rgba(248, 81, 73, 0.18);
 }
 
 /* Override background gradient in OLED mode */
