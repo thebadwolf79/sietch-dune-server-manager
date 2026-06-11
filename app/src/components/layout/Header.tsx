@@ -44,11 +44,11 @@ export default function Header({
         <Flex align="center" gap="4">
           <Flex align="center" gap="3">
             <span className="app-glyph" aria-hidden>
-              D
+              <img src="/app-icon.png" alt="Sietch Logo" style={{ width: "100%", height: "100%", borderRadius: "inherit", objectFit: "cover" }} />
             </span>
             <Flex direction="column" gap="0">
-              <span className="app-title">Dune Dedicated Server Manager</span>
-              <span className="app-title-sub">Operator console</span>
+              <span className="app-title">Sietch</span>
+              <span className="app-title-sub">Dune Server Manager · Operator console</span>
             </Flex>
           </Flex>
           <TopNav

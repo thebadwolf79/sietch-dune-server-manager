@@ -6,7 +6,7 @@ import { openExternal } from "../../services/tauri";
 import type { Update } from "../../services/updater";
 import type { UpdateStatus } from "../../types/update";
 
-const RELEASES_URL = "https://github.com/adainrivers/dune-dedicated-server-manager/releases";
+const RELEASES_URL = "https://github.com/thebadwolf79/sietch-dune-server-manager/releases";
 
 // Links inside the release notes must open in the system browser, not navigate
 // the Tauri webview away from the app.

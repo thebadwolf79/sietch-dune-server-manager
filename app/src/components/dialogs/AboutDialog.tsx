@@ -5,8 +5,9 @@ import { Button, Dialog, Flex, IconButton, Link, Text } from "@radix-ui/themes";
 
 import { openExternal } from "../../services/tauri";
 
-const REPO_URL = "https://github.com/adainrivers/dune-dedicated-server-manager";
+const REPO_URL = "https://github.com/thebadwolf79/sietch-dune-server-manager";
 const ISSUES_URL = `${REPO_URL}/issues`;
+const UPSTREAM_URL = "https://github.com/adainrivers/dune-dedicated-server-manager";
 
 /**
  * Small info button (sits next to "Check for updates") that opens an About
@@ -47,9 +48,9 @@ export default function AboutDialog() {
         </IconButton>
       </Dialog.Trigger>
       <Dialog.Content maxWidth="460px">
-        <Dialog.Title>About</Dialog.Title>
+        <Dialog.Title>About Sietch</Dialog.Title>
         <Dialog.Description size="2" style={{ color: "var(--color-text-muted)" }}>
-          Dune Dedicated Server Manager
+          Sietch — Dune Dedicated Server Manager · unofficial community fork
         </Dialog.Description>
 
         <Flex direction="column" gap="3" mt="4">
@@ -77,6 +78,15 @@ export default function AboutDialog() {
             </Text>
             <Link size="2" href={ISSUES_URL} onClick={(e) => { e.preventDefault(); openLink(ISSUES_URL)(); }}>
               Report an issue
+            </Link>
+          </Flex>
+
+          <Flex justify="between" align="center">
+            <Text size="2" color="gray">
+              Built on
+            </Text>
+            <Link size="2" href={UPSTREAM_URL} onClick={(e) => { e.preventDefault(); openLink(UPSTREAM_URL)(); }}>
+              gaming.tools (upstream)
             </Link>
           </Flex>
         </Flex>

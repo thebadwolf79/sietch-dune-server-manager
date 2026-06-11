@@ -38,14 +38,15 @@ export function updateLabel(status: UpdateStatus, availableUpdate: Update | null
   if (status === "checking") return "Checking";
   if (status === "installing") return progress ?? "Installing";
   if (status === "relaunching") return progress ?? "Relaunching";
-  if (status === "failed") return "Check failed";
+  if (status === "failed") return "Update check unavailable";
   if (availableUpdate) return `${availableUpdate.version} available`;
   if (status === "current") return "Up to date";
   return "Not checked";
 }
 
 export function updateTone(status: UpdateStatus): "green" | "amber" | "red" {
-  if (status === "failed") return "red";
+  // A failed/unreachable check (e.g. no published release yet) is not an error
+  // worth alarming about — keep it neutral rather than red.
   if (status === "current") return "green";
   return "amber";
 }

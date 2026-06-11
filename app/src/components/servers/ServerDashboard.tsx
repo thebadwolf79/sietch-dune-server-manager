@@ -168,20 +168,23 @@ export default function ServerDashboard({
       const gwPhase = battlegroup?.serverGroupPhase || "";
       const dirPhase = battlegroup?.directorPhase || "";
 
-      const dbRunning = dbPhase === "Running";
-      const gwRunning = gwPhase === "Running";
-      const dirRunning = dirPhase === "Running" || dirPhase === "Healthy";
+      // Use the shared phase classification, not a naive `=== "Running"`:
+      // Ready / Healthy / Available / Reconciling all count as healthy. A healthy
+      // database reports "Ready", so the old check mislabeled a fine server as
+      // DEGRADED.
+      const dbHealthy = phaseTone(dbPhase) === "ok";
+      const gwHealthy = phaseTone(gwPhase) === "ok";
+      const dirHealthy = phaseTone(dirPhase) === "ok";
 
-      if (!dbRunning || !gwRunning || !dirRunning) {
-        verdict = "degraded";
-        detail = `Component alert: Database is ${dbPhase || "unknown"} · Gateway is ${gwPhase || "unknown"} · Director is ${dirPhase || "unknown"}.`;
-        
-        const starting = [dbPhase, gwPhase, dirPhase].some(p => ["starting", "pending", "starting…"].includes(p.toLowerCase()));
-        lifecycle = starting ? "starting" : "degraded";
-      } else {
+      if (dbHealthy && gwHealthy && dirHealthy) {
         verdict = "operational";
         detail = "BattleGroup is healthy. All services active.";
         lifecycle = "healthy";
+      } else {
+        verdict = "degraded";
+        detail = `Component status — Database: ${dbPhase || "unknown"} · Gateway: ${gwPhase || "unknown"} · Director: ${dirPhase || "unknown"}.`;
+        const anyStarting = [dbPhase, gwPhase, dirPhase].some((p) => phaseTone(p) === "warn");
+        lifecycle = anyStarting ? "starting" : "degraded";
       }
     }
   } else {
