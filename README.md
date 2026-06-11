@@ -13,11 +13,20 @@ A desktop manager for existing Dune: Awakening dedicated servers.
 
 ![Dashboard — BattleGroup status, lifecycle actions, management service, and tunnel controls](images/ss-1.png)
 
-The app manages already-provisioned Dune dedicated servers over SSH and
-Kubernetes control commands. It does not install the game server, create VMs,
-configure Hyper-V, provision Ubuntu, or manage external tools such as SteamCMD.
+The app manages already-provisioned Dune: Awakening dedicated servers over SSH
+and Kubernetes control commands. It does not install the game server, create
+VMs, configure Hyper-V, provision Ubuntu, or manage external tools such as
+SteamCMD.
 
-## Features
+## What Sietch adds (over upstream)
+
+- **Integrated UI redesign** — a denser, dark "desert ops" dashboard, admin console, and management panels.
+- **Hyper-V VM power controls** — start/stop the server VM from the app when it runs on the Hyper-V host, with auto-detection of the local Funcom VM + SSH key.
+- **In-game grants** — Solari, House Scrip (currency), and Intel / Tech Knowledge, as guarded offline database writes (player must be offline).
+- **Host Health & Hardening advisor** — SSH-probes the VM for swap / memory / disk / DB-restart / OOMKilled-pod issues and offers one-click fixes (add a swapfile, tune swappiness).
+- **Reliability fixes** — also contributed back upstream: `battlegroup update` false-failure exit code, the Auto-Update toggle not staying off + Users-tab freeze, and clearer backup-failure diagnostics. Plus restart-aware backoff for the welcome scan.
+
+## Features (inherited base)
 
 - Remote server profile management with SSH private-key authentication
 - BattleGroup status, start, stop, restart, and update controls
@@ -34,7 +43,8 @@ More management features coming soon.
 
 ## Install
 
-Download the latest release for your operating system from GitHub Releases.
+Download the latest release for your operating system from
+[this repository's Releases](https://github.com/thebadwolf79/dune-dedicated-server-manager/releases).
 
 - Windows: run the NSIS installer.
 - Linux: use the AppImage or Debian package.
@@ -56,13 +66,32 @@ typical dedicated-server deployment uses:
 - UDP 7777-7810 for game servers
 - TCP 31982 for RMQ
 
-If you found a bug or are having other issues, please create an issue here:
-https://github.com/adainrivers/dune-dedicated-server-manager/issues
+## Issues & feedback
+
+Found a bug in **Sietch** or have a request? Open an issue here:
+<https://github.com/thebadwolf79/dune-dedicated-server-manager/issues>
+
+If the problem is with the upstream project rather than this fork's additions,
+consider reporting it at
+[adainrivers/dune-dedicated-server-manager](https://github.com/adainrivers/dune-dedicated-server-manager/issues)
+so the whole community benefits.
 
 ## Building From Source
 
 See [Building From Source](docs/building-from-source.md).
 
+## Credits & relationship to upstream
+
+Sietch is built on
+[adainrivers/dune-dedicated-server-manager](https://github.com/adainrivers/dune-dedicated-server-manager)
+by **gaming.tools** (creators of the Dune Awakening Database) — full credit for
+the foundation goes to them. This fork tracks upstream and contributes broadly
+useful fixes back rather than hoarding them. It is an independent, unofficial
+fork, **not affiliated with or endorsed by gaming.tools, Funcom, or Legendary
+Entertainment**. "Dune" and related names are trademarks of their respective
+owners.
+
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+MIT License — see [LICENSE](LICENSE). Original work © gaming.tools; fork
+modifications © TheBadWolf79. Both retained per the MIT terms.
