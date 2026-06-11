@@ -113,4 +113,8 @@ export const managementApi = {
   // actor. Player must be offline.
   awardIntel: (tunnelId: string, flsId: string, amount: number) =>
     invoke<PublishResultDto>("ms_award_intel", { tunnelId, flsId, amount }),
+  // DB-grant path: UPSERT specialization XP into dune.specialization_tracks.
+  // trackType is whitelisted server-side; player must be offline.
+  grantSpecXp: (tunnelId: string, flsId: string, trackType: string, amount: number) =>
+    invoke<PublishResultDto>("ms_grant_spec_xp", { tunnelId, flsId, trackType, amount }),
 };

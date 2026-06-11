@@ -112,6 +112,10 @@ pub fn router(state: AppState) -> Router {
             "/api/admin/award-intel",
             axum::routing::post(api_admin::award_intel),
         )
+        .route(
+            "/api/admin/grant-spec-xp",
+            axum::routing::post(api_admin::grant_spec_xp),
+        )
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }

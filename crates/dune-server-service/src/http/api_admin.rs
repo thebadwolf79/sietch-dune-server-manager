@@ -431,6 +431,120 @@ pub async fn award_intel(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrantSpecXpRequest {
+    pub fls_id: String,
+    pub track_type: String,
+    pub amount: i32,
+}
+
+/// Valid `dune.specializationtracktype` values (verified live 2026-06-11). The
+/// enum also has `Invalid` / `Count` sentinels which we reject — only these five
+/// are real specialization tracks.
+const SPEC_TRACK_TYPES: [&str; 5] = ["Combat", "Crafting", "Gathering", "Exploration", "Sabotage"];
+
+/// Enough to fully unlock any tree, far below int32 max (the column is `integer`).
+const MAX_SPEC_XP_GRANT: i32 = 10_000_000;
+
+/// Grant specialization XP via a guarded offline UPSERT into
+/// `dune.specialization_tracks`. See `postgres::grant_spec_xp` for the offline +
+/// ADD-semantics guarantees. The engine's AwardXP ignores Category, so this DB
+/// write is the only route.
+pub async fn grant_spec_xp(
+    State(state): State<AppState>,
+    Json(req): Json<GrantSpecXpRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let fls_id = req.fls_id.trim().to_string();
+    if fls_id.is_empty() {
+        return Err(ApiError::bad_request("flsId must not be empty"));
+    }
+    let track_type = req.track_type.trim();
+    if !SPEC_TRACK_TYPES.contains(&track_type) {
+        return Err(ApiError::bad_request(format!(
+            "trackType must be one of {}",
+            SPEC_TRACK_TYPES.join(", ")
+        )));
+    }
+    if req.amount < 1 || req.amount > MAX_SPEC_XP_GRANT {
+        return Err(ApiError::bad_request(format!(
+            "amount must be between 1 and {MAX_SPEC_XP_GRANT}"
+        )));
+    }
+
+    let cluster = state.env.cluster.get().await?;
+    let result = crate::postgres::grant_spec_xp(
+        &state.env.pg,
+        &cluster.namespace,
+        &fls_id,
+        track_type,
+        req.amount,
+    )
+    .await;
+
+    use crate::postgres::SpecXpGrantResult as R;
+    let (ok, output, error) = match result {
+        Ok(R::Granted { new_xp }) => (
+            true,
+            format!("Granted {} {track_type} XP to {fls_id} (new total {new_xp})", req.amount),
+            None,
+        ),
+        Ok(R::PlayerNotFound) => (
+            false,
+            String::new(),
+            Some(format!("no player found for flsId {fls_id}")),
+        ),
+        Ok(R::Ambiguous) => (
+            false,
+            String::new(),
+            Some(format!(
+                "flsId {fls_id} resolves to multiple players; refusing to guess"
+            )),
+        ),
+        Ok(R::PlayerOnline(status)) => (
+            false,
+            String::new(),
+            Some(format!(
+                "player must be offline to receive specialization XP (status: {}); the server overwrites DB edits on logout",
+                if status.is_empty() { "unknown" } else { status.as_str() }
+            )),
+        ),
+        Ok(R::CharacterActorMissing) => (
+            false,
+            String::new(),
+            Some(format!(
+                "could not resolve a character actor for flsId {fls_id} (character never created?)"
+            )),
+        ),
+        Err(err) => {
+            let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
+            (false, String::new(), Some(scrubbed))
+        }
+    };
+
+    let payload = serde_json::json!({
+        "flsId": fls_id,
+        "trackType": track_type,
+        "amount": req.amount,
+    });
+    let _ = state.store.record_admin_command(
+        "GrantSpecXp",
+        &payload,
+        ok,
+        error
+            .as_deref()
+            .or(if ok { None } else { Some(output.as_str()) }),
+    );
+
+    Ok(Json(serde_json::json!({
+        "ok": ok,
+        "command": "GrantSpecXp",
+        "output": output,
+        "error": error,
+        "inner": payload,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PublishRequest {
     pub command: String,
     #[serde(default)]

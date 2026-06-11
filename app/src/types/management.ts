@@ -124,7 +124,7 @@ export type CommandSpec = {
    *   the target currencyId rides in `lockedFields`.
    * - `award_intel` jsonb_sets the Tech Knowledge points leaf on the character actor.
    */
-  dbAction?: "grant_currency" | "award_intel";
+  dbAction?: "grant_currency" | "award_intel" | "grant_spec_xp";
 };
 
 export type ItemDto = {

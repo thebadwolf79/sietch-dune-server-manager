@@ -505,6 +505,28 @@ pub async fn ms_award_intel(
     .await
 }
 
+/// Grant specialization XP via the management service's guarded offline UPSERT
+/// into `dune.specialization_tracks`.
+#[tauri::command]
+pub async fn ms_grant_spec_xp(
+    app: tauri::AppHandle,
+    registry: tauri::State<'_, TunnelRegistry>,
+    tunnel_id: String,
+    fls_id: String,
+    track_type: String,
+    amount: i32,
+) -> Result<Value, String> {
+    let port = tunnel_local_port(&registry, &tunnel_id)?;
+    let client = ensure_client(&app);
+    post_json(
+        &client,
+        port,
+        "/api/admin/grant-spec-xp",
+        &serde_json::json!({ "flsId": fls_id, "trackType": track_type, "amount": amount }),
+    )
+    .await
+}
+
 fn search_path(base: &str, q: Option<&str>, limit: Option<u32>) -> String {
     let mut out = base.to_string();
     let mut sep = '?';

@@ -130,7 +130,44 @@ function withSyntheticGrants(list: CommandSpec[]): CommandSpec[] {
     ],
     dbAction: "award_intel",
   };
-  return [...list, solari, houseScrip, intel];
+  // Specialization XP is one row per (player, track) in dune.specialization_tracks
+  // — its own guarded offline DB write (the engine's AwardXP ignores Category).
+  const specXp: CommandSpec = {
+    id: "GrantSpecXp",
+    label: "Grant Specialization XP",
+    category: "progression",
+    needsPlayer: true,
+    allowAllPlayers: false,
+    describe:
+      "Add XP to one of a player's specialization tracks. Direct database write — the player must be offline (the server overwrites edits on logout). The amount is added to the track's current total.",
+    fields: [
+      ...(playerField ? [playerField] : []),
+      {
+        key: "TrackType",
+        label: "Specialization",
+        kind: "select",
+        required: true,
+        default: "Combat",
+        options: [
+          { value: "Combat", label: "Combat" },
+          { value: "Crafting", label: "Crafting" },
+          { value: "Gathering", label: "Gathering" },
+          { value: "Exploration", label: "Exploration" },
+          { value: "Sabotage", label: "Sabotage" },
+        ],
+      },
+      {
+        key: "Amount",
+        label: "Amount",
+        kind: "int",
+        required: true,
+        default: 1000,
+        helper: "XP to add to the current total. Player must be offline.",
+      },
+    ],
+    dbAction: "grant_spec_xp",
+  };
+  return [...list, solari, houseScrip, intel, specXp];
 }
 
 const CLIENT_DEFAULTS: Record<string, unknown> = {
@@ -387,6 +424,13 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
         const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
         const amount = Number(values.Amount);
         out = await managementApi.awardIntel(tunnelId, flsId, amount);
+      } else if (selected.dbAction === "grant_spec_xp") {
+        // DB-grant path: UPSERT into dune.specialization_tracks. trackType is
+        // whitelisted server-side against the valid specialization enum.
+        const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
+        const trackType = typeof values.TrackType === "string" ? values.TrackType : "";
+        const amount = Number(values.Amount);
+        out = await managementApi.grantSpecXp(tunnelId, flsId, trackType, amount);
       } else {
         const publishId = selected.publishAs ?? selected.id;
         const payload = { ...values, ...(selected.lockedFields ?? {}) };

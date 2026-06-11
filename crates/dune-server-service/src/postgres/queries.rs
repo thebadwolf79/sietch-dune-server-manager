@@ -596,6 +596,112 @@ pub async fn grant_intel(
     Ok(IntelGrantResult::Granted { new_points })
 }
 
+// Specialization XP lives in dune.specialization_tracks, one row per
+// (player_id, track_type) where player_id is the CHARACTER actor id — the same
+// `player_state.player_pawn_id` we resolve for Intel. The engine's AwardXP MQ
+// command ignores Category (live-tested), so per-track XP can only be set by a
+// guarded offline DB write.
+//
+// Resolve the pawn id + online status, locking player_state, identically to the
+// Intel path. (verified schema 2026-06-11)
+const SPEC_XP_RESOLVE_SQL: &str = "
+SELECT ps.player_pawn_id,
+       lower(btrim(COALESCE(ps.online_status::text, ''))) AS online_norm
+FROM dune.player_state ps
+JOIN dune.encrypted_accounts enc ON enc.id = ps.account_id
+WHERE enc.\"user\"::text = $1
+FOR UPDATE OF ps
+";
+
+// UPSERT, ADD semantics. The table starts empty for a player, so a plain UPDATE
+// would match 0 rows — INSERT ... ON CONFLICT covers both first grant and
+// top-up. Notes:
+//  - $2 is forced through `::text::enum` so tokio_postgres binds it as text and
+//    Postgres casts to the enum (a bare `$2::enum` would bind as the enum OID,
+//    which a Rust &str can't encode);
+//  - `level` is set to 0.0 only on first insert and never touched on update —
+//    the engine recomputes level from xp on next login;
+//  - track_type is whitelisted by the caller, so the cast can't hit Invalid/Count.
+const SPEC_XP_UPSERT_SQL: &str = "
+INSERT INTO dune.specialization_tracks (player_id, track_type, xp_amount, level)
+VALUES ($1::int8, $2::text::dune.specializationtracktype, $3::int4, 0.0)
+ON CONFLICT (player_id, track_type)
+DO UPDATE SET xp_amount = dune.specialization_tracks.xp_amount + EXCLUDED.xp_amount
+RETURNING xp_amount::int4
+";
+
+/// Outcome of a specialization-XP grant. Non-`Granted` variants are expected,
+/// recoverable states the handler turns into clear messages; `Err` is reserved
+/// for actual DB faults.
+pub enum SpecXpGrantResult {
+    Granted { new_xp: i32 },
+    /// No `player_state` row for the FLS id.
+    PlayerNotFound,
+    /// More than one `player_state` row matched — refuse rather than guess.
+    Ambiguous,
+    /// Player is not strictly offline. Carries the normalized status we saw.
+    PlayerOnline(String),
+    /// Pawn id was NULL — the player has no resolvable character actor to key
+    /// the track row on, so we refuse rather than invent one.
+    CharacterActorMissing,
+}
+
+/// Grant specialization XP to one track by UPSERTing `dune.specialization_tracks`
+/// (ADD semantics on `xp_amount`). A guarded offline DB write, mirroring
+/// `grant_intel`:
+/// - one transaction: resolve + `FOR UPDATE` the player_state row, then UPSERT;
+/// - refuses unless strictly offline (the engine overwrites DB edits on logout);
+/// - touches only `xp_amount` on conflict; never `level` (engine recomputes it);
+/// - fails closed on unknown / ambiguous FLS id or a NULL pawn.
+///
+/// The caller (HTTP handler) whitelists `track_type` against the valid enum
+/// strings and clamps `amount`; this function trusts neither beyond the guards
+/// it can verify here.
+pub async fn grant_spec_xp(
+    pg: &PgClient,
+    namespace: &str,
+    fls_id: &str,
+    track_type: &str,
+    amount: i32,
+) -> Result<SpecXpGrantResult> {
+    let mut state = pg.dedicated_client(namespace).await?;
+    let tx = state
+        .client_mut()
+        .transaction()
+        .await
+        .context("starting spec-xp grant transaction")?;
+
+    let rows = tx
+        .query(SPEC_XP_RESOLVE_SQL, &[&fls_id])
+        .await
+        .context("resolving player for spec-xp grant")?;
+    if rows.is_empty() {
+        return Ok(SpecXpGrantResult::PlayerNotFound);
+    }
+    if rows.len() > 1 {
+        return Ok(SpecXpGrantResult::Ambiguous);
+    }
+
+    let row = &rows[0];
+    let pawn_id: Option<i64> = row.try_get(0).ok().flatten();
+    let online_norm: String = row.try_get(1).unwrap_or_default();
+    if online_norm != "offline" {
+        return Ok(SpecXpGrantResult::PlayerOnline(online_norm));
+    }
+    let Some(pawn_id) = pawn_id else {
+        return Ok(SpecXpGrantResult::CharacterActorMissing);
+    };
+
+    let upserted = tx
+        .query_one(SPEC_XP_UPSERT_SQL, &[&pawn_id, &track_type, &amount])
+        .await
+        .context("upserting specialization track xp")?;
+    let new_xp: i32 = upserted.try_get(0).context("reading new spec xp")?;
+
+    tx.commit().await.context("committing spec-xp grant")?;
+    Ok(SpecXpGrantResult::Granted { new_xp })
+}
+
 pub async fn resolve_chat_player(
     pg: &PgClient,
     namespace: &str,
