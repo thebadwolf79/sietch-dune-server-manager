@@ -27,6 +27,48 @@ export type HostReadiness = {
   logicalProcessorCount: number;
 };
 
+// --- Host Health & Hardening advisor (mirrors app/src-tauri/src/dto.rs) ---
+
+export type HealthSeverity = "ok" | "info" | "warning" | "critical";
+
+export type HostMetrics = {
+  memTotalMb: number;
+  memAvailableMb: number;
+  swapTotalMb: number;
+  swapUsedMb: number;
+  swappiness: number | null;
+  diskRootAvailGb: number;
+  diskRootUsePct: number | null;
+  fstabSwap: boolean;
+  dbMaxRestarts: number | null;
+  oomkilledPods: string[];
+};
+
+export type HealthFinding = {
+  id: string;
+  severity: HealthSeverity;
+  title: string;
+  detail: string;
+  recommendation: string;
+  fixId: string | null;
+  fixLabel: string | null;
+  fixParam: number | null;
+};
+
+export type HostHealthReport = {
+  metrics: HostMetrics;
+  findings: HealthFinding[];
+  overallSeverity: HealthSeverity;
+  summary: string;
+  clusterChecked: boolean;
+};
+
+export type HostApplyFixResult = {
+  ok: boolean;
+  fixId: string;
+  message: string;
+};
+
 // Gating helpers mirroring the Rust SystemState methods, so the UI and backend
 // agree on the same vocabulary.
 export function canStartVm(state: SystemState): boolean {

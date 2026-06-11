@@ -12,6 +12,7 @@ import ActionButton from "../ui/ActionButton";
 import Metric from "../ui/Metric";
 import ServerStatsTable from "./ServerStatsTable";
 import VmPowerControls from "./VmPowerControls";
+import HostHealthPanel from "./HostHealthPanel";
 import ServerTunnelControls from "./ServerTunnelControls";
 import CustomTunnelControls from "./CustomTunnelControls";
 import ManagementServiceCard from "../management/ManagementServiceCard";
@@ -140,6 +141,8 @@ export default function ServerDashboard({
         onRefresh={onRefreshManagement}
         appendLogRow={appendLogRow}
       />
+
+      <HostHealthPanel server={server} appendLogRow={appendLogRow} />
 
       <ServerTunnelControls
         serverKey={server.id}

@@ -11,7 +11,8 @@ use tauri::Manager;
 use crate::log_file::LogFile;
 
 use crate::commands::{
-    check_remote_sudo, detect_remote_ubuntu_servers, get_logs_folder, install_management_service,
+    check_remote_sudo, detect_remote_ubuntu_servers, get_logs_folder, host_apply_fix,
+    host_health_check, install_management_service,
     management_service_bundled_version, management_service_status, ms_cluster, ms_cron_preview,
     ms_dump_prune_execute, ms_dump_prune_preview, ms_get_config, ms_health, ms_history,
     ms_award_intel, ms_grant_currency, ms_list_commands, ms_list_logs, ms_list_runs,
@@ -111,6 +112,8 @@ pub fn run() {
             vm_stop,
             battlegroup_system_state,
             detect_local_vm_connection,
+            host_health_check,
+            host_apply_fix,
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {

@@ -1,6 +1,7 @@
 mod battlegroup;
 mod component;
 mod discovery;
+mod host_health;
 mod logs;
 mod management_api;
 mod management_service;
@@ -20,6 +21,7 @@ pub use battlegroup::{
 };
 pub use component::{remote_component_log_tail, restart_remote_component};
 pub use discovery::detect_remote_ubuntu_servers;
+pub use host_health::{host_apply_fix, host_health_check};
 pub use logs::{get_logs_folder, record_operation_log};
 pub use management_api::{
     ms_cluster, ms_cron_preview, ms_dump_prune_execute, ms_dump_prune_preview, ms_get_config,

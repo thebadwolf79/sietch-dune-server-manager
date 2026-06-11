@@ -66,13 +66,17 @@ but the restarts cascade into full battlegroup bounces and transient task failur
 ### For the tool (broad-audience)
 1. **Restart-aware welcome scan:** treat "no Game RMQ pod" during a known/likely restart
    window as *transient* — back off (exponential, capped) and/or collapse the retry storm
-   into a single suppressed/aggregated run instead of ~20 identical FAILED rows.
+   into a single suppressed/aggregated run instead of ~20 identical FAILED rows. *(Still TODO.)*
 2. **Health surfacing:** flag **swap=0**, **DB restartCount climbing**, and **dump pods
-   OOMKilled** as health warnings in the UI — these are leading indicators of the #23
-   pattern that an operator can't easily see today.
+   OOMKilled** as health warnings in the UI — leading indicators of the #23 pattern.
+   **✅ DONE:** built the **Host Health & Hardening advisor** (`commands/host_health.rs` +
+   `HostHealthPanel`). SSH-probes RAM/swap/swappiness/disk and (when a namespace is given)
+   DB restart count + OOMKilled pods, renders severity-ranked findings, and offers
+   one-click idempotent fixes (`add_swap`, `set_swappiness`) behind a confirmation. The
+   exact thing we did by hand for #23 is now a button any operator can use.
 3. **Solo-mode awareness:** on a single-player server (one account, already granted),
    the scheduled welcome scan is near-pointless; the profile could downgrade its
-   cadence / severity.
+   cadence / severity. *(Still TODO.)*
 
 ## Status
 Live server is currently **healthy**: all pods Running, 13.9 GB available, DB serving

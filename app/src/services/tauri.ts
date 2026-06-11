@@ -15,7 +15,12 @@ import type {
   RemoteServerStatus,
 } from "../types/server";
 import type { CustomTunnelStartRequest, ServerTunnelStartRequest, ServerTunnelStatus } from "../types/tunnel";
-import type { HostReadiness, SystemState } from "../types/vm";
+import type {
+  HostApplyFixResult,
+  HostHealthReport,
+  HostReadiness,
+  SystemState,
+} from "../types/vm";
 
 type RemoteActionRequest = {
   serverType: RemoteServerKind;
@@ -125,6 +130,35 @@ export async function vmStart(vmName: string): Promise<SystemState> {
 
 export async function vmStop(vmName: string): Promise<SystemState> {
   return invoke<SystemState>("vm_stop", { vmName });
+}
+
+// --- Host Health & Hardening advisor (SSH-based; works on any reachable VM) ---
+
+export type HostHealthCheckRequest = {
+  serverType?: string;
+  host: string;
+  user: string;
+  keyPath?: string;
+  port?: number;
+  namespace?: string;
+};
+
+export async function hostHealthCheck(request: HostHealthCheckRequest): Promise<HostHealthReport> {
+  return invoke<HostHealthReport>("host_health_check", { request });
+}
+
+export type HostApplyFixRequest = {
+  serverType?: string;
+  host: string;
+  user: string;
+  keyPath?: string;
+  port?: number;
+  fixId: string;
+  param?: number;
+};
+
+export async function hostApplyFix(request: HostApplyFixRequest): Promise<HostApplyFixResult> {
+  return invoke<HostApplyFixResult>("host_apply_fix", { request });
 }
 
 export async function startServerTunnel(request: ServerTunnelStartRequest): Promise<ServerTunnelStatus> {

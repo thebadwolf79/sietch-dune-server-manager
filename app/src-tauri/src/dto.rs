@@ -4,6 +4,94 @@ fn default_ssh_port() -> u16 {
     22
 }
 
+// ---------------------------------------------------------------------------
+// Host Health & Hardening advisor
+//
+// SSH-probes the VM for resource-level conditions the operator can't easily see
+// (no swap, high swappiness, low disk, recurring DB restarts / OOMKilled pods),
+// turns them into severity-ranked findings + recommendations, and offers safe,
+// idempotent one-click fixes. Host-OS hardening only — never touches Funcom's
+// game stack (wrap, don't replace).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostHealthRequest {
+    pub server_type: Option<String>,
+    pub host: String,
+    pub user: String,
+    pub key_path: Option<String>,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    /// When present, also runs cluster-level checks (DB restarts / OOMKilled) via kubectl.
+    pub namespace: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostMetrics {
+    pub mem_total_mb: u64,
+    pub mem_available_mb: u64,
+    pub swap_total_mb: u64,
+    pub swap_used_mb: u64,
+    pub swappiness: Option<i32>,
+    pub disk_root_avail_gb: f64,
+    pub disk_root_use_pct: Option<i32>,
+    pub fstab_swap: bool,
+    pub db_max_restarts: Option<i32>,
+    pub oomkilled_pods: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthFinding {
+    pub id: String,
+    /// "ok" | "info" | "warning" | "critical"
+    pub severity: String,
+    pub title: String,
+    pub detail: String,
+    pub recommendation: String,
+    /// When set, the UI can offer a one-click apply via `host_apply_fix`.
+    pub fix_id: Option<String>,
+    pub fix_label: Option<String>,
+    /// Suggested numeric argument for the fix (swap GB, or swappiness value).
+    pub fix_param: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostHealthReport {
+    pub metrics: HostMetrics,
+    pub findings: Vec<HealthFinding>,
+    /// Highest severity across findings: "ok" | "info" | "warning" | "critical".
+    pub overall_severity: String,
+    pub summary: String,
+    /// True when cluster-level (kubectl) checks ran (namespace was provided + reachable).
+    pub cluster_checked: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostApplyFixRequest {
+    pub server_type: Option<String>,
+    pub host: String,
+    pub user: String,
+    pub key_path: Option<String>,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    pub fix_id: String,
+    /// Numeric argument (swap GB for add_swap, value for set_swappiness).
+    pub param: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostApplyFixResult {
+    pub ok: bool,
+    pub fix_id: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteConnectionRequest {
