@@ -1,6 +1,15 @@
-# Dune Dedicated Server Manager
+# Sietch — Dune Dedicated Server Manager
 
-A desktop manager for existing Dune Awakening dedicated servers.
+A desktop manager for existing Dune: Awakening dedicated servers.
+
+> **Unofficial community fork.** Sietch is a fork of
+> [adainrivers/dune-dedicated-server-manager](https://github.com/adainrivers/dune-dedicated-server-manager)
+> (© gaming.tools, MIT-licensed). It adds an integrated UI redesign, Hyper-V VM
+> power controls, in-game currency / Tech-Knowledge grants, a host health &
+> hardening advisor, and assorted reliability fixes — several of which are also
+> contributed back upstream. **Not affiliated with, endorsed by, or sponsored by
+> gaming.tools, Funcom, or Legendary Entertainment.** "Dune" and related names
+> are trademarks of their respective owners; this is a fan-made server-admin tool.
 
 ![Dashboard — BattleGroup status, lifecycle actions, management service, and tunnel controls](images/ss-1.png)
 

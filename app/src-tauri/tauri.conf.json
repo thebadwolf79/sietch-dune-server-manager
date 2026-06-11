@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Dune Dedicated Server Manager",
+  "productName": "Sietch - Dune Dedicated Server Manager",
   "version": "0.3.16",
-  "identifier": "dev.dune.dedicated-server-manager",
+  "identifier": "io.github.thebadwolf79.sietch",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Dune Dedicated Server Manager",
+        "title": "Sietch - Dune Dedicated Server Manager",
         "width": 1280,
         "height": 820,
         "minWidth": 960,
@@ -43,9 +43,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE2N0QwRkY3NzBBNTMxNTAKUldSUU1hVnc5dzk5cGg2b3ZVKzNpUGI0M3BNVHdzWk1mdzQwSzMrdm9HVllvQlg5bEdyM1BCU0UK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY3RkZFNkVDRURERUVFNkEKUldScTd0N3Q3T2IvWnkyZHd5TFNzRFJac2JjUFkyK25ELy8zTjNKOWpXRlVmQTF0NVF2VFBUZ2gK",
       "endpoints": [
-        "https://github.com/adainrivers/dune-dedicated-server-manager/releases/latest/download/latest.json"
+        "https://github.com/thebadwolf79/dune-dedicated-server-manager/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"
