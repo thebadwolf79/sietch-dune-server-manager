@@ -17,6 +17,13 @@ pub enum Schedule {
     /// Fire on the cadence described by a (5-, 6-, or 7-field) cron
     /// expression, evaluated in the operator's TZ.
     Cron(Box<CronSchedule>),
+    /// Fire `lead_time` before each fire of `inner`. Used by the restart-notice
+    /// task so the pre-restart warning tracks the real restart cadence (daily
+    /// or cron) without duplicating its schedule logic.
+    RestartNotice {
+        inner: Box<Schedule>,
+        lead_time: Duration,
+    },
     /// Never fire automatically. Manual triggers still work.
     Disabled,
 }
@@ -73,6 +80,16 @@ impl Schedule {
                     .map(|dt| dt.with_timezone(&Utc))
                     .unwrap_or_else(|| now + chrono::Duration::days(365 * 100))
             }
+            Self::RestartNotice { inner, lead_time } => {
+                // Find the first inner fire that is at least `lead_time` away,
+                // then back off by `lead_time`. Anchoring the search at
+                // `now + lead` keeps the result strictly in the future even
+                // when `now` already sits inside the warning window of the
+                // upcoming restart (we simply warn for the following one).
+                let lead = chrono::Duration::from_std(*lead_time)
+                    .unwrap_or_else(|_| chrono::Duration::days(365 * 100));
+                inner.next_fire(tz, now + lead) - lead
+            }
             // Sentinel "very far future" so the loop sleeps until cancellation
             // even if a caller forgets to check `is_disabled`.
             Self::Disabled => now + chrono::Duration::days(365 * 100),
@@ -86,6 +103,9 @@ impl Schedule {
                 format!("daily {:02}:{:02} {}", hour, minute, tz.name())
             }
             Self::Cron(schedule) => format!("cron `{schedule}` {}", tz.name()),
+            Self::RestartNotice { inner, lead_time } => {
+                format!("{}s before [{}]", lead_time.as_secs(), inner.describe(tz))
+            }
             Self::Disabled => "disabled (manual-only)".to_string(),
         }
     }
@@ -117,5 +137,39 @@ mod tests {
     #[test]
     fn parse_cron_rejects_invalid_field() {
         assert!(parse_cron("99 4 * * *").is_err());
+    }
+
+    #[test]
+    fn restart_notice_fires_lead_time_before_inner() {
+        use chrono::TimeZone;
+        let tz = chrono_tz::Europe::Amsterdam;
+        let notice = Schedule::RestartNotice {
+            inner: Box::new(Schedule::daily(5, 0)),
+            lead_time: Duration::from_secs(1800),
+        };
+        // 01:00 UTC = 03:00 CEST; restart is 05:00 local, notice fires 04:30.
+        let now = Utc.with_ymd_and_hms(2026, 6, 1, 1, 0, 0).unwrap();
+        let next = notice.next_fire(tz, now);
+        let restart = Schedule::daily(5, 0).next_fire(tz, now);
+        assert_eq!(next, restart - chrono::Duration::seconds(1800));
+        assert!(next > now);
+    }
+
+    #[test]
+    fn restart_notice_skips_to_next_when_inside_warning_window() {
+        use chrono::TimeZone;
+        let tz = chrono_tz::Europe::Amsterdam;
+        let notice = Schedule::RestartNotice {
+            inner: Box::new(Schedule::daily(5, 0)),
+            lead_time: Duration::from_secs(1800),
+        };
+        // 02:45 UTC = 04:45 CEST: past today's 04:30 notice but before 05:00.
+        // Must roll to tomorrow's 04:30, never produce a past time.
+        let now = Utc.with_ymd_and_hms(2026, 6, 1, 2, 45, 0).unwrap();
+        let next = notice.next_fire(tz, now);
+        assert!(next > now);
+        let local = next.with_timezone(&tz);
+        use chrono::Timelike;
+        assert_eq!((local.time().hour(), local.time().minute()), (4, 30));
     }
 }

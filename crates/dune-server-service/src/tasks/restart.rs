@@ -24,6 +24,17 @@ impl RestartTask {
     }
 }
 
+/// The restart cadence, independent of the `restart_enabled` switch: the
+/// operator's cron expression if configured, otherwise the daily wall-clock
+/// fallback. Shared with `restart-notice` so the warning fires relative to the
+/// real restart time on whichever schedule is active.
+pub(crate) fn restart_cadence(env: &TaskEnv) -> Schedule {
+    match env.restart_cron.as_ref() {
+        Some(cron) => Schedule::Cron(Box::new(cron.clone())),
+        None => Schedule::daily(env.restart_hour, env.restart_minute),
+    }
+}
+
 #[async_trait]
 impl Task for RestartTask {
     fn id(&self) -> &'static str {
@@ -32,7 +43,7 @@ impl Task for RestartTask {
 
     fn schedule(&self) -> Schedule {
         if self.env.restart_enabled {
-            Schedule::daily(self.env.restart_hour, self.env.restart_minute)
+            restart_cadence(&self.env)
         } else {
             Schedule::Disabled
         }

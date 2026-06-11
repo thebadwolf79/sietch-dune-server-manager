@@ -39,9 +39,19 @@ pub struct TaskEnv {
     pub backup_enabled: bool,
     /// Lead time before a downloaded update is applied (default 1800s = 30 min).
     pub update_lead_secs: i64,
-    /// Restart-notice + restart wall-clock target (default 05:00).
+    /// Restart-notice + restart wall-clock target (default 05:00). Used as the
+    /// fallback cadence when `restart_cron` is unset, so existing installs keep
+    /// their daily restart behavior.
     pub restart_hour: u32,
     pub restart_minute: u32,
+    /// Operator-supplied cron expression that drives automatic battlegroup
+    /// restarts, evaluated in `restart_tz`. When set it supersedes
+    /// `restart_hour`/`restart_minute`, allowing day-specific or multi-time
+    /// schedules. `None` falls back to the daily wall-clock target.
+    pub restart_cron: Option<cron::Schedule>,
+    /// User-typed form of the restart cron expression, kept verbatim so the UI
+    /// echoes exactly what the operator entered.
+    pub restart_cron_raw: Option<String>,
     /// Restart broadcast frequency / declared shutdown duration.
     pub restart_warning_frequency_secs: u64,
     pub restart_warning_duration_secs: u64,

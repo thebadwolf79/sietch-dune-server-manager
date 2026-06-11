@@ -1,12 +1,13 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 
 use crate::admin::ShutdownType;
-use crate::scheduler::{schedule::Schedule, timezone, Task, TaskCtx, TaskOutcome};
-use crate::tasks::TaskEnv;
+use crate::scheduler::{schedule::Schedule, Task, TaskCtx, TaskOutcome};
+use crate::tasks::{restart, TaskEnv};
 
 /// Replaces `scripts/daily-battlegroup-restart-notice`. Scheduled daily at the
 /// configured wall-clock hour:minute. Computes the target timestamp for the
@@ -44,11 +45,13 @@ impl Task for RestartNoticeTask {
             return Schedule::Disabled;
         }
         // Fire `restart_warning_duration_secs` before the actual restart
-        // moment, so the operator-configured lead time is honored.
-        let total_minutes = self.env.restart_hour * 60 + self.env.restart_minute;
-        let lead_minutes = self.env.restart_warning_duration_secs.div_ceil(60) as u32;
-        let pre = (total_minutes + 24 * 60 - (lead_minutes % (24 * 60))) % (24 * 60);
-        Schedule::daily(pre / 60, pre % 60)
+        // moment, tracking whichever cadence (cron or daily) the restart task
+        // uses. The RestartNotice variant computes the lead-time offset against
+        // the inner schedule so day-specific / multi-time crons stay in sync.
+        Schedule::RestartNotice {
+            inner: Box::new(restart::restart_cadence(&self.env)),
+            lead_time: Duration::from_secs(self.env.restart_warning_duration_secs),
+        }
     }
 
     async fn run(&self, ctx: &TaskCtx) -> Result<TaskOutcome> {
@@ -86,12 +89,12 @@ impl Task for RestartNoticeTask {
 
         let target_utc = match lead_secs {
             Some(secs) => Utc::now() + chrono::Duration::seconds(secs),
-            None => timezone::next_daily_at(
-                ctx.env.restart_tz,
-                ctx.env.restart_hour,
-                ctx.env.restart_minute,
-                Utc::now(),
-            ),
+            // Scheduled: the real restart is the next fire of the restart
+            // cadence after now. Since this task fires `lead_time` before that
+            // moment, the next inner fire is exactly the restart we are warning
+            // about — works for both the daily fallback and any cron schedule.
+            None => restart::restart_cadence(&ctx.env)
+                .next_fire(ctx.env.restart_tz, Utc::now()),
         };
         let target_ts = target_utc.timestamp();
         let frequency = frequency_override.unwrap_or(ctx.env.restart_warning_frequency_secs);

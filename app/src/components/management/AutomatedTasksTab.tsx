@@ -27,6 +27,12 @@ import { formatDateTime, formatTime } from "../../utils/formatting";
 import Combobox from "./Combobox";
 import DumpPruneDialog from "./DumpPruneDialog";
 
+type CronStatus =
+  | { state: "idle" }
+  | { state: "validating" }
+  | { state: "ok"; tz: string; next: string[] }
+  | { state: "error"; message: string };
+
 const DIRECT_TASKS: Array<{ id: string; label: string }> = [
   { id: "backup", label: "Backup" },
   { id: "welcome-package", label: "Welcome package scan" },
@@ -391,13 +397,10 @@ function ScheduleSettings({
   const [restartEnabled, setRestartEnabled] = useState(true);
   const [updateEnabled, setUpdateEnabled] = useState(true);
   const [backupEnabled, setBackupEnabled] = useState(true);
+  const [restartCron, setRestartCron] = useState("");
+  const [restartCronStatus, setRestartCronStatus] = useState<CronStatus>({ state: "idle" });
   const [backupCron, setBackupCron] = useState("");
-  const [backupCronStatus, setBackupCronStatus] = useState<
-    | { state: "idle" }
-    | { state: "validating" }
-    | { state: "ok"; tz: string; next: string[] }
-    | { state: "error"; message: string }
-  >({ state: "idle" });
+  const [backupCronStatus, setBackupCronStatus] = useState<CronStatus>({ state: "idle" });
 
   const refresh = useCallback(async () => {
     try {
@@ -412,6 +415,8 @@ function ScheduleSettings({
       setRestartEnabled(c.restartEnabled ?? true);
       setUpdateEnabled(c.updateEnabled ?? true);
       setBackupEnabled(c.backupEnabled ?? true);
+      setRestartCron(c.restartCron ?? "");
+      setRestartCronStatus({ state: "idle" });
       setBackupCron(c.backupCron ?? "");
       setBackupCronStatus({ state: "idle" });
       setError(null);
@@ -435,11 +440,36 @@ function ScheduleSettings({
     setRestartEnabled(config.restartEnabled ?? true);
     setUpdateEnabled(config.updateEnabled ?? true);
     setBackupEnabled(config.backupEnabled ?? true);
+    setRestartCron(config.restartCron ?? "");
+    setRestartCronStatus({ state: "idle" });
     setBackupCron(config.backupCron ?? "");
     setBackupCronStatus({ state: "idle" });
     setEditing(true);
     setError(null);
   }, [config]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const trimmed = restartCron.trim();
+    if (!trimmed) {
+      setRestartCronStatus({ state: "idle" });
+      return;
+    }
+    setRestartCronStatus({ state: "validating" });
+    const handle = setTimeout(async () => {
+      try {
+        const result = await managementApi.cronPreview(tunnelId, trimmed, 5);
+        if (result.ok) {
+          setRestartCronStatus({ state: "ok", tz: result.tz, next: result.next });
+        } else {
+          setRestartCronStatus({ state: "error", message: result.error });
+        }
+      } catch (err) {
+        setRestartCronStatus({ state: "error", message: String(err) });
+      }
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [restartCron, editing, tunnelId]);
 
   useEffect(() => {
     if (!editing) return;
@@ -474,6 +504,9 @@ function ScheduleSettings({
     setError(null);
     try {
       setBusyLabel("Saving…");
+      if (restartCron.trim() && restartCronStatus.state === "error") {
+        throw new Error(`Restart cron invalid: ${restartCronStatus.message}`);
+      }
       if (backupEnabled && !backupCron.trim()) {
         throw new Error("A cron expression is required while auto backup is enabled.");
       }
@@ -483,6 +516,7 @@ function ScheduleSettings({
       await managementApi.setConfig(tunnelId, {
         restartHour: hour,
         restartMinute: minute,
+        restartCron: restartCron.trim(),
         restartWarningFrequencySecs: warnFreq,
         restartWarningDurationSecs: warnDur,
         updateLeadSecs: updateLead,
@@ -537,6 +571,8 @@ function ScheduleSettings({
     restartEnabled,
     updateEnabled,
     backupEnabled,
+    restartCron,
+    restartCronStatus,
     backupCron,
     backupCronStatus,
     refresh,
@@ -629,24 +665,32 @@ function ScheduleSettings({
             </Text>
           </Flex>
 
-          <Text size="2" weight="medium">Daily restart (HH:MM)</Text>
-          <Flex gap="2" align="center">
+          <Text size="2" weight="medium">
+            Restart cron (5-field){" "}
+            <Link
+              size="1"
+              href="https://crontab.guru/"
+              onClick={(e) => {
+                e.preventDefault();
+                void openExternal("https://crontab.guru/");
+              }}
+            >
+              crontab.guru
+            </Link>
+          </Text>
+          <Box>
             <TextField.Root
-              inputMode="numeric"
-              value={pad2(hour)}
-              onChange={(e) => setHour(clampInt(e.target.value, 23))}
-              onFocus={(e) => e.target.select()}
-              style={{ width: 70 }}
+              value={restartCron}
+              onChange={(e) => setRestartCron(e.target.value)}
+              placeholder="e.g. 0 6 * * 1-5  (weekdays at 06:00)"
             />
-            <Text>:</Text>
-            <TextField.Root
-              inputMode="numeric"
-              value={pad2(minute)}
-              onChange={(e) => setMinute(clampInt(e.target.value, 59))}
-              onFocus={(e) => e.target.select()}
-              style={{ width: 70 }}
-            />
-          </Flex>
+            <Box mt="1">
+              <CronStatusHint
+                status={restartCronStatus}
+                idleHint={`Empty = daily fallback at ${pad2(hour)}:${pad2(minute)}. Standard 5-field cron (min hour day month dow) in your configured timezone.`}
+              />
+            </Box>
+          </Box>
 
           <Text size="2" weight="medium">Timezone</Text>
           <Combobox
@@ -750,10 +794,14 @@ function ScheduleSettings({
           </Text>
 
           <Text size="2" color="gray">
-            Daily restart
+            Restart schedule
           </Text>
-          <Text size="2">
-            {displayHour}:{displayMinute}
+          <Text size="2" className="mono">
+            {config
+              ? config.restartCron && config.restartCron.trim()
+                ? config.restartCron
+                : `daily ${displayHour}:${displayMinute}`
+              : "—"}
           </Text>
 
           <Text size="2" color="gray">
@@ -1005,17 +1053,15 @@ function RunRow({
 
 function CronStatusHint({
   status,
+  idleHint = "Empty = disabled. Standard 5-field cron (min hour day month dow) in your configured timezone.",
 }: {
-  status:
-    | { state: "idle" }
-    | { state: "validating" }
-    | { state: "ok"; tz: string; next: string[] }
-    | { state: "error"; message: string };
+  status: CronStatus;
+  idleHint?: string;
 }) {
   if (status.state === "idle") {
     return (
       <Text size="1" color="gray">
-        Empty = disabled. Standard 5-field cron (min hour day month dow) in your configured timezone.
+        {idleHint}
       </Text>
     );
   }
@@ -1058,13 +1104,4 @@ function statusColor(s: string): "gray" | "green" | "red" | "amber" {
 
 function pad2(n: number): string {
   return n.toString().padStart(2, "0");
-}
-
-// Parse a numeric text field, ignoring non-digits, and clamp to [0, max].
-// Used by the HH:MM restart fields so they can show zero-padded values
-// (a native number input strips leading zeros).
-function clampInt(raw: string, max: number): number {
-  const n = Number(raw.replace(/\D/g, ""));
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.min(Math.trunc(n), max);
 }

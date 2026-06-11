@@ -171,6 +171,10 @@ async fn run() -> Result<()> {
     // cron expression in `backupCron`.
     let mut backup_cron: Option<cron::Schedule> = None;
     let mut backup_cron_raw: Option<String> = None;
+    // Restart cron is opt-in too: unset falls back to restart_hour/minute so
+    // existing installs keep their daily restart.
+    let mut restart_cron: Option<cron::Schedule> = None;
+    let mut restart_cron_raw: Option<String> = None;
     if let Ok(Some(v)) = store.get_config_i64("restart_enabled") {
         restart_enabled = v != 0;
     }
@@ -226,6 +230,20 @@ async fn run() -> Result<()> {
             }
         }
     }
+    if let Ok(Some(expr)) = store.get_config("restart_cron") {
+        let trimmed = expr.trim();
+        if !trimmed.is_empty() {
+            match dune_server_service::scheduler::schedule::parse_cron(trimmed) {
+                Ok(schedule) => {
+                    restart_cron = Some(schedule);
+                    restart_cron_raw = Some(trimmed.to_string());
+                }
+                Err(err) => {
+                    tracing::warn!(stored = %trimmed, error = %err, "ignoring invalid stored restart_cron");
+                }
+            }
+        }
+    }
     let welcome_package_actions =
         match dune_server_service::tasks::welcome_package::parse_welcome_actions(
             &welcome_package_actions_json,
@@ -256,6 +274,7 @@ async fn run() -> Result<()> {
         update_lead_secs,
         restart_hour,
         restart_minute,
+        restart_cron = restart_cron_raw.as_deref().unwrap_or("(daily fallback)"),
         restart_warning_frequency_secs,
         restart_warning_duration_secs,
         backup_cron = backup_cron_raw.as_deref().unwrap_or("(disabled)"),
@@ -286,6 +305,8 @@ async fn run() -> Result<()> {
         update_lead_secs,
         restart_hour,
         restart_minute,
+        restart_cron,
+        restart_cron_raw,
         restart_warning_frequency_secs,
         restart_warning_duration_secs,
         restart_tz: effective_tz,

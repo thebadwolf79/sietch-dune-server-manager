@@ -163,6 +163,11 @@ export type XpEventTagDto = {
 export type ScheduleConfig = {
   restartHour: number;
   restartMinute: number;
+  /**
+   * null = daily restartHour/restartMinute fallback in effect; otherwise the
+   * 5-field cron string that supersedes the daily target.
+   */
+  restartCron: string | null;
   restartWarningFrequencySecs: number;
   restartWarningDurationSecs: number;
   updateLeadSecs: number;
@@ -191,6 +196,8 @@ export type ScheduleConfig = {
 export type ScheduleConfigUpdate = Partial<{
   restartHour: number;
   restartMinute: number;
+  /** Empty string clears the cron (daily fallback); non-empty validated server-side. */
+  restartCron: string;
   restartWarningFrequencySecs: number;
   restartWarningDurationSecs: number;
   updateLeadSecs: number;

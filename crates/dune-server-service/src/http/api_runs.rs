@@ -97,6 +97,10 @@ pub async fn trigger(
 pub struct ConfigResponse {
     pub restart_hour: u32,
     pub restart_minute: u32,
+    /// `None` means the daily `restart_hour`/`restart_minute` fallback is in
+    /// effect. When set, it is the exact 5-field cron string the operator typed,
+    /// evaluated in `restart_tz`, and supersedes the daily target.
+    pub restart_cron: Option<String>,
     pub restart_warning_frequency_secs: u64,
     pub restart_warning_duration_secs: u64,
     pub update_lead_secs: i64,
@@ -158,6 +162,11 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
         .get_config("backup_cron")?
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
+    let stored_restart_cron = state
+        .store
+        .get_config("restart_cron")?
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
 
     let stored_tz = state.store.get_config("restart_tz")?;
     let stored_welcome_enabled = state
@@ -196,6 +205,7 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
             .map(|v| v != env.backup_enabled)
             .unwrap_or(false)
         || stored_backup_cron.as_deref() != env.backup_cron_raw.as_deref()
+        || stored_restart_cron.as_deref() != env.restart_cron_raw.as_deref()
         || stored_tz
             .as_deref()
             .map(|v| v != env.restart_tz.name())
@@ -227,6 +237,7 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
     Ok(Json(ConfigResponse {
         restart_hour: env.restart_hour,
         restart_minute: env.restart_minute,
+        restart_cron: env.restart_cron_raw.clone(),
         restart_warning_frequency_secs: env.restart_warning_frequency_secs,
         restart_warning_duration_secs: env.restart_warning_duration_secs,
         update_lead_secs: env.update_lead_secs,
@@ -251,6 +262,10 @@ pub async fn get_config(State(state): State<AppState>) -> Result<impl IntoRespon
 pub struct ConfigUpdate {
     pub restart_hour: Option<u32>,
     pub restart_minute: Option<u32>,
+    /// Empty string clears the cron schedule (= fall back to the daily
+    /// hour/minute target); non-empty strings are validated by `parse_cron`
+    /// before being persisted.
+    pub restart_cron: Option<String>,
     pub restart_warning_frequency_secs: Option<u64>,
     pub restart_warning_duration_secs: Option<u64>,
     pub update_lead_secs: Option<i64>,
@@ -344,6 +359,18 @@ pub async fn set_config(
             crate::scheduler::schedule::parse_cron(trimmed)
                 .map_err(|err| ApiError::bad_request(err.to_string()))?;
             state.store.set_config("backup_cron", trimmed)?;
+        }
+    }
+    if let Some(expr) = req.restart_cron.as_deref() {
+        let trimmed = expr.trim();
+        if trimmed.is_empty() {
+            // Empty -> clear the row so the service falls back to the daily
+            // restart_hour/restart_minute target.
+            state.store.set_config("restart_cron", "")?;
+        } else {
+            crate::scheduler::schedule::parse_cron(trimmed)
+                .map_err(|err| ApiError::bad_request(err.to_string()))?;
+            state.store.set_config("restart_cron", trimmed)?;
         }
     }
     if let Some(enabled) = req.welcome_package_enabled {
