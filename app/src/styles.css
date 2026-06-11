@@ -401,6 +401,60 @@ body {
 }
 
 /* ------------------------------------------------------------------------
+   Vertical (left-rail) sub-tab navigation. Radix sets data-orientation
+   ="vertical" on the root; we lay the trigger list out as a left column and
+   make the right-hand panel the single scroll container — which keeps tall
+   forms (e.g. Admin) + their action buttons reachable at any window width
+   (fixes the non-maximized clipping).
+   ------------------------------------------------------------------------ */
+.server-detail-tabs[data-orientation="vertical"] {
+  flex-direction: row;
+  gap: var(--space-4);
+  align-items: stretch;
+}
+.server-detail-tabs[data-orientation="vertical"] .rt-TabsList {
+  flex: 0 0 auto;
+  width: 188px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-height: 0;
+  box-shadow: none;
+  border-right: 1px solid var(--color-border-hair);
+  padding: 4px 10px 4px 0;
+}
+.server-detail-tabs[data-orientation="vertical"] .rt-TabsTrigger {
+  justify-content: flex-start;
+  width: 100%;
+  height: 34px;
+  padding-inline: 10px;
+  border-radius: var(--radius-2);
+}
+/* Drop Radix's horizontal active-underline; use a left accent bar + fill. */
+.server-detail-tabs[data-orientation="vertical"] .rt-TabsTrigger::before,
+.server-detail-tabs[data-orientation="vertical"] .rt-TabsTrigger::after {
+  display: none;
+}
+.server-detail-tabs[data-orientation="vertical"] .rt-TabsTrigger:hover {
+  background: var(--color-bg-elevated);
+}
+.server-detail-tabs[data-orientation="vertical"] .rt-TabsTrigger[data-state="active"] {
+  background: var(--color-bg-elevated);
+  box-shadow: inset 2px 0 0 0 var(--color-accent);
+  color: var(--color-text-primary);
+}
+.server-detail-tab-panels {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.server-detail-tabs[data-orientation="vertical"] .server-detail-tab-content {
+  margin-top: 0;
+}
+
+/* ------------------------------------------------------------------------
    Server detail hero
    ------------------------------------------------------------------------ */
 

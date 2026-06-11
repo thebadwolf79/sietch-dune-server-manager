@@ -413,21 +413,32 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
     setResult(null);
     try {
       let out: PublishResultDto;
+      const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
+      // Hard stopper for DB-write grants: re-verify the player is offline right
+      // before sending (catches a login that happened after selection). The
+      // service refuses online grants too, but this avoids a wasted round-trip
+      // and gives the operator a clear, actionable message.
+      if (selected.dbAction) {
+        const matches = await managementApi.searchPlayers(tunnelId, flsId, 5);
+        const p = matches.find((m) => m.flsId === flsId);
+        if (p && p.online.trim().toLowerCase() !== "offline") {
+          throw new Error(
+            `${p.name || flsId} is currently ${p.online}. Have them log out to the main menu before granting — the server overwrites these database edits on login.`,
+          );
+        }
+      }
       if (selected.dbAction === "grant_currency") {
         // DB-grant path: route to the dedicated currency endpoint, not MQ publish.
-        const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
         const currencyId = Number((selected.lockedFields?.currencyId as number | undefined) ?? 1);
         const amount = Number(values.Amount);
         out = await managementApi.grantCurrency(tunnelId, flsId, currencyId, amount);
       } else if (selected.dbAction === "award_intel") {
         // DB-grant path: single-leaf jsonb_set on the character actor.
-        const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
         const amount = Number(values.Amount);
         out = await managementApi.awardIntel(tunnelId, flsId, amount);
       } else if (selected.dbAction === "grant_spec_xp") {
         // DB-grant path: UPSERT into dune.specialization_tracks. trackType is
         // whitelisted server-side against the valid specialization enum.
-        const flsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
         const trackType = typeof values.TrackType === "string" ? values.TrackType : "";
         const amount = Number(values.Amount);
         out = await managementApi.grantSpecXp(tunnelId, flsId, trackType, amount);
@@ -498,9 +509,60 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
     }));
   }, []);
 
+  // DB-write grants (House Scrip / Intel / Spec XP) are overwritten by the engine
+  // when the player next logs in, so they must be applied while the player is
+  // offline. Proactively check the picked player's live status so we can block
+  // the grant up front with a clear note, instead of failing after submit.
+  const isDbGrant = Boolean(selected?.dbAction);
+  const granteeFlsId = typeof values.PlayerId === "string" ? values.PlayerId.trim() : "";
+  const [granteeStatus, setGranteeStatus] = useState<
+    | { state: "idle" | "checking" | "offline" | "unknown" }
+    | { state: "online"; online: string; name: string }
+  >({ state: "idle" });
+
+  useEffect(() => {
+    if (!isDbGrant || !granteeFlsId || granteeFlsId === "*") {
+      setGranteeStatus({ state: "idle" });
+      return;
+    }
+    let cancelled = false;
+    setGranteeStatus({ state: "checking" });
+    const handle = setTimeout(async () => {
+      try {
+        const matches = await managementApi.searchPlayers(tunnelId, granteeFlsId, 5);
+        if (cancelled) return;
+        const p = matches.find((m) => m.flsId === granteeFlsId);
+        if (!p) {
+          setGranteeStatus({ state: "unknown" });
+        } else if (p.online.trim().toLowerCase() === "offline") {
+          setGranteeStatus({ state: "offline" });
+        } else {
+          setGranteeStatus({
+            state: "online",
+            online: p.online || "online",
+            name: p.name || granteeFlsId,
+          });
+        }
+      } catch {
+        if (!cancelled) setGranteeStatus({ state: "unknown" });
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [isDbGrant, granteeFlsId, tunnelId]);
+
+  const granteeOnlineBlocked = isDbGrant && granteeStatus.state === "online";
+
   const canPublish = useMemo(() => {
-    return targetReady && requiredFilled && (!selected?.destructive || confirm);
-  }, [targetReady, requiredFilled, selected?.destructive, confirm]);
+    return (
+      targetReady &&
+      requiredFilled &&
+      !granteeOnlineBlocked &&
+      (!selected?.destructive || confirm)
+    );
+  }, [targetReady, requiredFilled, granteeOnlineBlocked, selected?.destructive, confirm]);
 
   return (
     <Grid mt="3" gap="5" columns={{ initial: "1", lg: "280px 1fr" }} align="start">
@@ -799,6 +861,21 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
               gap="3"
               style={{ borderTop: "1px solid var(--color-border-hair)", paddingTop: "16px" }}
             >
+              {isDbGrant && (
+                <Text
+                  size="1"
+                  color={granteeStatus.state === "online" ? "red" : "gray"}
+                  style={{ display: "block" }}
+                >
+                  {granteeStatus.state === "online"
+                    ? `⛔ ${granteeStatus.name} is currently ${granteeStatus.online}. They must be logged out to the main menu before you can grant — the server overwrites these database edits on login.`
+                    : granteeStatus.state === "checking"
+                      ? "Checking player status…"
+                      : granteeStatus.state === "offline"
+                        ? "✓ Player is offline — safe to grant. (The server overwrites these DB edits on login.)"
+                        : "Direct database write — the player must be offline (logged out to the main menu). The server overwrites these edits on login."}
+                </Text>
+              )}
               {selected.destructive && (
                 <label
                   style={{

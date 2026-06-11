@@ -12,8 +12,8 @@
 //! waits stream progress to the UI through [`TauriOperationSink`].
 
 use dune_manager_core::orchestration::{
-    wait_for_vm_ipv4, DuneVmConfidence, DuneVmDetector, HostProvider, HostReadiness,
-    HyperVVmLifecycleOrchestrator, StrictPowerShellHyperV, VmProvider,
+    wait_for_vm_ipv4, DuneVmCandidate, DuneVmConfidence, DuneVmDetector, HostProvider,
+    HostReadiness, HyperVVmLifecycleOrchestrator, StrictPowerShellHyperV, VmProvider,
 };
 
 use crate::commands::shared::{command_error_message, runner_for_remote_kind};
@@ -55,6 +55,41 @@ fn read_state(vm_name: &str) -> Result<SystemState, String> {
     }
 }
 
+/// Pick the highest-confidence Dune VM candidate's name. Pure (host-free) so the
+/// selection logic is unit-testable. `None` when the list is empty.
+fn highest_confidence_vm_name(candidates: &[DuneVmCandidate]) -> Option<String> {
+    candidates
+        .iter()
+        .min_by_key(|c| match c.confidence {
+            DuneVmConfidence::High => 0u8,
+            DuneVmConfidence::Medium => 1,
+            DuneVmConfidence::Low => 2,
+        })
+        .map(|c| c.vm.name.clone())
+}
+
+/// Resolve the Hyper-V VM name to actually operate on.
+///
+/// The UI addresses the VM by the registered server's world/battlegroup id
+/// (e.g. `sh-431c…`), which is NOT the Hyper-V VM name — so an exact lookup
+/// misses and Start/Stop/state read break with "VM not found". Strategy:
+///   1. exact match wins (honors a VM that genuinely carries that name);
+///   2. else fall back to host-side Dune VM detection (highest confidence);
+///   3. else return the requested name so a real "not found" still surfaces.
+///
+/// Runs blocking Hyper-V calls — invoke inside `spawn_blocking`.
+fn resolve_vm_name(requested: &str) -> String {
+    if let Ok(Some(_)) = StrictPowerShellHyperV::new().get_vm(requested) {
+        return requested.to_string();
+    }
+    match DuneVmDetector::new(StrictPowerShellHyperV::new()).detect() {
+        Ok(candidates) => {
+            highest_confidence_vm_name(&candidates).unwrap_or_else(|| requested.to_string())
+        }
+        Err(_) => requested.to_string(),
+    }
+}
+
 /// Reports host readiness so the UI can choose connect-only vs. power-capable mode.
 ///
 /// `hyperv_available && vmms_running` means this machine can power the VM; on a
@@ -74,7 +109,7 @@ pub async fn vm_host_readiness() -> Result<HostReadiness, String> {
 /// Reads the current lifecycle state of the named VM (non-destructive).
 #[tauri::command]
 pub async fn vm_get_state(vm_name: String) -> Result<SystemState, String> {
-    tauri::async_runtime::spawn_blocking(move || read_state(&vm_name))
+    tauri::async_runtime::spawn_blocking(move || read_state(&resolve_vm_name(&vm_name)))
         .await
         .map_err(|err| format!("vm_get_state worker failed: {err}"))?
 }
@@ -109,6 +144,9 @@ pub async fn battlegroup_system_state(
 pub async fn vm_start(app: tauri::AppHandle, vm_name: String) -> Result<SystemState, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut sink = TauriOperationSink::new(app);
+        // Resolve the world/battlegroup id the UI passes to the real Hyper-V VM
+        // name before any state read or power action.
+        let vm_name = resolve_vm_name(&vm_name);
 
         // Idempotent guard: only Off/Saved/Paused can be started (Grok risk matrix).
         let current = read_state(&vm_name)?;
@@ -155,6 +193,7 @@ pub async fn vm_start(app: tauri::AppHandle, vm_name: String) -> Result<SystemSt
 pub async fn vm_stop(app: tauri::AppHandle, vm_name: String) -> Result<SystemState, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut sink = TauriOperationSink::new(app);
+        let vm_name = resolve_vm_name(&vm_name);
 
         let current = read_state(&vm_name)?;
         if !current.battlegroup_actions_enabled() {
@@ -272,4 +311,59 @@ pub async fn detect_local_vm_connection() -> Result<VmConnectionDefaults, String
     })
     .await
     .map_err(|err| format!("detect_local_vm_connection worker failed: {err}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dune_manager_core::orchestration::{VmInventoryRecord, VmPowerState};
+
+    fn candidate(name: &str, confidence: DuneVmConfidence) -> DuneVmCandidate {
+        DuneVmCandidate {
+            vm: VmInventoryRecord {
+                name: name.to_string(),
+                state: VmPowerState::Off,
+                raw_state: "Off".to_string(),
+                configuration_location: String::new(),
+                path: String::new(),
+                memory_assigned_bytes: 0,
+                processor_count: 0,
+                uptime_seconds: 0,
+                ipv4_addresses: vec![],
+                hard_disk_paths: vec![],
+                disk_size_bytes: 0,
+                disk_file_size_bytes: 0,
+                switch_names: vec![],
+            },
+            confidence,
+            reasons: vec![],
+        }
+    }
+
+    #[test]
+    fn empty_candidates_resolve_to_none() {
+        assert_eq!(highest_confidence_vm_name(&[]), None);
+    }
+
+    #[test]
+    fn prefers_highest_confidence_regardless_of_order() {
+        let cands = vec![
+            candidate("low-vm", DuneVmConfidence::Low),
+            candidate("high-vm", DuneVmConfidence::High),
+            candidate("medium-vm", DuneVmConfidence::Medium),
+        ];
+        assert_eq!(
+            highest_confidence_vm_name(&cands).as_deref(),
+            Some("high-vm")
+        );
+    }
+
+    #[test]
+    fn single_candidate_is_chosen() {
+        let cands = vec![candidate("dune-awakening", DuneVmConfidence::Medium)];
+        assert_eq!(
+            highest_confidence_vm_name(&cands).as_deref(),
+            Some("dune-awakening")
+        );
+    }
 }

@@ -162,6 +162,7 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
 
         <Tabs.Root
           className="server-detail-tabs"
+          orientation="vertical"
           value={sub}
           onValueChange={(value) => onSubChange(value as ServerSubPage)}
         >
@@ -179,6 +180,7 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
             ) : null}
           </Tabs.List>
 
+          <div className="server-detail-tab-panels">
           <Tabs.Content value="dashboard" className="server-detail-tab-content">
             <ServerDashboard
               server={server}
@@ -272,6 +274,7 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
               </Tabs.Content>
             </>
           ) : null}
+          </div>
         </Tabs.Root>
       </Flex>
     </Box>

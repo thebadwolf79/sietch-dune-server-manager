@@ -5,8 +5,9 @@ A desktop manager for existing Dune: Awakening dedicated servers.
 > **Unofficial community fork.** Sietch is a fork of
 > [adainrivers/dune-dedicated-server-manager](https://github.com/adainrivers/dune-dedicated-server-manager)
 > (© gaming.tools, MIT-licensed). It adds an integrated UI redesign, Hyper-V VM
-> power controls, in-game currency / Tech-Knowledge grants, a host health &
-> hardening advisor, and assorted reliability fixes — several of which are also
+> power controls, in-game currency / Tech-Knowledge / specialization-XP grants,
+> live Director (BGD) status & player tracking, a host health & hardening
+> advisor, and assorted reliability fixes — several of which are also
 > contributed back upstream. **Not affiliated with, endorsed by, or sponsored by
 > gaming.tools, Funcom, or Legendary Entertainment.** "Dune" and related names
 > are trademarks of their respective owners; this is a fan-made server-admin tool.
@@ -19,11 +20,13 @@ SteamCMD.
 
 ## What Sietch adds (over upstream)
 
-- **Integrated UI redesign** — a denser, dark "desert ops" dashboard, admin console, and management panels.
-- **Hyper-V VM power controls** — start/stop the server VM from the app when it runs on the Hyper-V host, with auto-detection of the local Funcom VM + SSH key.
-- **In-game grants** — Solari, House Scrip (currency), and Intel / Tech Knowledge, as guarded offline database writes (player must be offline).
-- **Host Health & Hardening advisor** — SSH-probes the VM for swap / memory / disk / DB-restart / OOMKilled-pod issues and offers one-click fixes (add a swapfile, tune swappiness).
-- **Reliability fixes** — also contributed back upstream: `battlegroup update` false-failure exit code, the Auto-Update toggle not staying off + Users-tab freeze, and clearer backup-failure diagnostics. Plus restart-aware backoff for the welcome scan.
+- **Integrated UI redesign** — a denser, dark "desert ops" dashboard, admin console, and management panels, with a left-rail server navigation and a refreshed app icon.
+- **Hyper-V VM power controls** — start/stop the server VM from the app when it runs on the Hyper-V host, with auto-detection of the local Funcom VM + SSH key (the VM is resolved by host-side detection, so power controls work even though the in-cluster world name differs from the Hyper-V VM name).
+- **In-game grants** — Solari, House Scrip (currency), Intel / Tech Knowledge, and per-track Specialization XP, as guarded offline database writes. The Admin form proactively blocks a grant (with a clear note) unless the target player is offline, since the engine overwrites these edits on login.
+- **Director (BGD) status & player tracking** — reads the Director endpoint for accurate per-partition startup→healthy phases and true per-pod uptime, and surfaces live **online / grace-period / transit / offline** player states (with contextual badges + counts) on the Users tab.
+- **Customizable restart schedule** — a full cron expression for scheduled restarts (e.g. weekdays-only), in addition to the simple daily time, plus a 15-minute cooldown that suppresses duplicate restarts from clock drift / DST.
+- **Host Health & Hardening advisor** — SSH-probes the VM for swap / memory / disk / DB-restart / OOMKilled-pod issues and offers one-click fixes (add a swapfile, tune swappiness, prune failed pods).
+- **Reliability fixes** — several also contributed back upstream: `battlegroup update` false-failure exit code, the Auto-Update toggle not staying off + Users-tab freeze, and backup-failure diagnostics that capture the dump pod's logs/exit reason in real time plus a stray-table ownership precheck. Plus restart-aware backoff for the welcome scan.
 
 ## Features (inherited base)
 
@@ -33,7 +36,7 @@ SteamCMD.
 - Secure Director, File Browser, PostgreSQL, and PgHero access through local SSH tunnels
 - Bundled `dune-server-service` daemon for on-host scheduled maintenance (daily restarts with in-game warnings, automated backups, server update check + apply) — installed over SSH straight from the Management card
 - Admin console for in-game actions: item grants, vehicle spawns, skill/journey/XP tags, player lookup with live pawn location, and a logged history of every published command
-- Automated tasks tab with editable schedule settings (daily restart time, warning lead/frequency, update apply lead, IANA timezone) — saving auto-restarts the service so changes apply immediately
+- Automated tasks tab with editable schedule settings (restart cron *or* simple daily time, warning lead/frequency, update apply lead, backup cron, IANA timezone) — saving auto-restarts the service so changes apply immediately
 - Welcome Package automation: a per-player onboarding chain (item grants, water refill, welcome whisper) driven by Postgres player detection, tracked in the management service's SQLite ledger, and configurable from the Welcome Package tab with both a visual editor and a raw JSON mode
 
 ![Theme Switch — allows changing of theme from Sietch to OLED](images/EYJHBG~3.PNG)
