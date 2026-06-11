@@ -16,11 +16,6 @@ import { canManageVm, type SystemState } from "../../types/vm";
 
 import SystemStatusHeader, { type Verdict, type LifecyclePhase, type VmStage } from "./SystemStatusHeader";
 
-// The Hyper-V VM name (matches VmPowerControls' default). The header's VM-stage
-// indicator reflects the *real* VM power state when this machine is the Hyper-V
-// host; on a remote/connect-only machine there is no local VM to read.
-const HYPERV_VM_NAME = "dune-awakening";
-
 function vmStageFromState(s: SystemState): VmStage | null {
   switch (s.state) {
     case "vmOff":
@@ -91,6 +86,12 @@ export default function ServerDashboard({
   const directorReady = !!liveStatus && isDirectorReadyPhase(liveStatus.battlegroup.directorPhase);
   const busy = !!busyLabel;
 
+  // The Hyper-V VM to read/manage: the registered server's configured
+  // worldUniqueName, falling back to Funcom's initial-setup default. The
+  // header's VM-stage probe and the power controls both target this name so
+  // they stay in agreement about which VM they're acting on.
+  const hypervVmName = server.worldUniqueName || "dune-awakening";
+
   // 1. Parse active players and capacity
   let activePlayers = 0;
   let capacity = 40;
@@ -135,7 +136,7 @@ export default function ServerDashboard({
           if (!cancelled) setRealVmStage(null);
           return;
         }
-        const vm = await vmGetState(HYPERV_VM_NAME);
+        const vm = await vmGetState(hypervVmName);
         if (!cancelled) setRealVmStage(vmStageFromState(vm));
       } catch {
         if (!cancelled) setRealVmStage(null);
@@ -144,7 +145,7 @@ export default function ServerDashboard({
     return () => {
       cancelled = true;
     };
-  }, [status]);
+  }, [status, hypervVmName]);
 
   // 3. Synthesize single-glance verdict, details, stage, and lifecycle
   let verdict: Verdict = "operational";
@@ -154,7 +155,19 @@ export default function ServerDashboard({
 
   if (statusError) {
     verdict = "down";
-    detail = statusError;
+    // When we can see the local VM is down, the raw connection error (e.g.
+    // "Connection refused") is noise — point the operator at the power controls
+    // instead. Falls back to the raw error on remote/connect-only hosts where
+    // realVmStage is null.
+    if (realVmStage === "off") {
+      detail =
+        "The virtual machine is powered off. Power on the VM using the controls below to start the server.";
+    } else if (realVmStage === "saved") {
+      detail =
+        "The virtual machine is in a saved/paused state. Resume the VM using the controls below.";
+    } else {
+      detail = statusError;
+    }
     stage = "off";
     lifecycle = "stopped";
   } else if (liveStatus) {
@@ -222,7 +235,7 @@ export default function ServerDashboard({
         activePlayers={activePlayers}
         capacity={capacity}
         playerTrend={playerHistory}
-        vmName={server.worldUniqueName || "dune-awakening"}
+        vmName={hypervVmName}
         stage={realVmStage ?? stage}
         lifecycle={lifecycle}
         busy={busy}
@@ -232,7 +245,7 @@ export default function ServerDashboard({
       />
 
       {/* Hyper-V VM power controls (#28) — self-hides when not on the Hyper-V host */}
-      <VmPowerControls />
+      <VmPowerControls vmName={server.worldUniqueName || undefined} />
 
       {/* 2 — Bento metric grid */}
       <div

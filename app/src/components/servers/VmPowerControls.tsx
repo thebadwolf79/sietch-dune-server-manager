@@ -24,7 +24,11 @@ const DEFAULT_VM_NAME = "dune-awakening";
  * VM state and Start/Stop actions, gated on the same `SystemState` vocabulary the
  * Rust backend uses.
  */
-export default function VmPowerControls({ vmName = DEFAULT_VM_NAME }: { vmName?: string }) {
+export default function VmPowerControls({ vmName }: { vmName?: string }) {
+  // Fall back to Funcom's default whether the name is absent, empty, or blank —
+  // the parent may pass `worldUniqueName || undefined`, but guard the empty
+  // string case too so a misconfigured record can't target a "" VM.
+  const resolvedVmName = vmName?.trim() || DEFAULT_VM_NAME;
   const [capable, setCapable] = useState<boolean | null>(null); // null = still probing
   const [state, setState] = useState<SystemState | null>(null);
   const [busy, setBusy] = useState<null | "start" | "stop">(null);
@@ -32,11 +36,11 @@ export default function VmPowerControls({ vmName = DEFAULT_VM_NAME }: { vmName?:
 
   const refresh = useCallback(async () => {
     try {
-      setState(await vmGetState(vmName));
+      setState(await vmGetState(resolvedVmName));
     } catch (err) {
       setError(String(err));
     }
-  }, [vmName]);
+  }, [resolvedVmName]);
 
   useEffect(() => {
     let active = true;
@@ -64,7 +68,7 @@ export default function VmPowerControls({ vmName = DEFAULT_VM_NAME }: { vmName?:
     setBusy("start");
     setError(null);
     try {
-      setState(await vmStart(vmName));
+      setState(await vmStart(resolvedVmName));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -76,7 +80,7 @@ export default function VmPowerControls({ vmName = DEFAULT_VM_NAME }: { vmName?:
     setBusy("stop");
     setError(null);
     try {
-      setState(await vmStop(vmName));
+      setState(await vmStop(resolvedVmName));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -87,7 +91,7 @@ export default function VmPowerControls({ vmName = DEFAULT_VM_NAME }: { vmName?:
   return (
     <Flex direction="column" gap="3">
       <div className="metric-grid">
-        <Metric label="Virtual Machine" value={vmName} />
+        <Metric label="Virtual Machine" value={resolvedVmName} />
         <Metric label="VM State" value={systemStateLabel(state)} />
       </div>
       {error ? <div className="server-error">{error}</div> : null}
