@@ -1,4 +1,6 @@
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -8,6 +10,24 @@ use crate::kubectl::battlegroup as bg;
 use crate::kubectl::{run_process, KubectlClient};
 use crate::scheduler::{Schedule, Task, TaskCtx, TaskOutcome};
 use crate::tasks::TaskEnv;
+
+/// Polls the dump pod every this often while the vendor backup runs.
+const DUMP_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// RAII guard for the background dump-pod monitor. Dropping it stops the poll
+/// loop (`active = false`) and aborts the task, so the monitor can never outlive
+/// the backup it watches — on success, error, or panic alike.
+struct MonitorGuard {
+    active: Arc<AtomicBool>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for MonitorGuard {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Relaxed);
+        self.handle.abort();
+    }
+}
 
 /// Replaces `scripts/cron-battlegroup-backup`. Runs the vendor backup helper,
 /// emits a per-run log line referencing the dump path, and lets the operator
@@ -58,10 +78,9 @@ impl Task for BackupTask {
             "starting backup bg={bg_name} ns={} name={backup_name}",
             cluster.namespace
         ))?;
-        // Precheck (#hardening): abort before the vendor spins up a dump pod if
-        // any public table is owned by a different role — pg_dump would fail
-        // mid-run inside that pod and leave only an opaque "backup failed".
-        check_table_ownership(ctx, &cluster.namespace).await?;
+        // The stray-table precheck + dump-pod monitor live inside
+        // run_backup_and_verify so every backup path (scheduled, manual,
+        // pre-update) is guarded uniformly.
         run_backup_and_verify(ctx, &bg_name, &backup_name).await?;
         ctx.log_info(&format!(
             "backup complete path=/funcom/artifacts/database-dumps/{bg_name}/{backup_name}"
@@ -71,15 +90,55 @@ impl Task for BackupTask {
 }
 
 pub async fn run_backup_and_verify(ctx: &TaskCtx, bg_name: &str, backup_name: &str) -> Result<()> {
-    if let Err(err) = ctx.env.bg_cli.backup(backup_name).await {
-        // #7: the vendor `battlegroup backup` runs the dump in a separate pod, so
-        // its failure cause (OOMKilled, or pg_dump aborting on a non-`dune`-owned
-        // table) isn't in the wrapper's output — leaving an opaque "backup failed"
-        // and a "go run kubectl describe yourself" dead end. Best-effort: attach
-        // the latest dump pod's state + log tail so the real cause is surfaced.
-        let diag = match ctx.env.cluster.get().await {
-            Ok(cluster) => dump_pod_diagnostics(&ctx.env.kubectl, &cluster.namespace).await,
-            Err(_) => None,
+    let cluster = ctx.env.cluster.get().await?;
+    let namespace = cluster.namespace.clone();
+
+    // Precheck (#7): abort before the vendor spins up a dump pod if any public
+    // table is owned by a different role — pg_dump would fail mid-run inside
+    // that pod and leave only an opaque "backup failed". Guards every caller
+    // (scheduled / manual / pre-update).
+    check_table_ownership(ctx, &namespace).await?;
+
+    // Real-time dump-pod monitor (#7): the vendor `battlegroup backup` runs the
+    // dump in a separate pod and deletes it on exit, so a post-hoc diagnostics
+    // query usually races the cleanup. Poll while the backup runs and keep the
+    // latest snapshot (termination reason/exitCode + log tail) buffered.
+    let active = Arc::new(AtomicBool::new(true));
+    let diag_buffer: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let handle = {
+        let kubectl = ctx.env.kubectl.clone();
+        let ns = namespace.clone();
+        let active = active.clone();
+        let buffer = diag_buffer.clone();
+        tokio::spawn(async move {
+            while active.load(Ordering::Relaxed) {
+                if let Some(diag) = dump_pod_diagnostics(&kubectl, &ns).await {
+                    if let Ok(mut guard) = buffer.lock() {
+                        *guard = Some(diag);
+                    }
+                }
+                tokio::time::sleep(DUMP_POLL_INTERVAL).await;
+            }
+        })
+    };
+    let monitor_guard = MonitorGuard {
+        active: active.clone(),
+        handle,
+    };
+
+    let backup_result = ctx.env.bg_cli.backup(backup_name).await;
+    // Stop the loop and tear the monitor down before we touch the buffer.
+    active.store(false, Ordering::Relaxed);
+    drop(monitor_guard);
+
+    if let Err(err) = backup_result {
+        // Prefer diagnostics captured live during the run; fall back to a
+        // post-hoc query for the (rare) case where nothing was buffered before
+        // the pod vanished.
+        let buffered = diag_buffer.lock().ok().and_then(|guard| guard.clone());
+        let diag = match buffered {
+            Some(detail) => Some(detail),
+            None => dump_pod_diagnostics(&ctx.env.kubectl, &namespace).await,
         };
         return match diag {
             Some(detail) => Err(err.context(detail)),
