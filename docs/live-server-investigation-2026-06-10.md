@@ -66,7 +66,11 @@ but the restarts cascade into full battlegroup bounces and transient task failur
 ### For the tool (broad-audience)
 1. **Restart-aware welcome scan:** treat "no Game RMQ pod" during a known/likely restart
    window as *transient* — back off (exponential, capped) and/or collapse the retry storm
-   into a single suppressed/aggregated run instead of ~20 identical FAILED rows. *(Still TODO.)*
+   into a single suppressed/aggregated run instead of ~20 identical FAILED rows.
+   **✅ DONE:** added a per-task `ScanGate` (`tasks/welcome_package.rs`) — cluster-not-ready
+   now returns `Noop` (no FAILED row), logs **once** per outage, and exponentially backs off
+   rechecks (4→8→…→60s) instead of hammering every 2s. Applies to both welcome scans; no
+   scheduler change (the task self-skips). Unit-tested.
 2. **Health surfacing:** flag **swap=0**, **DB restartCount climbing**, and **dump pods
    OOMKilled** as health warnings in the UI — leading indicators of the #23 pattern.
    **✅ DONE:** built the **Host Health & Hardening advisor** (`commands/host_health.rs` +
@@ -76,7 +80,11 @@ but the restarts cascade into full battlegroup bounces and transient task failur
    exact thing we did by hand for #23 is now a button any operator can use.
 3. **Solo-mode awareness:** on a single-player server (one account, already granted),
    the scheduled welcome scan is near-pointless; the profile could downgrade its
-   cadence / severity. *(Still TODO.)*
+   cadence / severity.
+   **✅ DONE (adaptive):** the same `ScanGate` lengthens the effective scan interval after a
+   few idle scans (nothing to grant) — ~30s instead of 2s — and snaps back to the fast tick
+   the instant work appears. No config flag needed; an idle solo server naturally settles
+   into a slow cadence. (A formal deployment-profile flag remains a future option.)
 
 ## Status
 Live server is currently **healthy**: all pods Running, 13.9 GB available, DB serving

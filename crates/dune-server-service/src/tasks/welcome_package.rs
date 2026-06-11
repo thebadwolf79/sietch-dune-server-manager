@@ -1,7 +1,8 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::scheduler::{Schedule, Task, TaskCtx, TaskOutcome};
-use crate::store::WelcomeActionStatus;
+use crate::store::{TaskTrigger, WelcomeActionStatus};
 use crate::tasks::TaskEnv;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -12,6 +13,102 @@ const WELCOME_PACKAGE_SCAN_INTERVAL_SECS: u64 = 2;
 const WELCOME_MESSAGE_SCAN_INTERVAL_SECS: u64 = 60;
 const WELCOME_MESSAGE_ACTION_INDEX: i64 = -1;
 const WELCOME_MESSAGE_VERSION_SUFFIX: &str = ":message";
+
+// --- Restart-aware backoff + idle cadence for the welcome scans ---
+//
+// The package scan ticks every 2s. During a battlegroup restart the cluster
+// (Game RMQ / DB) is briefly absent, which used to surface as a burst of
+// identical FAILED runs (the #23 incident's downstream noise). Two mechanisms,
+// both WITHOUT touching the scheduler (the task self-skips to Noop on a tick):
+//   * unready backoff — treat "cluster not ready" as transient (Noop, not a
+//     FAILED row), log once, and exponentially back off rechecks until it returns.
+//   * idle cadence — when there's nothing to grant (the steady state on a solo
+//     server), lengthen the effective scan interval instead of hammering every
+//     2s. Snaps back to the fast tick the moment work appears.
+const UNREADY_BACKOFF_BASE_SECS: u64 = 4;
+const UNREADY_BACKOFF_CAP_SECS: u64 = 60;
+const IDLE_AFTER_SCANS: u32 = 5;
+const IDLE_INTERVAL_SECS: u64 = 30;
+
+/// Does this cluster-resolve error mean "infra isn't up yet" (transient, e.g.
+/// mid-restart) rather than a real misconfiguration we should surface as failed?
+fn is_cluster_unavailable(err: &anyhow::Error) -> bool {
+    let m = format!("{err:#}").to_ascii_lowercase();
+    m.contains("game rmq pod") // cluster.rs: no funcom-seabass-* with a Game RMQ pod
+        || m.contains("funcom-seabass")
+        || m.contains("connection refused")
+        || m.contains("could not connect")
+        || m.contains("connection reset")
+        || m.contains("unable to connect to the server") // kubectl when the k3s API is down
+        || m.contains("timed out")
+        || m.contains("timeout")
+        || m.contains("no route to host")
+        || m.contains("i/o error")
+}
+
+/// Per-task backoff state, shared across ticks via a Mutex on the (long-lived)
+/// task instance. Lock windows are tiny and never held across an `.await`.
+#[derive(Debug)]
+struct ScanGate {
+    skip_until: Option<Instant>,
+    unready_streak: u32,
+    unavailable_logged: bool,
+    idle_streak: u32,
+}
+
+impl ScanGate {
+    fn new() -> Self {
+        Self {
+            skip_until: None,
+            unready_streak: 0,
+            unavailable_logged: false,
+            idle_streak: 0,
+        }
+    }
+
+    /// True while we're inside a backoff window and should Noop immediately.
+    fn should_skip(&self, now: Instant) -> bool {
+        self.skip_until.map_or(false, |t| now < t)
+    }
+
+    /// Cluster/infra not ready: extend the backoff window (exponential, capped).
+    /// Returns true the first time per outage so the caller logs exactly once.
+    fn mark_unready(&mut self, now: Instant) -> bool {
+        self.unready_streak = self.unready_streak.saturating_add(1);
+        let shift = self.unready_streak.clamp(1, 5) - 1;
+        let secs =
+            (UNREADY_BACKOFF_BASE_SECS.saturating_mul(1u64 << shift)).min(UNREADY_BACKOFF_CAP_SECS);
+        self.skip_until = Some(now + Duration::from_secs(secs));
+        self.idle_streak = 0;
+        let first = !self.unavailable_logged;
+        self.unavailable_logged = true;
+        first
+    }
+
+    /// Cluster reachable again. Returns true if we just recovered from an outage
+    /// (so the caller logs the recovery once).
+    fn mark_ready(&mut self) -> bool {
+        let recovered = self.unavailable_logged;
+        self.unready_streak = 0;
+        self.unavailable_logged = false;
+        self.skip_until = None;
+        recovered
+    }
+
+    /// Record a completed (ready) scan. Idle scans (nothing to do) lengthen the
+    /// cadence after a few in a row; any activity snaps back to the fast tick.
+    fn note_activity(&mut self, now: Instant, acted: bool) {
+        if acted {
+            self.idle_streak = 0;
+            self.skip_until = None;
+        } else {
+            self.idle_streak = self.idle_streak.saturating_add(1);
+            if self.idle_streak >= IDLE_AFTER_SCANS {
+                self.skip_until = Some(now + Duration::from_secs(IDLE_INTERVAL_SECS));
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -135,11 +232,15 @@ pub fn parse_welcome_actions(raw: &str) -> Result<Vec<WelcomePackageAction>> {
 
 pub struct WelcomePackageTask {
     env: Arc<TaskEnv>,
+    gate: Mutex<ScanGate>,
 }
 
 impl WelcomePackageTask {
     pub fn new(env: Arc<TaskEnv>) -> Self {
-        Self { env }
+        Self {
+            env,
+            gate: Mutex::new(ScanGate::new()),
+        }
     }
 }
 
@@ -167,7 +268,34 @@ impl Task for WelcomePackageTask {
             return Ok(TaskOutcome::Noop);
         }
 
-        let cluster = ctx.env.cluster.get().await?;
+        let now = Instant::now();
+        // Inside a backoff window (cluster-unready or idle) — cheap Noop, no kubectl.
+        // Manual triggers always attempt so the operator's explicit run isn't swallowed.
+        if ctx.trigger == TaskTrigger::Scheduled
+            && self.gate.lock().expect("welcome scan gate").should_skip(now)
+        {
+            return Ok(TaskOutcome::Noop);
+        }
+
+        let cluster = match ctx.env.cluster.get().await {
+            Ok(c) => {
+                if self.gate.lock().expect("welcome scan gate").mark_ready() {
+                    ctx.log_info("welcome package scan resuming: cluster is ready again")?;
+                }
+                c
+            }
+            Err(err) if is_cluster_unavailable(&err) => {
+                // Transient (mid-restart): Noop + back off instead of a FAILED row.
+                if self.gate.lock().expect("welcome scan gate").mark_unready(now) {
+                    let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
+                    ctx.log_warn(&format!(
+                        "welcome package scan paused: cluster not ready ({scrubbed}); backing off until it returns"
+                    ))?;
+                }
+                return Ok(TaskOutcome::Noop);
+            }
+            Err(err) => return Err(err),
+        };
         let accounts =
             crate::postgres::list_welcome_accounts(&ctx.env.pg, &cluster.namespace).await?;
 
@@ -236,6 +364,12 @@ impl Task for WelcomePackageTask {
             }
         }
 
+        // Idle scans (nothing to grant) lengthen the cadence; activity resets it.
+        self.gate
+            .lock()
+            .expect("welcome scan gate")
+            .note_activity(now, acted);
+
         Ok(if acted {
             TaskOutcome::Done
         } else {
@@ -249,11 +383,15 @@ impl Task for WelcomePackageTask {
 /// lookup on every account every tick.
 pub struct WelcomeMessageTask {
     env: Arc<TaskEnv>,
+    gate: Mutex<ScanGate>,
 }
 
 impl WelcomeMessageTask {
     pub fn new(env: Arc<TaskEnv>) -> Self {
-        Self { env }
+        Self {
+            env,
+            gate: Mutex::new(ScanGate::new()),
+        }
     }
 }
 
@@ -277,7 +415,31 @@ impl Task for WelcomeMessageTask {
             return Ok(TaskOutcome::Noop);
         }
 
-        let cluster = ctx.env.cluster.get().await?;
+        let now = Instant::now();
+        if ctx.trigger == TaskTrigger::Scheduled
+            && self.gate.lock().expect("welcome scan gate").should_skip(now)
+        {
+            return Ok(TaskOutcome::Noop);
+        }
+
+        let cluster = match ctx.env.cluster.get().await {
+            Ok(c) => {
+                if self.gate.lock().expect("welcome scan gate").mark_ready() {
+                    ctx.log_info("welcome message scan resuming: cluster is ready again")?;
+                }
+                c
+            }
+            Err(err) if is_cluster_unavailable(&err) => {
+                if self.gate.lock().expect("welcome scan gate").mark_unready(now) {
+                    let scrubbed = crate::logger::redact(&format!("{err:#}")).into_owned();
+                    ctx.log_warn(&format!(
+                        "welcome message scan paused: cluster not ready ({scrubbed}); backing off until it returns"
+                    ))?;
+                }
+                return Ok(TaskOutcome::Noop);
+            }
+            Err(err) => return Err(err),
+        };
         let accounts =
             crate::postgres::list_welcome_accounts(&ctx.env.pg, &cluster.namespace).await?;
         let message_version = format!(
@@ -331,6 +493,11 @@ impl Task for WelcomeMessageTask {
                 }
             }
         }
+
+        self.gate
+            .lock()
+            .expect("welcome scan gate")
+            .note_activity(now, acted);
 
         Ok(if acted {
             TaskOutcome::Done
@@ -842,5 +1009,71 @@ mod tests {
             serde_json::from_str(&welcome_item_stats_json("Decajon", 1.0).unwrap()).unwrap();
         assert_eq!(stats["FFillableItemStats"][1]["CurrentAmount"], 10000.0);
         assert_eq!(stats["FFillableItemStats"][1]["MaxAmount"], 10000);
+    }
+}
+
+#[cfg(test)]
+mod scan_gate_tests {
+    use super::*;
+
+    #[test]
+    fn unready_backoff_grows_and_logs_once() {
+        let mut g = ScanGate::new();
+        let t = Instant::now();
+        assert!(g.mark_unready(t)); // first time → log
+        assert!(!g.mark_unready(t)); // subsequent → silent
+        // streak=2 → 4 * 2^1 = 8s window from the last mark.
+        assert!(g.should_skip(t + Duration::from_secs(5)));
+        assert!(!g.should_skip(t + Duration::from_secs(9)));
+    }
+
+    #[test]
+    fn backoff_is_capped() {
+        let mut g = ScanGate::new();
+        let t = Instant::now();
+        for _ in 0..10 {
+            g.mark_unready(t);
+        }
+        // Capped at 60s regardless of streak length.
+        assert!(g.should_skip(t + Duration::from_secs(59)));
+        assert!(!g.should_skip(t + Duration::from_secs(61)));
+    }
+
+    #[test]
+    fn recovery_resets_and_signals_once() {
+        let mut g = ScanGate::new();
+        let t = Instant::now();
+        g.mark_unready(t);
+        assert!(g.mark_ready()); // recovered → signal
+        assert!(!g.mark_ready()); // already ready → no signal
+        assert!(!g.should_skip(t));
+    }
+
+    #[test]
+    fn idle_scans_lengthen_cadence_then_reset() {
+        let mut g = ScanGate::new();
+        let t = Instant::now();
+        for _ in 0..(IDLE_AFTER_SCANS - 1) {
+            g.note_activity(t, false);
+        }
+        assert!(!g.should_skip(t)); // not idle long enough yet
+        g.note_activity(t, false); // reaches the idle threshold
+        assert!(g.should_skip(t)); // now scanning slowly
+        g.note_activity(t, true); // activity snaps back to fast cadence
+        assert!(!g.should_skip(t));
+    }
+
+    #[test]
+    fn classifies_transient_vs_real() {
+        assert!(is_cluster_unavailable(&anyhow!(
+            "no funcom-seabass-* namespace with a Game RMQ pod found"
+        )));
+        assert!(is_cluster_unavailable(&anyhow!(
+            "Unable to connect to the server: dial tcp 127.0.0.1:6443: connection refused"
+        )));
+        // A genuine misconfiguration should still surface as a real failure.
+        assert!(!is_cluster_unavailable(&anyhow!(
+            "multiple candidate namespaces: a, b; set DUNE_NAMESPACE"
+        )));
     }
 }
