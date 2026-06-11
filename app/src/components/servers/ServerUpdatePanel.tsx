@@ -1,4 +1,4 @@
-import { Flex, Text } from "@radix-ui/themes";
+import { Box, Flex, Text } from "@radix-ui/themes";
 
 import type { RemoteServerRecord, RemoteServerStatus } from "../../types/server";
 import { hasBattlegroupUpdateAvailable } from "../../utils/remote-server";
@@ -26,46 +26,72 @@ export default function ServerUpdatePanel({
   const updateAvailable = hasBattlegroupUpdateAvailable(status?.package);
   const busy = !!busyLabel;
   return (
-    <Flex direction="column" gap="4">
+    <Flex direction="column" gap="4" mt="3">
       <div>
-        <div className="section-title">Package versions</div>
+        <Text size="2" weight="bold" className="font-display" mb="2" style={{ display: "block", color: "var(--color-text-primary)" }}>
+          Package versions
+        </Text>
         {status?.package ? (
           <ServerPackageCardStatus guestPackage={status.package} />
         ) : (
-          <Text size="2" style={{ color: "var(--color-text-muted)" }}>
-            No package information yet. Refresh the server to fetch versions.
-          </Text>
+          <Box
+            className="bracket chamfer"
+            p="4"
+            style={{
+              background: "var(--color-bg-panel)",
+              border: "1px solid var(--color-border-hair)",
+              borderRadius: "var(--radius-3)",
+            }}
+          >
+            <Text size="2" style={{ color: "var(--color-text-muted)" }}>
+              No package information yet. Refresh the server to fetch versions.
+            </Text>
+          </Box>
         )}
       </div>
 
       <div>
-        <div className="section-title">Apply update</div>
-        {updateAvailable ? (
-          <Flex direction="column" gap="2">
-            <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
-              A newer battlegroup version is downloaded on the host. Apply it to roll the
-              running images.
+        <Text size="2" weight="bold" className="font-display" mb="2" style={{ display: "block", color: "var(--color-text-primary)" }}>
+          Apply update
+        </Text>
+        <Box
+          className="bracket chamfer"
+          p="4"
+          style={{
+            background: "var(--color-bg-panel)",
+            border: "1px solid var(--color-border-hair)",
+            borderRadius: "var(--radius-3)",
+          }}
+        >
+          {updateAvailable ? (
+            <Flex direction="column" gap="3">
+              <Text size="2" style={{ color: "var(--color-text-secondary)" }}>
+                A newer battlegroup version is downloaded on the host. Apply it to roll the
+                running images.
+              </Text>
+              <div>
+                <ActionButton
+                  onClick={onUpdateBattlegroup}
+                  busy={busy}
+                  disabled={busy || !status}
+                  tone="accent"
+                  pendingLabel="Updating"
+                  title="Run vendor `battlegroup update` (steamcmd + operators + maps + images)"
+                  className="chamfer-sm"
+                >
+                  Update Server
+                </ActionButton>
+              </div>
+            </Flex>
+          ) : (
+            <Text size="2" style={{ color: "var(--color-text-muted)" }}>
+              The downloaded battlegroup version matches what is currently running. No
+              update pending.
             </Text>
-            <div>
-              <ActionButton
-                onClick={onUpdateBattlegroup}
-                busy={busy}
-                disabled={busy || !status}
-                tone="accent"
-                pendingLabel="Updating"
-                title="Run vendor `battlegroup update` (steamcmd + operators + maps + images)"
-              >
-                Update Server
-              </ActionButton>
-            </div>
-          </Flex>
-        ) : (
-          <Text size="2" style={{ color: "var(--color-text-muted)" }}>
-            The downloaded battlegroup version matches what is currently running. No
-            update pending.
-          </Text>
-        )}
+          )}
+        </Box>
       </div>
     </Flex>
   );
 }
+

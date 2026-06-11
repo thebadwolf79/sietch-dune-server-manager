@@ -1,4 +1,4 @@
-import { Text } from "@radix-ui/themes";
+import { Box, Flex, Text } from "@radix-ui/themes";
 
 import type { RemoteServerComponent } from "../../types/server";
 import { componentLogStateKey } from "../../utils/remote-server";
@@ -30,20 +30,43 @@ export default function ServerPods({
 }: ServerPodsProps) {
   if (components.length === 0) {
     return (
-      <Text size="2" style={{ color: "var(--color-text-muted)" }}>
-        No pod information yet. Refresh the server to inventory pods.
-      </Text>
+      <Box
+        className="bracket chamfer"
+        p="4"
+        mt="3"
+        style={{
+          background: "var(--color-bg-panel)",
+          border: "1px solid var(--color-border-hair)",
+          borderRadius: "var(--radius-3)",
+        }}
+      >
+        <Text size="2" style={{ color: "var(--color-text-muted)" }}>
+          No pod information yet. Refresh the server to inventory pods.
+        </Text>
+      </Box>
     );
   }
   const systems = components.filter((component) => component.category !== "map");
   const maps = components.filter((component) => component.category === "map");
   return (
-    <div className="pods-table">
+    <Flex direction="column" gap="4" mt="3">
       {systems.length > 0 ? (
-        <section>
-          <div className="section-title">System pods</div>
-          <div className="pod-list">
-            {systems.map((component) => {
+        <div>
+          <Text size="2" weight="bold" className="font-display" mb="2" style={{ display: "block", color: "var(--color-text-primary)" }}>
+            System pods
+          </Text>
+          <Box
+            className="bracket chamfer"
+            style={{
+              background: "var(--color-bg-panel)",
+              border: "1px solid var(--color-border-hair)",
+              borderRadius: "var(--radius-3)",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {systems.map((component, index) => {
               const key = componentLogStateKey(serverKey, component);
               return (
                 <ServerPodRow
@@ -55,17 +78,30 @@ export default function ServerPods({
                   restartBusy={!!restartBusy[key]}
                   onRefreshLog={() => onRefreshLog(component)}
                   onRestart={() => onRestart(component)}
+                  isLast={index === systems.length - 1}
                 />
               );
             })}
-          </div>
-        </section>
+          </Box>
+        </div>
       ) : null}
       {maps.length > 0 ? (
-        <section>
-          <div className="section-title">Map server pods</div>
-          <div className="pod-list">
-            {maps.map((component) => {
+        <div>
+          <Text size="2" weight="bold" className="font-display" mb="2" style={{ display: "block", color: "var(--color-text-primary)" }}>
+            Map server pods
+          </Text>
+          <Box
+            className="bracket chamfer"
+            style={{
+              background: "var(--color-bg-panel)",
+              border: "1px solid var(--color-border-hair)",
+              borderRadius: "var(--radius-3)",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {maps.map((component, index) => {
               const key = componentLogStateKey(serverKey, component);
               return (
                 <ServerPodRow
@@ -77,12 +113,14 @@ export default function ServerPods({
                   restartBusy={!!restartBusy[key]}
                   onRefreshLog={() => onRefreshLog(component)}
                   onRestart={() => onRestart(component)}
+                  isLast={index === maps.length - 1}
                 />
               );
             })}
-          </div>
-        </section>
+          </Box>
+        </div>
       ) : null}
-    </div>
+    </Flex>
   );
 }
+

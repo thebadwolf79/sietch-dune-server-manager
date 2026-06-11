@@ -12,6 +12,7 @@ export type ActionButtonProps = {
   tone?: ActionButtonTone;
   pendingLabel?: string;
   title?: string;
+  className?: string;
 };
 
 type Reaction = "idle" | "success" | "error";
@@ -36,6 +37,7 @@ export default function ActionButton({
   tone = "default",
   pendingLabel,
   title,
+  className,
 }: ActionButtonProps) {
   const [reaction, setReaction] = useState<Reaction>("idle");
   const prevBusyRef = useRef(busy);
@@ -81,7 +83,7 @@ export default function ActionButton({
   return (
     <button
       type="button"
-      className="action-btn"
+      className={`action-btn ${className ?? ""}`}
       data-tone={tone}
       data-state={state}
       disabled={disabled || busy}

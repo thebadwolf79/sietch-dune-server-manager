@@ -1,4 +1,5 @@
 import { Box, Flex, Heading, Text } from "@radix-ui/themes";
+import { Plus } from "lucide-react";
 
 import type { RemoteServerRecord, RemoteServerStatus } from "../../types/server";
 import { remoteServerDefaultUser, resolveServerStatus } from "../../utils/remote-server";
@@ -35,8 +36,9 @@ export default function ServersListPage({
               Attached remote Dune battlegroups. Click a row to open its console.
             </Text>
           </Box>
-          <ActionButton onClick={onAddServer} tone="accent">
-            + Add server
+          <ActionButton onClick={onAddServer} tone="accent" className="chamfer-sm">
+            <Plus size={14} style={{ marginRight: 6 }} />
+            Add server
           </ActionButton>
         </Flex>
         <Box className="page-scroll">
@@ -55,9 +57,12 @@ export default function ServersListPage({
                   <button
                     key={server.id}
                     type="button"
-                    className="server-row"
+                    className="server-row bracket chamfer"
                     data-tone={resolved.tone}
-                    style={{ animationDelay: `${index * 30}ms` }}
+                    style={{
+                      animationDelay: `${index * 30}ms`,
+                      paddingLeft: "16px",
+                    }}
                     onClick={() => onOpenServer(server.id)}
                   >
                     <span className="server-row-rail" />

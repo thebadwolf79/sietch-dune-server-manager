@@ -213,58 +213,157 @@ export default function WelcomePackageTab({
   const restartRequired = config?.restartRequired ?? false;
 
   return (
-    <Box mt="3">
-      <Flex justify="between" align="start" gap="3" wrap="wrap">
-        <Box>
-          <Text size="3" weight="medium">Welcome automation</Text>
-          <Flex gap="2" mt="2" align="center" wrap="wrap">
-            <Badge color={messageEnabled ? "green" : "gray"}>
-              message {messageEnabled ? "enabled" : "off"}
-            </Badge>
-            <Badge color={enabled ? "green" : "gray"}>
-              package {enabled ? "enabled" : "off"}
-            </Badge>
+    <Box mt="3" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      {/* Header Panel */}
+      <Box
+        className="bracket chamfer"
+        style={{
+          background: "var(--color-bg-panel)",
+          border: "1px solid var(--color-border-hair)",
+          padding: "16px 20px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+        }}
+      >
+        <Flex justify="between" align="center" gap="3" wrap="wrap">
+          <Box>
+            <Text size="3" weight="bold" className="font-display">Welcome automation</Text>
+            <Flex gap="2" mt="2" align="center" wrap="wrap">
+              <Badge color={messageEnabled ? "green" : "gray"}>
+                message {messageEnabled ? "enabled" : "off"}
+              </Badge>
+              <Badge color={enabled ? "green" : "gray"}>
+                package {enabled ? "enabled" : "off"}
+              </Badge>
+            </Flex>
+          </Box>
+          <Flex gap="2" align="center" wrap="wrap">
+            <button
+              type="button"
+              onClick={refresh}
+              disabled={busy || running}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "6px 12px",
+                fontSize: "12.5px",
+                cursor: (busy || running) ? "not-allowed" : "pointer",
+                border: "1px solid var(--color-border-hair)",
+                background: "var(--color-bg-elevated)",
+                borderRadius: "var(--radius-1)",
+                color: "var(--color-text-primary)",
+                transition: "all 140ms var(--ease-out)",
+              }}
+              className="chamfer-sm"
+            >
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={trigger}
+              disabled={busy || running}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "6px 12px",
+                fontSize: "12.5px",
+                cursor: (busy || running) ? "not-allowed" : "pointer",
+                border: "1px solid var(--color-border-hair)",
+                background: "var(--color-bg-elevated)",
+                borderRadius: "var(--radius-1)",
+                color: "var(--color-text-primary)",
+                transition: "all 140ms var(--ease-out)",
+              }}
+              className="chamfer-sm"
+            >
+              {running ? "Running..." : "Run scan"}
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy || running}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "6px 12px",
+                fontSize: "12.5px",
+                cursor: (busy || running) ? "not-allowed" : "pointer",
+                border: "1px solid var(--color-accent)",
+                background: "var(--color-bg-panel)",
+                borderRadius: "var(--radius-1)",
+                color: "var(--color-accent-strong)",
+                transition: "all 140ms var(--ease-out)",
+              }}
+              className="chamfer-sm"
+            >
+              {busy ? "Saving..." : "Save & restart service"}
+            </button>
           </Flex>
-        </Box>
-        <Flex gap="2" align="center" wrap="wrap">
-          <Button size="1" variant="surface" onClick={refresh} disabled={busy || running}>
-            Refresh
-          </Button>
-          <Button size="1" variant="surface" onClick={trigger} disabled={busy || running}>
-            {running ? "Running..." : "Run scan"}
-          </Button>
-          <Button size="1" onClick={save} disabled={busy || running}>
-            {busy ? "Saving..." : "Save & restart service"}
-          </Button>
         </Flex>
-      </Flex>
+      </Box>
 
-      <Separator size="4" my="3" />
-
-      <Box className="run-row-body">
-        <Flex direction="column" gap="3">
+      {/* Main Settings Card */}
+      <Box
+        className="bracket chamfer"
+        style={{
+          background: "var(--color-bg-panel)",
+          border: "1px solid var(--color-border-hair)",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {/* Welcome Message Section */}
+        <Box
+          p="4"
+          style={{
+            borderBottom: "1px solid var(--color-border-hair)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "16px",
+          }}
+        >
           <Flex justify="between" align="center" gap="3" wrap="wrap">
-            <Text size="2" weight="medium">Welcome message</Text>
+            <Text size="2" weight="bold" className="font-display" style={{ color: "var(--color-text-primary)" }}>
+              Welcome Message
+            </Text>
             <Flex gap="2" align="center" wrap="wrap">
               {whisperResult ? (
                 <Badge color={whisperResult.ok ? "green" : "red"}>
                   {whisperResult.ok ? "sent" : "failed"}
                 </Badge>
               ) : null}
-              <Button
-                size="1"
-                variant="surface"
+              <button
+                type="button"
                 onClick={() => {
                   setTestMessage(welcomeMessage);
                   setTestOpen(true);
                 }}
                 disabled={busy}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  padding: "4px 10px",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                  border: "1px solid var(--color-border-hair)",
+                  background: "var(--color-bg-elevated)",
+                  borderRadius: "var(--radius-1)",
+                  color: "var(--color-text-secondary)",
+                }}
+                className="chamfer-sm"
               >
                 <PaperPlaneIcon />
                 Test
-              </Button>
+              </button>
             </Flex>
           </Flex>
+
           <Flex align="center" gap="2">
             <Checkbox
               checked={messageEnabled}
@@ -272,9 +371,12 @@ export default function WelcomePackageTab({
             />
             <Text size="2">Enabled</Text>
           </Flex>
+
           <Flex gap="3" align="end" wrap="wrap">
             <Box style={{ flex: "1 1 280px", minWidth: 240 }}>
-              <Text size="1" color="gray">Sender identity</Text>
+              <Text size="1" color="gray" style={{ display: "block", marginBottom: "4px" }}>
+                Sender identity
+              </Text>
               <PlayerCombobox
                 tunnelId={tunnelId}
                 value={whisperSourcePlayer}
@@ -282,159 +384,275 @@ export default function WelcomePackageTab({
               />
             </Box>
           </Flex>
+
           <Box>
-            <Text size="1" color="gray">Message</Text>
+            <Text size="1" color="gray" style={{ display: "block", marginBottom: "4px" }}>
+              Message
+            </Text>
             <TextArea
               value={welcomeMessage}
               onChange={(e) => setWelcomeMessage(e.target.value)}
               rows={3}
               maxLength={1000}
+              placeholder="Welcome to BadWolf. Your starter kit has been delivered..."
             />
           </Box>
-        </Flex>
-      </Box>
+        </Box>
 
-      <Separator size="4" my="4" />
-
-      <Box className="run-row-body">
-        <Flex direction="column" gap="2" mb="2">
-          <Text size="2" weight="medium">Welcome package</Text>
-          <Flex align="center" gap="2">
-            <Checkbox checked={enabled} onCheckedChange={(checked) => setEnabled(Boolean(checked))} />
-            <Text size="2">Enabled</Text>
+        {/* Welcome Package Section */}
+        <Box p="4" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          <Flex direction="column" gap="2">
+            <Text size="2" weight="bold" className="font-display" style={{ color: "var(--color-text-primary)" }}>
+              Welcome Package
+            </Text>
+            <Flex align="center" gap="2">
+              <Checkbox checked={enabled} onCheckedChange={(checked) => setEnabled(Boolean(checked))} />
+              <Text size="2">Enabled</Text>
+            </Flex>
           </Flex>
-        </Flex>
 
-        <Box mt="3">
-          <Flex justify="between" align="center" gap="3" wrap="wrap" mb={contentsOpen ? "3" : "0"}>
-            <Button
-              size="1"
-              variant="ghost"
-              color="gray"
-              onClick={() => setContentsOpen((open) => !open)}
-              aria-expanded={contentsOpen}
-            >
-              {contentsOpen ? <ChevronDownIcon /> : <ChevronRightIcon />}
-              <Text size="2" weight="medium">Package contents</Text>
-              <Badge color="gray">{actions.length} item{actions.length === 1 ? "" : "s"}</Badge>
-            </Button>
-            {contentsOpen ? (
-              <Flex gap="2" wrap="wrap" align="center">
-                <Text as="label" size="1" color="gray">
-                  <Flex align="center" gap="1">
-                    <Checkbox
-                      checked={jsonMode}
-                      onCheckedChange={(checked) => {
-                        const next = checked === true;
-                        if (next) {
-                          // Visual -> JSON: seed the textarea from the current
-                          // actions so the operator can copy / hand-edit.
-                          setJsonText(JSON.stringify(actions, null, 2));
-                          setJsonError(null);
-                          setJsonMode(true);
-                        } else {
-                          // JSON -> Visual: parse the textarea and only switch
-                          // back if it's valid; otherwise stay in JSON mode and
-                          // show the error so nothing silently drops.
-                          try {
-                            const parsed = parseActions(jsonText);
-                            validateActions(parsed);
-                            setActions(parsed);
+          <Box mt="1">
+            <Flex justify="between" align="center" gap="3" wrap="wrap" mb={contentsOpen ? "3" : "0"}>
+              <button
+                type="button"
+                onClick={() => setContentsOpen((open) => !open)}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--color-text-primary)",
+                  padding: 0,
+                }}
+              >
+                {contentsOpen ? <ChevronDownIcon /> : <ChevronRightIcon />}
+                <Text size="2" weight="medium" style={{ marginRight: "4px" }}>Package contents</Text>
+                <Badge color="gray">{actions.length} item{actions.length === 1 ? "" : "s"}</Badge>
+              </button>
+              {contentsOpen ? (
+                <Flex gap="2" wrap="wrap" align="center">
+                  <Text as="label" size="1" color="gray">
+                    <Flex align="center" gap="1">
+                      <Checkbox
+                        checked={jsonMode}
+                        onCheckedChange={(checked) => {
+                          const next = checked === true;
+                          if (next) {
+                            setJsonText(JSON.stringify(actions, null, 2));
                             setJsonError(null);
-                            setJsonMode(false);
-                          } catch (err) {
-                            setJsonError(String(err));
+                            setJsonMode(true);
+                          } else {
+                            try {
+                              const parsed = parseActions(jsonText);
+                              validateActions(parsed);
+                              setActions(parsed);
+                              setJsonError(null);
+                              setJsonMode(false);
+                            } catch (err) {
+                              setJsonError(String(err));
+                            }
                           }
-                        }
-                      }}
-                    />
-                    JSON mode
-                  </Flex>
-                </Text>
+                        }}
+                      />
+                      JSON mode
+                    </Flex>
+                  </Text>
+                </Flex>
+              ) : null}
+            </Flex>
+
+            {contentsOpen && jsonMode ? (
+              <Flex direction="column" gap="2" mt="2">
+                <TextArea
+                  value={jsonText}
+                  onChange={(e) => {
+                    setJsonText(e.target.value);
+                    if (jsonError) setJsonError(null);
+                  }}
+                  placeholder='[{"type":"grantItem","itemName":"PlantFiber","quantity":1}]'
+                  rows={12}
+                  style={{ fontFamily: "var(--font-mono)", fontSize: "11.5px" }}
+                />
+                {jsonError ? (
+                  <Text size="1" color="red">{jsonError}</Text>
+                ) : (
+                  <Text size="1" color="gray">
+                    Raw JSON of package contents. Saved after validation. Toggle JSON mode off to switch back to the visual editor.
+                  </Text>
+                )}
               </Flex>
             ) : null}
-          </Flex>
 
-          {contentsOpen && jsonMode ? (
-            <Flex direction="column" gap="2">
-              <TextArea
-                value={jsonText}
-                onChange={(e) => {
-                  setJsonText(e.target.value);
-                  if (jsonError) setJsonError(null);
-                }}
-                placeholder='[{"type":"grantItem","itemName":"PlantFiber","quantity":1}]'
-                rows={16}
-                style={{ fontFamily: "var(--code-font-family, monospace)", fontSize: 12 }}
-              />
-              {jsonError ? (
-                <Text size="1" color="red">{jsonError}</Text>
-              ) : (
-                <Text size="1" color="gray">
-                  Raw JSON of package contents. Saved after validation. Toggle JSON mode off to switch back to the visual editor.
-                </Text>
-              )}
-            </Flex>
-          ) : null}
-
-          {contentsOpen && !jsonMode ? (
-            <Flex direction="column" gap="3">
-              {actions.length === 0 ? (
-                <Text size="2" color="gray">No items configured.</Text>
-              ) : (
-                <Table.Root variant="surface" size="1">
-                  <Table.Header>
-                    <Table.Row>
-                      <Table.ColumnHeaderCell>Item</Table.ColumnHeaderCell>
-                      <Table.ColumnHeaderCell width="120px">Qty</Table.ColumnHeaderCell>
-                      <Table.ColumnHeaderCell width="44px"></Table.ColumnHeaderCell>
-                    </Table.Row>
-                  </Table.Header>
-                  <Table.Body>
-                    {actions.map((action, index) => (
-                      <ActionRow
-                        key={`${index}:${action.itemName}`}
-                        tunnelId={tunnelId}
-                        action={action}
-                        onChange={(next) =>
-                          setActions((prev) => prev.map((row, i) => (i === index ? next : row)))
-                        }
-                        onRemove={() => setActions((prev) => prev.filter((_, i) => i !== index))}
-                      />
-                    ))}
-                  </Table.Body>
-                </Table.Root>
-              )}
-              <Box>
-                <Button
-                  size="1"
-                  variant="surface"
-                  onClick={() =>
-                    setActions((prev) => [
-                      ...prev,
-                      { type: "grantItem", itemName: "", quantity: 1 },
-                    ])
-                  }
-                >
-                  <PlusIcon />
-                  Add item
-                </Button>
-              </Box>
-            </Flex>
-          ) : null}
+            {contentsOpen && !jsonMode ? (
+              <Flex direction="column" gap="3" mt="2">
+                {actions.length === 0 ? (
+                  <Text size="2" color="gray">No items configured.</Text>
+                ) : (
+                  <Box
+                    style={{
+                      border: "1px solid var(--color-border-hair)",
+                      borderRadius: "var(--radius-2)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <Table.Root variant="surface" size="1">
+                      <Table.Header>
+                        <Table.Row style={{ backgroundColor: "var(--color-bg-elevated)" }}>
+                          <Table.ColumnHeaderCell style={{ color: "var(--color-text-muted)" }}>Item</Table.ColumnHeaderCell>
+                          <Table.ColumnHeaderCell width="120px" style={{ color: "var(--color-text-muted)" }}>Qty</Table.ColumnHeaderCell>
+                          <Table.ColumnHeaderCell width="44px"></Table.ColumnHeaderCell>
+                        </Table.Row>
+                      </Table.Header>
+                      <Table.Body>
+                        {actions.map((action, index) => (
+                          <ActionRow
+                            key={`${index}:${action.itemName}`}
+                            tunnelId={tunnelId}
+                            action={action}
+                            onChange={(next) =>
+                              setActions((prev) => prev.map((row, i) => (i === index ? next : row)))
+                            }
+                            onRemove={() => setActions((prev) => prev.filter((_, i) => i !== index))}
+                          />
+                        ))}
+                      </Table.Body>
+                    </Table.Root>
+                  </Box>
+                )}
+                <Box>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActions((prev) => [
+                        ...prev,
+                        { type: "grantItem", itemName: "", quantity: 1 },
+                      ])
+                    }
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      padding: "6px 12px",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      border: "1px solid var(--color-border-hair)",
+                      background: "var(--color-bg-elevated)",
+                      borderRadius: "var(--radius-1)",
+                      color: "var(--color-text-secondary)",
+                    }}
+                    className="chamfer-sm"
+                  >
+                    <PlusIcon />
+                    Add item
+                  </button>
+                </Box>
+              </Flex>
+            ) : null}
+          </Box>
         </Box>
       </Box>
 
       {restartRequired ? (
-        <Text size="1" color="amber" as="div" mt="3">
+        <Text size="1" color="amber" as="div" mt="1">
           Saved values differ from the running service; save/restart applies the current package.
         </Text>
       ) : null}
       {error ? (
-        <Text size="1" color="red" as="div" mt="3">
+        <Text size="1" color="red" as="div" mt="1">
           {error}
         </Text>
       ) : null}
+
+      {/* Recent Grants Section */}
+      <Box mt="4">
+        <Text size="2" weight="bold" className="font-display" mb="2" style={{ display: "block", color: "var(--color-text-primary)" }}>
+          Recent Grants
+        </Text>
+        <Box
+          className="bracket chamfer"
+          style={{
+            background: "var(--color-bg-panel)",
+            border: "1px solid var(--color-border-hair)",
+            borderRadius: "var(--radius-3)",
+            overflow: "hidden",
+          }}
+        >
+          <Table.Root variant="surface" size="1">
+            <Table.Header>
+              <Table.Row style={{ backgroundColor: "var(--color-bg-elevated)" }}>
+                <Table.ColumnHeaderCell style={{ color: "var(--color-text-muted)" }}>Status</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell style={{ color: "var(--color-text-muted)" }}>Player</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell style={{ color: "var(--color-text-muted)" }}>Updated</Table.ColumnHeaderCell>
+                <Table.ColumnHeaderCell width="64px"></Table.ColumnHeaderCell>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {grants.length === 0 ? (
+                <Table.Row>
+                  <Table.Cell colSpan={4}>
+                    <Text size="1" color="gray">No grants recorded yet.</Text>
+                  </Table.Cell>
+                </Table.Row>
+              ) : (
+                grants.map((grant) => {
+                  const key = `${grant.playerId}:${grant.packageVersion}:${grant.accountId}`;
+                  return (
+                    <Table.Row key={key}>
+                      <Table.Cell>
+                        <Badge color={grant.status === "granted" ? "green" : grant.status === "failed" ? "red" : "amber"}>
+                          {grant.status}
+                        </Badge>
+                        {grant.status === "failed" && grant.lastError ? (
+                          <Text size="1" color="red" as="div" style={{ maxWidth: 320, marginTop: "4px" }}>
+                            {grant.lastError}
+                          </Text>
+                        ) : null}
+                      </Table.Cell>
+                      <Table.Cell>
+                        <Text size="1" className="mono">{grant.playerId}</Text>
+                        {grant.characterName ? (
+                          <Text size="1" color="gray" as="div">{grant.characterName}</Text>
+                        ) : null}
+                      </Table.Cell>
+                      <Table.Cell className="mono">{formatDateTime(grant.updatedAt)}</Table.Cell>
+                      <Table.Cell>
+                        {grant.status === "failed" ? (
+                          <Tooltip content="Clear the failed record so the next scan retries">
+                            <button
+                              type="button"
+                              disabled={retryingKey === key}
+                              onClick={() => void retryGrant(grant)}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                padding: "4px 8px",
+                                fontSize: "11px",
+                                cursor: "pointer",
+                                border: "1px solid var(--color-border-hair)",
+                                background: "var(--color-bg-elevated)",
+                                borderRadius: "var(--radius-1)",
+                                color: "var(--color-text-secondary)",
+                              }}
+                              className="chamfer-sm"
+                              aria-label="Retry welcome package"
+                            >
+                              <ReloadIcon />
+                              {retryingKey === key ? "Retrying..." : "Retry"}
+                            </button>
+                          </Tooltip>
+                        ) : null}
+                      </Table.Cell>
+                    </Table.Row>
+                  );
+                })
+              )}
+            </Table.Body>
+          </Table.Root>
+        </Box>
+      </Box>
 
       <Dialog.Root open={testOpen} onOpenChange={setTestOpen}>
         <Dialog.Content maxWidth="520px">
@@ -460,86 +678,50 @@ export default function WelcomePackageTab({
           </Flex>
           <Flex justify="end" gap="2" mt="4">
             <Dialog.Close>
-              <Button size="1" variant="ghost" color="gray">
+              <button
+                type="button"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "6px 12px",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                  border: "1px solid var(--color-border-hair)",
+                  background: "var(--color-bg-elevated)",
+                  borderRadius: "var(--radius-1)",
+                  color: "var(--color-text-secondary)",
+                }}
+                className="chamfer-sm"
+              >
                 Cancel
-              </Button>
+              </button>
             </Dialog.Close>
-            <Button
-              size="1"
+            <button
+              type="button"
               onClick={sendWhisper}
               disabled={busy || sendingWhisper}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+                padding: "6px 12px",
+                fontSize: "12px",
+                cursor: (busy || sendingWhisper) ? "not-allowed" : "pointer",
+                border: "1px solid var(--color-accent)",
+                background: "var(--color-bg-panel)",
+                borderRadius: "var(--radius-1)",
+                color: "var(--color-accent-strong)",
+              }}
+              className="chamfer-sm"
             >
               <PaperPlaneIcon />
               {sendingWhisper ? "Sending..." : "Send"}
-            </Button>
+            </button>
           </Flex>
         </Dialog.Content>
       </Dialog.Root>
-
-      <Box mt="4">
-        <Text size="2" weight="medium">Recent grants</Text>
-        <Table.Root variant="surface" size="1" mt="2">
-          <Table.Header>
-            <Table.Row>
-              <Table.ColumnHeaderCell>Status</Table.ColumnHeaderCell>
-              <Table.ColumnHeaderCell>Player</Table.ColumnHeaderCell>
-              <Table.ColumnHeaderCell>Updated</Table.ColumnHeaderCell>
-              <Table.ColumnHeaderCell width="64px"></Table.ColumnHeaderCell>
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {grants.length === 0 ? (
-              <Table.Row>
-                <Table.Cell colSpan={4}>
-                  <Text size="1" color="gray">No grants recorded yet.</Text>
-                </Table.Cell>
-              </Table.Row>
-            ) : (
-              grants.map((grant) => {
-                const key = `${grant.playerId}:${grant.packageVersion}:${grant.accountId}`;
-                return (
-                  <Table.Row key={key}>
-                    <Table.Cell>
-                      <Badge color={grant.status === "granted" ? "green" : grant.status === "failed" ? "red" : "amber"}>
-                        {grant.status}
-                      </Badge>
-                      {grant.status === "failed" && grant.lastError ? (
-                        <Text size="1" color="red" as="div" style={{ maxWidth: 320 }}>
-                          {grant.lastError}
-                        </Text>
-                      ) : null}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <Text size="1" className="mono">{grant.playerId}</Text>
-                      {grant.characterName ? (
-                        <Text size="1" color="gray" as="div">{grant.characterName}</Text>
-                      ) : null}
-                    </Table.Cell>
-                    <Table.Cell className="mono">{formatDateTime(grant.updatedAt)}</Table.Cell>
-                    <Table.Cell>
-                      {grant.status === "failed" ? (
-                        <Tooltip content="Clear the failed record so the next scan retries">
-                          <Button
-                            size="1"
-                            variant="ghost"
-                            color="gray"
-                            disabled={retryingKey === key}
-                            onClick={() => void retryGrant(grant)}
-                            aria-label="Retry welcome package"
-                          >
-                            <ReloadIcon />
-                            {retryingKey === key ? "Retrying..." : "Retry"}
-                          </Button>
-                        </Tooltip>
-                      ) : null}
-                    </Table.Cell>
-                  </Table.Row>
-                );
-              })
-            )}
-          </Table.Body>
-        </Table.Root>
-      </Box>
     </Box>
   );
 }
@@ -557,14 +739,14 @@ function ActionRow({
 }) {
   return (
     <Table.Row>
-      <Table.Cell>
+      <Table.Cell style={{ verticalAlign: "middle" }}>
         <ItemCombobox
           tunnelId={tunnelId}
           value={action.itemName}
           onChange={(itemName) => onChange({ ...action, itemName })}
         />
       </Table.Cell>
-      <Table.Cell>
+      <Table.Cell style={{ verticalAlign: "middle" }}>
         <TextField.Root
           type="number"
           min="1"
@@ -572,18 +754,28 @@ function ActionRow({
           onChange={(e) => onChange({ ...action, quantity: Number(e.target.value) || 1 })}
         />
       </Table.Cell>
-      <Table.Cell>
+      <Table.Cell style={{ verticalAlign: "middle" }}>
         <Flex justify="center" align="center">
           <Tooltip content="Remove item">
-            <Button
-              size="1"
-              variant="ghost"
-              color="red"
+            <button
+              type="button"
               onClick={onRemove}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "6px",
+                cursor: "pointer",
+                border: "1px solid var(--color-border-hair)",
+                background: "var(--color-bg-elevated)",
+                color: "var(--color-err)",
+                borderRadius: "var(--radius-1)",
+              }}
+              className="chamfer-sm"
               aria-label="Remove item"
             >
               <TrashIcon />
-            </Button>
+            </button>
           </Tooltip>
         </Flex>
       </Table.Cell>

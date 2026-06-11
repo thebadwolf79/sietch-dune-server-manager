@@ -1520,3 +1520,162 @@ button:disabled,
   padding: 0 4px;
   border-radius: 4px;
 }
+
+/* =========================================================================
+   Redesign UI Additions
+   ========================================================================= */
+
+.font-display {
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+/* Notched/chamfered frames */
+.chamfer {
+  clip-path: polygon(
+    10px 0,
+    100% 0,
+    100% calc(100% - 10px),
+    calc(100% - 10px) 100%,
+    0 100%,
+    0 10px
+  );
+}
+
+.chamfer-sm {
+  clip-path: polygon(
+    6px 0,
+    100% 0,
+    100% calc(100% - 6px),
+    calc(100% - 6px) 100%,
+    0 100%,
+    0 6px
+  );
+}
+
+/* Thin corner brackets */
+.bracket {
+  position: relative;
+}
+.bracket::before,
+.bracket::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-color: var(--color-accent);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.bracket::before {
+  top: 0;
+  left: 0;
+  border-top: 1px solid;
+  border-left: 1px solid;
+}
+.bracket::after {
+  bottom: 0;
+  right: 0;
+  border-bottom: 1px solid;
+  border-right: 1px solid;
+}
+
+/* Rhombus status marker */
+.rhombus {
+  display: inline-block;
+  transform: rotate(45deg);
+  transform-origin: center;
+}
+
+/* Color utilities to match v0 component states */
+.bg-success-dim {
+  background-color: var(--color-ok-dim);
+}
+.bg-success {
+  background-color: var(--color-ok);
+}
+.text-success {
+  color: var(--color-ok-strong);
+}
+
+.bg-warning-dim {
+  background-color: var(--color-warn-dim);
+}
+.bg-warning {
+  background-color: var(--color-warn);
+}
+.text-warning {
+  color: var(--color-warn);
+}
+
+.bg-destructive-dim {
+  background-color: var(--color-err-dim);
+}
+.bg-destructive {
+  background-color: var(--color-err);
+}
+.text-destructive {
+  color: var(--color-err);
+}
+
+.bg-muted-dim {
+  background-color: var(--color-bg-elevated);
+}
+.text-muted-foreground {
+  color: var(--color-text-muted);
+}
+
+.metric-tile {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-hair);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  transition: border-color 160ms var(--ease-out);
+}
+.metric-tile:hover {
+  border-color: var(--color-border-default);
+}
+.metric-tile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.metric-tile-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+.metric-tile-icon-bg {
+  display: flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+.metric-tile-body {
+  margin-top: 8px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+}
+.metric-tile-value {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+

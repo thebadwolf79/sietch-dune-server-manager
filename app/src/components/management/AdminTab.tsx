@@ -6,12 +6,14 @@ import {
   Button,
   Checkbox,
   Flex,
+  Grid,
   Select,
   Table,
   Text,
   TextArea,
   TextField,
 } from "@radix-ui/themes";
+import { AlertTriangle, Check, Send, Terminal, Users2, Search } from "lucide-react";
 
 import { managementApi } from "../../services/management";
 import type {
@@ -79,6 +81,114 @@ function applyDefaults(spec: CommandSpec): Record<string, unknown> {
   return out;
 }
 
+function StepBadge({ n, label, done }: { n: number; label: string; done: boolean }) {
+  return (
+    <Flex align="center" gap="2">
+      <span
+        style={{
+          display: "flex",
+          width: "20px",
+          height: "20px",
+          alignItems: "center",
+          justifyContent: "center",
+          borderRadius: "50%",
+          border: "1px solid",
+          fontSize: "11px",
+          fontWeight: "600",
+          borderColor: done ? "var(--color-accent)" : "var(--color-border-default)",
+          backgroundColor: done ? "rgba(217, 119, 87, 0.15)" : "transparent",
+          color: done ? "var(--color-accent-strong)" : "var(--color-text-muted)",
+        }}
+      >
+        {done ? <Check size={12} /> : n}
+      </span>
+      <Text
+        size="1"
+        weight="medium"
+        style={{
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+          color: done ? "var(--color-text-primary)" : "var(--color-text-muted)",
+        }}
+      >
+        {label}
+      </Text>
+    </Flex>
+  );
+}
+
+function CommandPreview({
+  cmd,
+  values,
+}: {
+  cmd: CommandSpec;
+  values: Record<string, unknown>;
+}) {
+  const parts: string[] = [];
+
+  // If player-id is present, let's show it first
+  if (cmd.needsPlayer) {
+    const pId = values.PlayerId;
+    if (pId) {
+      parts.push(`--target="${pId}"`);
+    } else {
+      parts.push(`--target=<pending>`);
+    }
+  }
+
+  // Add other fields
+  const fields = cmd.fields.filter((f) => f.key !== "PlayerId");
+  for (const f of fields) {
+    const val = values[f.key];
+    if (val !== undefined && val !== null && val !== "") {
+      parts.push(`--${f.key}=${typeof val === "string" ? `"${val}"` : val}`);
+    }
+  }
+
+  return (
+    <Box
+      p="3"
+      style={{
+        borderRadius: "var(--radius-2)",
+        border: "1px solid var(--color-border-hair)",
+        backgroundColor: "rgba(0, 0, 0, 0.2)",
+      }}
+    >
+      <Flex align="center" gap="2" mb="1.5" style={{ opacity: 0.7 }}>
+        <Terminal size={12} />
+        <Text
+          size="1"
+          weight="medium"
+          style={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
+        >
+          Command preview
+        </Text>
+      </Flex>
+      <code
+        className="mono"
+        style={{
+          fontSize: "11px",
+          wordBreak: "break-all",
+          whiteSpace: "pre-wrap",
+          color: "var(--color-text-primary)",
+        }}
+      >
+        <span style={{ color: "var(--color-accent-strong)" }}>publish</span> {cmd.id}{" "}
+        {parts.map((p, i) => (
+          <span
+            key={i}
+            style={{
+              color: p.includes("<pending>") ? "var(--color-text-muted)" : "var(--color-text-secondary)",
+            }}
+          >
+            {p}{" "}
+          </span>
+        ))}
+      </code>
+    </Box>
+  );
+}
+
 export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: AdminTabProps) {
   const [commands, setCommands] = useState<CommandSpec[]>([]);
   const [selected, setSelected] = useState<CommandSpec | null>(null);
@@ -87,11 +197,9 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PublishResultDto | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirm, setConfirm] = useState(false);
+  const [query, setQuery] = useState("");
   const appliedRef = useRef<{ selectedId: string; prefillFp: string | null } | null>(null);
-  // Templates available for the currently-picked vehicle (SpawnVehicleAt).
-  // Populated whenever values.ClassName changes so TemplateName renders as a
-  // proper combobox of valid options instead of a free-text field.
   const [vehicleTemplates, setVehicleTemplates] = useState<string[]>([]);
 
   const refreshHistory = useCallback(async () => {
@@ -112,11 +220,6 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
   }, [tunnelId, refreshHistory]);
 
   useEffect(() => {
-    // Reset values + apply prefill exactly once per (selected, prefill) pair.
-    // The earlier two-effect version raced; the single-effect version still
-    // clobbered prefill on the next render after onPrefillConsumed cleared it
-    // because the [prefill] dep change re-ran the defaults reset. Track what
-    // we've already applied so post-consumption re-renders are a no-op.
     if (!selected) {
       appliedRef.current = null;
       return;
@@ -126,7 +229,6 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
     const current = appliedRef.current;
 
     if (!current || current.selectedId !== selected.id) {
-      // Brand new command pick (sidebar click or first prefill into a new command).
       if (prefillFp) {
         setValues({ ...applyDefaults(selected), ...(prefill?.values ?? {}) });
         onPrefillConsumed?.();
@@ -138,20 +240,15 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
       return;
     }
 
-    // Same command. Only act if a NEW prefill arrived for it.
     if (prefillFp && prefillFp !== current.prefillFp) {
       setValues((prev) => ({ ...prev, ...(prefill?.values ?? {}) }));
       setResult(null);
       onPrefillConsumed?.();
       appliedRef.current = { selectedId: selected.id, prefillFp };
     }
-    // Otherwise the prefill was cleared after we consumed it — leave values alone.
   }, [selected, prefill, onPrefillConsumed]);
 
   useEffect(() => {
-    // If a prefill arrives for a command different from what's currently
-    // selected, switch the sidebar to that command. The effect above will
-    // then notice prefill.commandId === selected.id and apply the values.
     if (!prefill || commands.length === 0) return;
     if (selected?.id === prefill.commandId) return;
     const target = commands.find((c) => c.id === prefill.commandId);
@@ -160,8 +257,6 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
   }, [prefill, commands, selected?.id]);
 
   useEffect(() => {
-    // For SpawnVehicleAt, look up the templates of the picked vehicle so the
-    // TemplateName field can render its real options.
     const cls =
       selected?.id === "SpawnVehicleAt" && typeof values.ClassName === "string"
         ? (values.ClassName as string).trim()
@@ -178,9 +273,6 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
         const templates = hit?.templates ?? [];
         if (cancelled) return;
         setVehicleTemplates(templates);
-        // If the current TemplateName isn't valid for this vehicle, auto-pick
-        // the first available one. Keeps the form submittable without the user
-        // having to know that TreadWheel doesn't carry a T0.
         if (templates.length > 0) {
           setValues((prev) => {
             const current = typeof prev.TemplateName === "string" ? prev.TemplateName : "";
@@ -197,7 +289,9 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
     };
   }, [selected?.id, values.ClassName, tunnelId]);
 
-  const grouped = useMemo(() => groupByCategory(commands), [commands]);
+  useEffect(() => {
+    setConfirm(false);
+  }, [selected?.id]);
 
   const doPublish = useCallback(async () => {
     if (!selected) return;
@@ -217,70 +311,340 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
 
   const publish = useCallback(() => {
     if (!selected) return;
-    if (selected.destructive) {
-      setConfirmOpen(true);
-    } else {
-      void doPublish();
-    }
+    void doPublish();
   }, [selected, doPublish]);
 
+  const queryLower = query.trim().toLowerCase();
+  const filteredCommands = useMemo(() => {
+    if (!queryLower) return commands;
+    return commands.filter(
+      (cmd) =>
+        cmd.label.toLowerCase().includes(queryLower) ||
+        (CATEGORY_LABEL[cmd.category] || cmd.category).toLowerCase().includes(queryLower) ||
+        cmd.describe.toLowerCase().includes(queryLower),
+    );
+  }, [commands, queryLower]);
+
+  const grouped = useMemo(() => groupByCategory(filteredCommands), [filteredCommands]);
+
+  const fieldsToRender = useMemo(() => {
+    if (!selected) return [];
+    return visibleFields(selected, values).filter((f) => f.key !== "PlayerId");
+  }, [selected, values]);
+
+  const requiredFields = useMemo(() => {
+    return fieldsToRender.filter((f) => f.required);
+  }, [fieldsToRender]);
+
+  const requiredFilled = useMemo(() => {
+    return requiredFields.every((f) => {
+      const val = values[f.key];
+      return val !== undefined && val !== null && String(val).trim() !== "";
+    });
+  }, [requiredFields, values]);
+
+  const targetReady = useMemo(() => {
+    if (!selected) return false;
+    return (
+      !selected.needsPlayer ||
+      (values.PlayerId !== undefined &&
+        values.PlayerId !== null &&
+        String(values.PlayerId).trim() !== "")
+    );
+  }, [selected, values.PlayerId]);
+
+  const allPlayers = values.PlayerId === "*";
+
+  const toggleAllPlayers = useCallback(() => {
+    setValues((prev) => ({
+      ...prev,
+      PlayerId: prev.PlayerId === "*" ? "" : "*",
+    }));
+  }, []);
+
+  const canPublish = useMemo(() => {
+    return targetReady && requiredFilled && (!selected?.destructive || confirm);
+  }, [targetReady, requiredFilled, selected?.destructive, confirm]);
+
   return (
-    <Flex mt="3" gap="3" align="stretch" wrap="wrap">
-      <Box style={{ flex: "0 0 240px", minWidth: 0 }}>
-        <Text size="2" weight="medium">
-          Commands
-        </Text>
-        {CATEGORY_ORDER.map((cat) => {
-          const specs = grouped[cat];
-          if (!specs || specs.length === 0) return null;
-          return (
-            <Box key={cat} mt="2">
-              <Text size="1" color="gray" style={{ textTransform: "uppercase", letterSpacing: 0.5 }}>
-                {CATEGORY_LABEL[cat] ?? cat}
-              </Text>
-              <Flex direction="column" gap="1" mt="1">
-                {specs.map((spec) => (
-                  <Button
-                    key={spec.id}
-                    size="1"
-                    variant={selected?.id === spec.id ? "solid" : "surface"}
-                    color={spec.destructive ? "red" : undefined}
-                    onClick={() => setSelected(spec)}
-                    style={{ justifyContent: "flex-start" }}
-                  >
-                    {spec.label}
-                  </Button>
-                ))}
-              </Flex>
-            </Box>
-          );
-        })}
-      </Box>
-      <Box style={{ flex: "1 1 400px", minWidth: 0 }}>
-        {selected ? (
-          <Box>
-            <Flex justify="between" align="baseline" wrap="wrap" gap="2">
-              <Text size="3" weight="medium">
-                {selected.label}
-              </Text>
-              {selected.destructive ? <Badge color="red">destructive</Badge> : null}
-            </Flex>
-            <Text size="1" color="gray">
-              {selected.describe}
+    <Grid mt="3" gap="5" columns={{ initial: "1", lg: "280px 1fr" }} align="start">
+      {/* Command Catalog Panel */}
+      <Box
+        className="bracket chamfer"
+        style={{
+          background: "var(--color-bg-panel)",
+          border: "1px solid var(--color-border-hair)",
+          padding: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+        }}
+      >
+        <div style={{ borderBottom: "1px solid var(--color-border-hair)", paddingBottom: "10px" }}>
+          <Text
+            size="2"
+            weight="bold"
+            style={{
+              fontFamily: "var(--font-mono)",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+            }}
+          >
+            Command catalog
+          </Text>
+          <Box mt="2">
+            <TextField.Root
+              placeholder="Search commands…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              size="2"
+            >
+              <TextField.Slot>
+                <Search size={14} style={{ opacity: 0.6 }} />
+              </TextField.Slot>
+            </TextField.Root>
+          </Box>
+        </div>
+
+        <Box
+          style={{
+            maxHeight: "70vh",
+            overflowY: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: "16px",
+          }}
+        >
+          {CATEGORY_ORDER.map((cat) => {
+            const specs = grouped[cat];
+            if (!specs || specs.length === 0) return null;
+            return (
+              <Box key={cat}>
+                <Text
+                  size="1"
+                  color="gray"
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                    fontSize: "10px",
+                    display: "block",
+                    marginBottom: "6px",
+                  }}
+                >
+                  {CATEGORY_LABEL[cat] ?? cat}
+                </Text>
+                <Flex direction="column" gap="2">
+                  {specs.map((spec) => (
+                    <button
+                      key={spec.id}
+                      type="button"
+                      onClick={() => setSelected(spec)}
+                      style={{
+                        display: "flex",
+                        width: "100%",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "8px",
+                        padding: "6px 10px",
+                        borderRadius: "var(--radius-2)",
+                        border: "1px solid",
+                        fontSize: "12px",
+                        textAlign: "left",
+                        cursor: "pointer",
+                        transition: "all 140ms var(--ease-out)",
+                        borderColor:
+                          selected?.id === spec.id
+                            ? "var(--color-accent-strong)"
+                            : spec.destructive
+                              ? "rgba(214, 105, 94, 0.3)"
+                              : "var(--color-border-hair)",
+                        backgroundColor:
+                          selected?.id === spec.id
+                            ? "rgba(217, 119, 87, 0.15)"
+                            : "var(--color-bg-panel)",
+                        color:
+                          selected?.id === spec.id
+                            ? "var(--color-accent-strong)"
+                            : spec.destructive
+                              ? "var(--color-err)"
+                              : "var(--color-text-primary)",
+                      }}
+                      className="chamfer-sm"
+                    >
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {spec.label}
+                      </span>
+                      {spec.destructive && (
+                        <AlertTriangle size={12} style={{ flexShrink: 0, opacity: 0.7 }} />
+                      )}
+                    </button>
+                  ))}
+                </Flex>
+              </Box>
+            );
+          })}
+          {filteredCommands.length === 0 && (
+            <Text size="2" color="gray" style={{ textAlign: "center", padding: "16px 0" }}>
+              No commands match.
             </Text>
-            <Flex direction="column" gap="3" mt="3">
-              {visibleFields(selected, values).map((field) => (
-                <FieldInput
-                  key={field.key}
-                  field={field}
-                  value={values[field.key]}
-                  onChange={(v) => setValues((prev) => ({ ...prev, [field.key]: v }))}
-                  tunnelId={tunnelId}
-                  vehicleTemplates={vehicleTemplates}
-                />
-              ))}
-            </Flex>
-            {selected.id === "SpawnVehicleAt" ? (
+          )}
+        </Box>
+      </Box>
+
+      {/* Form + Recent Publishes stack */}
+      <Flex direction="column" gap="5" style={{ minWidth: 0 }}>
+        {selected ? (
+          <Box
+            className="bracket chamfer"
+            style={{
+              background: "var(--color-bg-panel)",
+              border: "1px solid var(--color-border-hair)",
+              padding: "20px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "16px",
+            }}
+          >
+            {/* Header */}
+            <div style={{ borderBottom: "1px solid var(--color-border-hair)", paddingBottom: "12px" }}>
+              <Flex align="center" gap="2" wrap="wrap">
+                <Text size="4" weight="bold">
+                  {selected.label}
+                </Text>
+                <Badge color="gray" size="1">
+                  {CATEGORY_LABEL[selected.category] ?? selected.category}
+                </Badge>
+                {selected.destructive && (
+                  <Badge color="red" size="1">
+                    destructive
+                  </Badge>
+                )}
+              </Flex>
+              <Text size="2" color="gray" as="div" mt="1">
+                {selected.describe}
+              </Text>
+
+              {/* Step Rail */}
+              <Flex gap="4" mt="3" align="center" wrap="wrap">
+                <StepBadge n={1} label="Command" done={true} />
+                {selected.needsPlayer && (
+                  <StepBadge n={2} label="Target" done={targetReady} />
+                )}
+                <StepBadge n={selected.needsPlayer ? 3 : 2} label="Parameters" done={requiredFilled} />
+              </Flex>
+            </div>
+
+            {/* Step 2: Target Player */}
+            {selected.needsPlayer && (
+              <Box style={{ borderBottom: "1px solid var(--color-border-hair)", paddingBottom: "16px" }}>
+                <Flex justify="between" align="center" mb="2">
+                  <Text
+                    size="2"
+                    weight="bold"
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.05em",
+                    }}
+                  >
+                    Target player
+                  </Text>
+                  {selected.allowAllPlayers && (
+                    <button
+                      type="button"
+                      onClick={toggleAllPlayers}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        padding: "4px 8px",
+                        fontSize: "11px",
+                        fontFamily: "var(--font-sans)",
+                        fontWeight: "500",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.04em",
+                        cursor: "pointer",
+                        border: "1px solid",
+                        borderRadius: "var(--radius-1)",
+                        borderColor: allPlayers ? "var(--color-accent)" : "var(--color-border-default)",
+                        backgroundColor: allPlayers ? "rgba(217, 119, 87, 0.15)" : "var(--color-bg-elevated)",
+                        color: allPlayers ? "var(--color-accent-strong)" : "var(--color-text-secondary)",
+                        transition: "all 140ms var(--ease-out)",
+                      }}
+                      className="chamfer-sm"
+                    >
+                      <Users2 size={12} />
+                      All players
+                    </button>
+                  )}
+                </Flex>
+
+                {allPlayers ? (
+                  <Box
+                    p="2"
+                    style={{
+                      border: "1px dashed var(--color-accent)",
+                      backgroundColor: "rgba(217, 119, 87, 0.05)",
+                      borderRadius: "var(--radius-2)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
+                  >
+                    <Check size={14} style={{ color: "var(--color-accent-strong)" }} />
+                    <Text size="2" weight="medium" style={{ color: "var(--color-accent-strong)" }}>
+                      Target: All online players (*)
+                    </Text>
+                  </Box>
+                ) : (
+                  <CommandCombobox
+                    kind="players"
+                    value={values.PlayerId}
+                    onPick={(val) => setValues((prev) => ({ ...prev, PlayerId: val }))}
+                    tunnelId={tunnelId}
+                  />
+                )}
+              </Box>
+            )}
+
+            {/* Step 3: Parameters */}
+            {fieldsToRender.length > 0 && (
+              <Box style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <Text
+                  size="2"
+                  weight="bold"
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.05em",
+                  }}
+                >
+                  Parameters
+                </Text>
+                <Grid columns={{ initial: "1", sm: "2" }} gap="3">
+                  {fieldsToRender.map((field) => (
+                    <Box
+                      key={field.key}
+                      style={{
+                        gridColumn: field.kind === "text" ? "1 / -1" : undefined,
+                      }}
+                    >
+                      <FieldInput
+                        field={field}
+                        value={values[field.key]}
+                        onChange={(v) => setValues((prev) => ({ ...prev, [field.key]: v }))}
+                        tunnelId={tunnelId}
+                        vehicleTemplates={vehicleTemplates}
+                      />
+                    </Box>
+                  ))}
+                </Grid>
+              </Box>
+            )}
+
+            {/* SpawnVehicleAt Player Position Button */}
+            {selected.id === "SpawnVehicleAt" && (
               <UsePlayerPositionButton
                 tunnelId={tunnelId}
                 playerId={values.PlayerId as string | undefined}
@@ -288,94 +652,241 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
                   setValues((prev) => ({ ...prev, X: loc.x, Y: loc.y, Z: loc.z }))
                 }
               />
-            ) : null}
-            <Flex mt="3" gap="2" align="center">
-              <Button onClick={publish} disabled={busy} color={selected.destructive ? "red" : undefined}>
-                {busy ? "Publishing…" : selected.destructive ? "Publish (destructive)" : "Publish"}
-              </Button>
-              {result ? (
-                <Badge color={result.ok ? "green" : "red"}>{result.ok ? "ok" : "failed"}</Badge>
-              ) : null}
+            )}
+
+            {/* Live Command Preview */}
+            <CommandPreview cmd={selected} values={values} />
+
+            {/* Destructive Confirm + Publish */}
+            <Flex
+              direction="column"
+              gap="3"
+              style={{ borderTop: "1px solid var(--color-border-hair)", paddingTop: "16px" }}
+            >
+              {selected.destructive && (
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "8px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={confirm}
+                    onChange={(e) => setConfirm(e.target.checked)}
+                    style={{
+                      marginTop: "3px",
+                      width: "16px",
+                      height: "16px",
+                      borderRadius: "var(--radius-1)",
+                      accentColor: "var(--color-err)",
+                    }}
+                  />
+                  <Flex align="center" gap="1" style={{ color: "var(--color-err)" }}>
+                    <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+                    <Text size="2" weight="medium">
+                      I understand this action is irreversible and cannot be undone.
+                    </Text>
+                  </Flex>
+                </label>
+              )}
+
+              <Flex justify="between" align="center" gap="3">
+                <Text size="1" color="gray">
+                  {canPublish ? "Ready to publish." : "Complete required steps to publish."}
+                </Text>
+                <button
+                  type="button"
+                  onClick={publish}
+                  disabled={!canPublish || busy}
+                  className="action-btn"
+                  data-tone={selected.destructive ? "danger" : "accent"}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "8px 16px",
+                  }}
+                >
+                  {busy ? (
+                    <>
+                      <span className="inline-spinner" />
+                      Publishing…
+                    </>
+                  ) : (
+                    <>
+                      <Send size={14} />
+                      Publish command
+                    </>
+                  )}
+                </button>
+              </Flex>
             </Flex>
-            {result && !result.ok && result.error ? (
-              <Text size="1" color="red" mt="2">
+
+            {/* Publish Results & Outputs */}
+            {result && !result.ok && result.error && (
+              <Text size="2" color="red" mt="2" style={{ display: "block" }}>
                 {result.error}
               </Text>
-            ) : null}
-            {result?.output ? (
+            )}
+            {result?.output && (
               <Box
                 mt="2"
                 className="mono"
-                style={{ fontSize: 11, padding: 6, background: "var(--color-panel-translucent)", whiteSpace: "pre-wrap" }}
+                style={{
+                  fontSize: 11,
+                  padding: 8,
+                  background: "rgba(0, 0, 0, 0.3)",
+                  border: "1px solid var(--color-border-hair)",
+                  borderRadius: "var(--radius-2)",
+                  whiteSpace: "pre-wrap",
+                  maxHeight: "240px",
+                  overflowY: "auto",
+                }}
               >
                 {result.output}
               </Box>
-            ) : null}
-            {error ? (
-              <Text size="1" color="red" mt="2">
+            )}
+            {error && (
+              <Text size="2" color="red" mt="2" style={{ display: "block" }}>
                 {error}
               </Text>
-            ) : null}
+            )}
           </Box>
         ) : (
-          <Text color="gray">Select a command on the left.</Text>
+          <Box
+            className="bracket chamfer"
+            style={{
+              background: "var(--color-bg-panel)",
+              border: "1px solid var(--color-border-hair)",
+              borderRadius: "var(--radius-3)",
+              padding: "48px 16px",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              textAlign: "center",
+              gap: "8px",
+            }}
+          >
+            <Terminal size={32} style={{ opacity: 0.4 }} />
+            <Text size="3" weight="bold">
+              No command selected
+            </Text>
+            <Text size="2" color="gray" style={{ maxWidth: "360px" }}>
+              Select a command from the catalog on the left to configure and publish it. The publish
+              command string assembles live.
+            </Text>
+          </Box>
         )}
-      </Box>
-      <Box style={{ flex: "1 1 320px", minWidth: 0 }}>
-        <Text size="2" weight="medium">
-          Recent publishes
-        </Text>
-        <Table.Root variant="surface" size="1" mt="1">
-          <Table.Header>
-            <Table.Row>
-              <Table.ColumnHeaderCell>Cmd</Table.ColumnHeaderCell>
-              <Table.ColumnHeaderCell>OK</Table.ColumnHeaderCell>
-              <Table.ColumnHeaderCell>When</Table.ColumnHeaderCell>
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {history.map((h) => (
-              <Table.Row key={h.id}>
-                <Table.Cell className="mono" style={{ fontSize: 11 }}>
-                  {h.command}
-                </Table.Cell>
-                <Table.Cell>
-                  <Badge color={h.ok ? "green" : "red"}>{h.ok ? "ok" : "fail"}</Badge>
-                </Table.Cell>
-                <Table.Cell className="mono" style={{ fontSize: 11 }}>
-                  {formatTime(h.createdAt)}
-                </Table.Cell>
-              </Table.Row>
-            ))}
-          </Table.Body>
-        </Table.Root>
-      </Box>
 
-      <AlertDialog.Root open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialog.Content maxWidth="460px">
-          <AlertDialog.Title>Run {selected?.label}?</AlertDialog.Title>
-          <AlertDialog.Description size="2">
-            This command is destructive and cannot be undone. {selected?.describe}
-          </AlertDialog.Description>
-          <Flex gap="2" mt="4" justify="end">
-            <AlertDialog.Cancel>
-              <Button variant="soft" color="gray">
-                Cancel
-              </Button>
-            </AlertDialog.Cancel>
-            <Button
-              color="red"
-              onClick={() => {
-                setConfirmOpen(false);
-                void doPublish();
-              }}
-            >
-              Run it
-            </Button>
-          </Flex>
-        </AlertDialog.Content>
-      </AlertDialog.Root>
-    </Flex>
+        {/* Recent Publishes Table */}
+        <Box>
+          <Text
+            size="2"
+            weight="bold"
+            style={{
+              display: "block",
+              marginBottom: "8px",
+              fontFamily: "var(--font-mono)",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+            }}
+          >
+            Recent publishes
+          </Text>
+          <Box
+            className="bracket chamfer"
+            style={{
+              background: "var(--color-bg-panel)",
+              border: "1px solid var(--color-border-hair)",
+              borderRadius: "var(--radius-3)",
+              overflow: "hidden",
+            }}
+          >
+            <Table.Root variant="ghost" size="1">
+              <Table.Header style={{ backgroundColor: "var(--color-bg-elevated)" }}>
+                <Table.Row style={{ borderBottom: "1px solid var(--color-border-hair)" }}>
+                  <Table.ColumnHeaderCell
+                    style={{
+                      padding: "8px 12px",
+                      fontFamily: "var(--font-mono)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.04em",
+                      fontSize: "10px",
+                    }}
+                  >
+                    Cmd
+                  </Table.ColumnHeaderCell>
+                  <Table.ColumnHeaderCell
+                    style={{
+                      padding: "8px 12px",
+                      fontFamily: "var(--font-mono)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.04em",
+                      fontSize: "10px",
+                    }}
+                  >
+                    OK
+                  </Table.ColumnHeaderCell>
+                  <Table.ColumnHeaderCell
+                    style={{
+                      padding: "8px 12px",
+                      fontFamily: "var(--font-mono)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.04em",
+                      fontSize: "10px",
+                      textAlign: "right",
+                    }}
+                  >
+                    When
+                  </Table.ColumnHeaderCell>
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {history.map((h) => (
+                  <Table.Row key={h.id} style={{ borderBottom: "1px solid var(--color-border-hair)" }}>
+                    <Table.Cell
+                      className="mono"
+                      style={{ padding: "8px 12px", fontSize: 11, verticalAlign: "middle" }}
+                    >
+                      {h.command}
+                    </Table.Cell>
+                    <Table.Cell style={{ padding: "8px 12px", verticalAlign: "middle" }}>
+                      <Badge color={h.ok ? "green" : "red"}>{h.ok ? "ok" : "fail"}</Badge>
+                    </Table.Cell>
+                    <Table.Cell
+                      className="mono"
+                      style={{
+                        padding: "8px 12px",
+                        fontSize: 11,
+                        textAlign: "right",
+                        color: "var(--color-text-muted)",
+                        verticalAlign: "middle",
+                      }}
+                    >
+                      {formatTime(h.createdAt)}
+                    </Table.Cell>
+                  </Table.Row>
+                ))}
+                {history.length === 0 && (
+                  <Table.Row>
+                    <Table.Cell
+                      colSpan={3}
+                      style={{ textAlign: "center", padding: "16px 0", color: "var(--color-text-muted)" }}
+                    >
+                      No commands published yet.
+                    </Table.Cell>
+                  </Table.Row>
+                )}
+              </Table.Body>
+            </Table.Root>
+          </Box>
+        </Box>
+      </Flex>
+    </Grid>
   );
 }
 
