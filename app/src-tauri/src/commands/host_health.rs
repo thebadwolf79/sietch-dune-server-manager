@@ -12,13 +12,18 @@
 
 use serde_json::Value;
 
-use dune_manager_core::orchestration::RemoteCommandRunner;
+use dune_manager_core::orchestration::{
+    DuneVmConfidence, DuneVmDetector, RemoteCommandRunner, StrictPowerShellHyperV, VmPowerState,
+};
 
 use crate::commands::shared::{command_error_message, runner_for_remote_kind};
 use crate::dto::{
     HealthFinding, HostApplyFixRequest, HostApplyFixResult, HostHealthReport, HostHealthRequest,
     HostMetrics,
 };
+
+/// Static IP the Funcom vendor assigns the Alpine guest on its internal switch.
+const ALPINE_STATIC_IP: &str = "192.168.200.10";
 
 /// Read-only probe (no sudo): everything here is world-readable on Alpine.
 const PROBE_SCRIPT: &str = r#"export PATH=/sbin:/usr/sbin:/usr/local/sbin:$PATH
@@ -44,6 +49,17 @@ const SWAP_MAX_GB: i64 = 16;
 #[tauri::command]
 pub async fn host_health_check(request: HostHealthRequest) -> Result<HostHealthReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        // When the target is this box (loopback or the static Alpine IP), the
+        // manager is almost certainly running on the Hyper-V host. Ask Hyper-V
+        // whether the Dune VM is actually powered on first: if it isn't, an SSH
+        // probe can only hang until timeout, so return a clear critical finding
+        // immediately instead.
+        if is_loopback_or_static_alpine(&request.host) {
+            if let Some(report) = local_vm_not_running_report() {
+                return Ok(report);
+            }
+        }
+
         let runner = runner_for_remote_kind(
             request.server_type.as_deref(),
             request.host,
@@ -139,6 +155,70 @@ pub async fn host_apply_fix(request: HostApplyFixRequest) -> Result<HostApplyFix
 }
 
 // --- pure helpers (unit-tested) --------------------------------------------
+
+/// True when the health target is this machine — loopback, `localhost`, or the
+/// vendor's static Alpine guest IP — i.e. a case where the manager is likely
+/// co-located with the Hyper-V host and can ask it for VM power state.
+fn is_loopback_or_static_alpine(host: &str) -> bool {
+    let h = host.trim();
+    h.eq_ignore_ascii_case("localhost")
+        || h == ALPINE_STATIC_IP
+        || h.parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
+/// Probe Hyper-V for the local Dune VM. Returns a critical `vm_not_running`
+/// report when a Dune VM is found but is not `Running`; returns `None` (so the
+/// normal SSH probe proceeds) when there is no local Dune VM, it is already
+/// running, or Hyper-V can't be queried here (remote / not installed / denied).
+fn local_vm_not_running_report() -> Option<HostHealthReport> {
+    let mut candidates = DuneVmDetector::new(StrictPowerShellHyperV::new())
+        .detect()
+        .ok()?;
+    if candidates.is_empty() {
+        return None;
+    }
+    // Highest-confidence candidate wins, matching detect_local_vm_connection.
+    candidates.sort_by_key(|c| match c.confidence {
+        DuneVmConfidence::High => 0,
+        DuneVmConfidence::Medium => 1,
+        DuneVmConfidence::Low => 2,
+    });
+    let top = &candidates[0];
+    if top.vm.state == VmPowerState::Running {
+        return None;
+    }
+    Some(vm_not_running_report(&top.vm.name, &top.vm.raw_state))
+}
+
+/// Build a single-finding critical report explaining the VM is powered down.
+fn vm_not_running_report(vm_name: &str, raw_state: &str) -> HostHealthReport {
+    let findings = vec![HealthFinding {
+        id: "vm_not_running".to_string(),
+        severity: "critical".to_string(),
+        title: format!("VM '{vm_name}' is not running"),
+        detail: format!(
+            "The Dune server VM '{vm_name}' is in state '{raw_state}', not Running. The host \
+             health check probes the guest over SSH, which can't succeed while it is powered \
+             down, so the probe was skipped to avoid a long connection timeout."
+        ),
+        recommendation: "Start the VM (Server dashboard power controls, or Hyper-V Manager), \
+                         then re-run the health check."
+            .to_string(),
+        fix_id: None,
+        fix_label: None,
+        fix_param: None,
+    }];
+    let overall_severity = highest_severity(&findings).to_string();
+    HostHealthReport {
+        metrics: parse_probe(""),
+        findings,
+        overall_severity,
+        summary: format!("VM '{vm_name}' is not running (state: {raw_state})."),
+        cluster_checked: false,
+    }
+}
 
 fn parse_probe(stdout: &str) -> HostMetrics {
     let mut mem_total_kb = 0u64;
@@ -441,6 +521,13 @@ fn prune_failed_pods_script(namespace: &str) -> String {
     format!(
         r#"set -eu
 export PATH=/sbin:/usr/sbin:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:$PATH
+# Readiness gate: never issue a destructive delete unless the k3s API server is
+# actually up. A delete fired while the API is down/starting can hang or fail
+# opaquely, so bail out fast and clearly instead.
+if ! kubectl get --raw /healthz >/dev/null 2>&1; then
+  echo "k3s API server is not ready (kubectl get --raw /healthz failed); aborting prune" >&2
+  exit 1
+fi
 echo "Pruning failed pods in namespace {quoted_ns}..."
 kubectl delete pods --field-selector=status.phase=Failed -n {quoted_ns}
 echo "Pruning complete."
@@ -504,6 +591,29 @@ mod tests {
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].severity, "ok");
         assert_eq!(highest_severity(&f), "ok");
+    }
+
+    #[test]
+    fn classifies_local_health_targets() {
+        assert!(is_loopback_or_static_alpine("127.0.0.1"));
+        assert!(is_loopback_or_static_alpine("localhost"));
+        assert!(is_loopback_or_static_alpine("LOCALHOST"));
+        assert!(is_loopback_or_static_alpine("::1"));
+        assert!(is_loopback_or_static_alpine("192.168.200.10"));
+        assert!(is_loopback_or_static_alpine("  192.168.200.10 "));
+        assert!(!is_loopback_or_static_alpine("10.0.0.5"));
+        assert!(!is_loopback_or_static_alpine("example.com"));
+    }
+
+    #[test]
+    fn vm_not_running_report_is_critical_single_finding() {
+        let report = vm_not_running_report("dune-server", "Off");
+        assert_eq!(report.overall_severity, "critical");
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].id, "vm_not_running");
+        assert!(report.findings[0].title.contains("dune-server"));
+        assert!(report.findings[0].detail.contains("Off"));
+        assert!(!report.cluster_checked);
     }
 
     #[test]

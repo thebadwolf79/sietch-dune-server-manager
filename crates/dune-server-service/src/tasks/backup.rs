@@ -58,6 +58,10 @@ impl Task for BackupTask {
             "starting backup bg={bg_name} ns={} name={backup_name}",
             cluster.namespace
         ))?;
+        // Precheck (#hardening): abort before the vendor spins up a dump pod if
+        // any public table is owned by a different role — pg_dump would fail
+        // mid-run inside that pod and leave only an opaque "backup failed".
+        check_table_ownership(ctx, &cluster.namespace).await?;
         run_backup_and_verify(ctx, &bg_name, &backup_name).await?;
         ctx.log_info(&format!(
             "backup complete path=/funcom/artifacts/database-dumps/{bg_name}/{backup_name}"
@@ -106,6 +110,57 @@ pub async fn run_backup_and_verify(ctx: &TaskCtx, bg_name: &str, backup_name: &s
     }
 
     Ok(())
+}
+
+/// Tables in the `public` schema not owned by the connection role. The vendor
+/// dump pod runs `pg_dump` as this role, so a stray-owned table aborts the dump
+/// partway with a permission error that never reaches the wrapper output.
+const STRAY_TABLE_SQL: &str = "SELECT tablename, tableowner FROM pg_tables \
+     WHERE schemaname = 'public' AND tableowner <> current_user \
+     ORDER BY tablename";
+
+/// Abort the backup if any `public` table is owned by a role other than the
+/// connection user. Connecting/querying failures propagate (a backup that can't
+/// be prechecked is not safe to start): the vendor dump targets the same DB and
+/// would fail opaquely anyway, so surfacing the cause here is strictly clearer.
+async fn check_table_ownership(ctx: &TaskCtx, namespace: &str) -> Result<()> {
+    let state = ctx
+        .env
+        .pg
+        .client(namespace)
+        .await
+        .context("connecting to postgres for backup table-ownership precheck")?;
+    let rows = state
+        .client()
+        .query(STRAY_TABLE_SQL, &[])
+        .await
+        .context("querying public table ownership")?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let stray: Vec<(String, String)> = rows
+        .iter()
+        .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+        .collect();
+    let listed = format_stray_tables(&stray);
+    ctx.log_error(&format!(
+        "aborting backup: {} public table(s) not owned by the backup role; pg_dump would fail in the vendor dump pod: {listed}",
+        stray.len()
+    ))?;
+    Err(anyhow!(
+        "backup precheck failed: {} stray table(s) not owned by current_user: {listed}",
+        stray.len()
+    ))
+}
+
+/// Render `(table, owner)` pairs as a stable, comma-separated list for logs and
+/// the error message. Split out so it can be unit-tested without a live DB.
+fn format_stray_tables(tables: &[(String, String)]) -> String {
+    tables
+        .iter()
+        .map(|(table, owner)| format!("{table} (owner={owner})"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Best-effort diagnostics for a failed vendor backup (#7): summarize the most
@@ -189,7 +244,24 @@ fn summarize_latest_dump_pod(json: &serde_json::Value) -> Option<(String, String
 
 #[cfg(test)]
 mod tests {
-    use super::summarize_latest_dump_pod;
+    use super::{format_stray_tables, summarize_latest_dump_pod};
+
+    #[test]
+    fn formats_stray_tables_for_error() {
+        let tables = vec![
+            ("legacy_audit".to_string(), "postgres".to_string()),
+            ("imported_blob".to_string(), "admin".to_string()),
+        ];
+        assert_eq!(
+            format_stray_tables(&tables),
+            "legacy_audit (owner=postgres), imported_blob (owner=admin)"
+        );
+    }
+
+    #[test]
+    fn formats_empty_stray_tables_as_blank() {
+        assert_eq!(format_stray_tables(&[]), "");
+    }
 
     #[test]
     fn picks_most_recent_dump_pod_and_surfaces_termination() {
