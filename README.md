@@ -44,7 +44,7 @@ More management features coming soon.
 ## Install
 
 Download the latest release for your operating system from
-[this repository's Releases](https://github.com/thebadwolf79/dune-dedicated-server-manager/releases).
+[this repository's Releases](https://github.com/thebadwolf79/sietch-dune-server-manager/releases).
 
 - Windows: run the NSIS installer.
 - Linux: use the AppImage or Debian package.
@@ -69,7 +69,7 @@ typical dedicated-server deployment uses:
 ## Issues & feedback
 
 Found a bug in **Sietch** or have a request? Open an issue here:
-<https://github.com/thebadwolf79/dune-dedicated-server-manager/issues>
+<https://github.com/thebadwolf79/sietch-dune-server-manager/issues>
 
 If the problem is with the upstream project rather than this fork's additions,
 consider reporting it at
