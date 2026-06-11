@@ -36,7 +36,7 @@ SteamCMD.
 - Automated tasks tab with editable schedule settings (daily restart time, warning lead/frequency, update apply lead, IANA timezone) — saving auto-restarts the service so changes apply immediately
 - Welcome Package automation: a per-player onboarding chain (item grants, water refill, welcome whisper) driven by Postgres player detection, tracked in the management service's SQLite ledger, and configurable from the Welcome Package tab with both a visual editor and a raw JSON mode
 
-![Admin tab — granting items to online players with a searchable Funcom item picker](images/ss-2.png)
+![Theme Switch — allows changing of theme from Sietch to OLED](images/EYJHBG~3.PNG)
 
 More management features coming soon.
 
