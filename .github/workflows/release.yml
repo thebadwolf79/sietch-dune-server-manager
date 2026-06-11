@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -67,7 +67,7 @@ jobs:
           cp crates/dune-server-service/openrc/dune-server-service release-artifacts/dune-server-service.openrc
 
       - name: Upload artifact for desktop bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dune-server-service-musl
           path: release-artifacts/
@@ -122,7 +122,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -130,7 +130,7 @@ jobs:
           targets: ${{ startsWith(matrix.name, 'macOS') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -147,7 +147,7 @@ jobs:
         run: npm ci
 
       - name: Download bundled dune-server-service binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: dune-server-service-musl
           path: app/src-tauri/binaries/
