@@ -100,6 +100,7 @@ export default function HostHealthPanel({ server, appendLogRow }: HostHealthPane
           port: server.port,
           fixId: finding.fixId,
           param: finding.fixParam ?? undefined,
+          namespace: server.namespace || undefined,
         });
         appendLogRow(log.info("host.health", `Applied ${finding.fixId}: ${res.message}`, server.id));
         await runCheck();

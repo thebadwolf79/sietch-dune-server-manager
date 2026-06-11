@@ -155,6 +155,7 @@ export type HostApplyFixRequest = {
   port?: number;
   fixId: string;
   param?: number;
+  namespace?: string;
 };
 
 export async function hostApplyFix(request: HostApplyFixRequest): Promise<HostApplyFixResult> {

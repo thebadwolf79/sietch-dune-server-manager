@@ -82,6 +82,7 @@ pub struct HostApplyFixRequest {
     pub fix_id: String,
     /// Numeric argument (swap GB for add_swap, value for set_swappiness).
     pub param: Option<i64>,
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

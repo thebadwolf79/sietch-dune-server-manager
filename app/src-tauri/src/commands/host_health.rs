@@ -112,6 +112,13 @@ pub async fn host_apply_fix(request: HostApplyFixRequest) -> Result<HostApplyFix
                 let value = request.param.unwrap_or(SWAPPINESS_TARGET).clamp(0, 100);
                 set_swappiness_script(value)
             }
+            "prune_failed_pods" => {
+                let ns = request.namespace.as_deref().unwrap_or("").trim();
+                if ns.is_empty() {
+                    return Err("Namespace is required to prune failed pods".to_string());
+                }
+                prune_failed_pods_script(ns)
+            }
             other => return Err(format!("unknown fix id: {other}")),
         };
 
@@ -318,9 +325,9 @@ fn analyze(m: &HostMetrics) -> Vec<HealthFinding> {
             severity: "warning".to_string(),
             title: format!("{} pod(s) were OOMKilled", m.oomkilled_pods.len()),
             detail: format!("OOMKilled: {}. The node ran out of memory and the kernel killed these.", m.oomkilled_pods.join(", ")),
-            recommendation: "Add swap (above) so spikes don't OOM-kill pods; consider memory limits if it recurs.".to_string(),
-            fix_id: None,
-            fix_label: None,
+            recommendation: "Add swap (above) so spikes don't OOM-kill pods. You can also prune these terminated pods from the namespace to clear this warning.".to_string(),
+            fix_id: Some("prune_failed_pods".to_string()),
+            fix_label: Some("Prune failed pods".to_string()),
             fix_param: None,
         });
     }
@@ -426,6 +433,19 @@ rc-update add sysctl boot >/dev/null 2>&1 || true
 echo "swappiness now: $(cat /proc/sys/vm/swappiness)"
 "#;
     TMPL.replace("__VAL__", &value.to_string())
+}
+
+/// Prune completed/failed pods from the namespace.
+fn prune_failed_pods_script(namespace: &str) -> String {
+    let quoted_ns = shell_quote(namespace);
+    format!(
+        r#"set -eu
+export PATH=/sbin:/usr/sbin:/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:$PATH
+echo "Pruning failed pods in namespace {quoted_ns}..."
+kubectl delete pods --field-selector=status.phase=Failed -n {quoted_ns}
+echo "Pruning complete."
+"#
+    )
 }
 
 #[cfg(test)]
