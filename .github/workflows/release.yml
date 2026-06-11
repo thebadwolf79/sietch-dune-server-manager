@@ -92,6 +92,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
           body_path: ${{ env.RELEASE_BODY_PATH }}
           files: |
             release-artifacts/dune-server-service
@@ -197,7 +198,7 @@ jobs:
         with:
           projectPath: app
           tagName: ${{ env.RELEASE_TAG }}
-          releaseName: "Dune Dedicated Server Manager ${{ env.RELEASE_TAG }}"
-          releaseDraft: false
+          releaseName: "Sietch - Dune Dedicated Server Manager ${{ env.RELEASE_TAG }}"
+          releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
