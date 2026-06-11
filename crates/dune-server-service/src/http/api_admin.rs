@@ -58,6 +58,7 @@ pub async fn search_players(
     let limit = q.limit.unwrap_or(50);
     let result = std::panic::AssertUnwindSafe(players::search_players(
         &state.env.pg,
+        &state.env.kubectl,
         &state.env.cluster,
         &query,
         limit,

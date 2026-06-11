@@ -26,6 +26,35 @@ function formatLastSeen(raw: string): string {
   return formatDateTime(`${s.replace(" ", "T")}Z`);
 }
 
+type PlayerStatusKind = "online" | "grace" | "transit" | "offline";
+
+// Map the (possibly BGD-enriched) `online` string to a badge. The service may
+// send "online" / "grace period" / "transit" / "offline" (plus legacy values
+// like "loading"); anything unrecognized renders as a gray offline-style badge
+// showing the raw text.
+function playerStatus(raw: string): {
+  kind: PlayerStatusKind;
+  color: "green" | "amber" | "blue" | "gray";
+  label: string;
+} {
+  const s = (raw || "").trim().toLowerCase();
+  if (s === "online") return { kind: "online", color: "green", label: "Online" };
+  if (s === "grace period" || s === "grace")
+    return { kind: "grace", color: "amber", label: "Grace period" };
+  if (s === "transit" || s === "in transit")
+    return { kind: "transit", color: "blue", label: "Transit" };
+  return { kind: "offline", color: "gray", label: raw.trim() ? raw.trim() : "Offline" };
+}
+
+// A player counts as "present" (kept by the Online-only filter) unless they are
+// fully offline. Online and transit players are actively connected, so their
+// last-seen cell is suppressed.
+const isPresent = (raw: string) => playerStatus(raw).kind !== "offline";
+const isLive = (raw: string) => {
+  const k = playerStatus(raw).kind;
+  return k === "online" || k === "transit";
+};
+
 export type UsersTabProps = {
   tunnelId: string;
   /**
@@ -100,9 +129,33 @@ export default function UsersTab({
   }, [autoRefresh, query, reload, serverReachable]);
 
   const visible = useMemo(
-    () => (onlineOnly ? users.filter((u) => u.online.toLowerCase() === "online") : users),
+    () => (onlineOnly ? users.filter((u) => isPresent(u.online)) : users),
     [users, onlineOnly],
   );
+
+  // High-level live presence counts for the toolbar (#14), computed over the
+  // full loaded set rather than the filtered view.
+  const counts = useMemo(() => {
+    let online = 0;
+    let grace = 0;
+    let transit = 0;
+    for (const u of users) {
+      switch (playerStatus(u.online).kind) {
+        case "online":
+          online += 1;
+          break;
+        case "grace":
+          grace += 1;
+          break;
+        case "transit":
+          transit += 1;
+          break;
+        default:
+          break;
+      }
+    }
+    return { online, grace, transit };
+  }, [users]);
 
   return (
     <Box mt="3" style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -150,18 +203,30 @@ export default function UsersTab({
         >
           {busy ? "Loading…" : "Refresh"}
         </button>
-        <Text
-          size="1"
-          color="gray"
-          style={{
-            marginLeft: "auto",
-            flexShrink: 0,
-            textAlign: "right",
-            fontVariantNumeric: "tabular-nums",
-          }}
+        <Flex
+          align="center"
+          gap="3"
+          style={{ marginLeft: "auto", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
         >
-          {visible.length} of {users.length}
-        </Text>
+          <Flex align="center" gap="2">
+            <Badge color="green" variant="soft">
+              {counts.online} online
+            </Badge>
+            {counts.grace > 0 ? (
+              <Badge color="amber" variant="soft">
+                {counts.grace} grace
+              </Badge>
+            ) : null}
+            {counts.transit > 0 ? (
+              <Badge color="blue" variant="soft">
+                {counts.transit} transit
+              </Badge>
+            ) : null}
+          </Flex>
+          <Text size="1" color="gray" style={{ textAlign: "right" }}>
+            {visible.length} of {users.length}
+          </Text>
+        </Flex>
       </Flex>
 
       {error && (
@@ -221,7 +286,8 @@ export default function UsersTab({
         {/* Rows */}
         <Box style={{ display: "flex", flexDirection: "column" }}>
           {visible.map((user) => {
-            const isOnline = user.online.toLowerCase() === "online";
+            const status = playerStatus(user.online);
+            const live = isLive(user.online);
             return (
               <div
                 key={user.flsId}
@@ -249,12 +315,10 @@ export default function UsersTab({
                   {user.partitionId ?? <Text color="gray">—</Text>}
                 </span>
                 <span style={{ gridColumn: "span 1" }}>
-                  <Badge color={isOnline ? "green" : "gray"}>
-                    {user.online || "offline"}
-                  </Badge>
+                  <Badge color={status.color}>{status.label}</Badge>
                 </span>
                 <span className="mono" style={{ gridColumn: "span 2", fontSize: "11px", color: "var(--color-text-muted)" }}>
-                  {isOnline ? "—" : formatLastSeen(user.lastSeen)}
+                  {live ? "—" : formatLastSeen(user.lastSeen)}
                 </span>
                 <span style={{ gridColumn: "span 1", textAlign: "right" }}>
                   <DropdownMenu.Root>

@@ -40,6 +40,11 @@ pub struct Player {
     #[serde(rename = "flsId")]
     pub fls_id: String,
     pub name: String,
+    /// Live online status. Seeded from `player_state.online_status` in the DB
+    /// (`"online"` / `"offline"` / `"loading"`), then enriched by the Director
+    /// (BGD) overlay in `admin::players::search_players` to also carry
+    /// `"grace period"` and `"transit"` for players the DB still reports as
+    /// online/offline. Free-form string so new BGD states pass through to the UI.
     pub online: String,
     #[serde(rename = "lastSeen")]
     pub last_seen: String,

@@ -47,7 +47,32 @@ pub fn read_remote_server_status(
             "remote serverstats",
         )
         .unwrap_or_else(|_| Value::Null);
-    let battlegroup = battlegroup_status_from_json_with_stats(&bg, &stats).ok_or_else(|| {
+    // Authoritative live state from the Director (BGD): correct per-partition
+    // phase during startup (#21) and grace/transit/queue counts. Queried inside
+    // the BGD pod so we don't depend on a dynamic NodePort. Best-effort — a
+    // failure just leaves the CR-derived phases and ServerStats counts in place.
+    let bgd = runner
+        .run_json(
+            &format!(
+                "sudo kubectl exec -n {} deployment/{}-bgd-deploy -- wget -qO- http://127.0.0.1:11717/v0/battlegroup",
+                sh_single_quoted(namespace),
+                sh_single_quoted(battlegroup_name),
+            ),
+            "remote bgd status",
+        )
+        .unwrap_or_else(|_| Value::Null);
+    // Pod list for true per-pod uptime (#21): the BG CR only carries a
+    // cluster-wide startTimestamp, so we resolve each partition's own pod age.
+    let pods = runner
+        .run_json(
+            &format!(
+                "sudo kubectl get pods -n {} -o json",
+                sh_single_quoted(namespace),
+            ),
+            "remote pods",
+        )
+        .unwrap_or_else(|_| Value::Null);
+    let battlegroup = battlegroup_status_from_json_full(&bg, &stats, &bgd, &pods).ok_or_else(|| {
         failure(format!(
             "BattleGroup `{battlegroup_name}` returned no status object yet (likely still initialising)"
         ))
@@ -59,15 +84,19 @@ pub fn read_remote_server_status(
     })
 }
 
-/// Maps a raw `kubectl get battlegroup ... -o json` payload into the UI's
-/// `RemoteBattlegroupStatus` and merges per-partition
-/// live data (players, gamePhase, ready) from a `kubectl get serverstats`
-/// JSON payload. Pass `Value::Null` when no stats are available.
-pub(crate) fn battlegroup_status_from_json_with_stats(
+/// Maps a `kubectl get battlegroup ... -o json` payload into the UI's
+/// `RemoteBattlegroupStatus`, merging per-partition live data from ServerStats,
+/// authoritative Director (BGD) per-partition state (phase, grace/transit/queue),
+/// and true per-pod start times. `serverstats` / `bgd` / `pods` may each be
+/// `Value::Null`, in which case that source is skipped and the CR-derived values
+/// stand — so the function degrades cleanly when BGD or the pod list is missing.
+pub(crate) fn battlegroup_status_from_json_full(
     bg: &Value,
     serverstats: &Value,
+    bgd: &Value,
+    pods: &Value,
 ) -> Option<RemoteBattlegroupStatus> {
-    bg.get("metadata")?.get("name")?.as_str()?;
+    let bg_name = bg.get("metadata")?.get("name")?.as_str()?.to_string();
     let spec = bg.get("spec").cloned().unwrap_or(Value::Null);
     let status = bg.get("status").cloned().unwrap_or(Value::Null);
 
@@ -88,6 +117,8 @@ pub(crate) fn battlegroup_status_from_json_with_stats(
         .unwrap_or_default();
 
     let stats_by_partition = index_serverstats_by_partition(serverstats);
+    let bgd_by_partition = index_bgd_by_partition(bgd);
+    let pod_starts = parse_pod_starts(pods);
 
     let server_stats = status
         .get("servers")
@@ -95,7 +126,16 @@ pub(crate) fn battlegroup_status_from_json_with_stats(
         .map(|servers| {
             servers
                 .iter()
-                .map(|s| server_stat_from_json(s, &bg_age, &stats_by_partition))
+                .map(|s| {
+                    server_stat_from_json(
+                        s,
+                        &bg_age,
+                        &bg_name,
+                        &stats_by_partition,
+                        &bgd_by_partition,
+                        &pod_starts,
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -180,7 +220,10 @@ fn string_field(value: &Value, key: &str) -> String {
 fn server_stat_from_json(
     server: &Value,
     bg_age: &str,
+    bg_name: &str,
     stats_by_partition: &std::collections::HashMap<i64, PartitionStats>,
+    bgd_by_partition: &std::collections::HashMap<i64, BgdServerInfo>,
+    pod_starts: &[(String, String)],
 ) -> RemoteBattlegroupServerStat {
     // The Funcom operator names this field `partitionMap` in the BattleGroup
     // CR's `status.servers[]` — confirmed against backed-up live CR YAML.
@@ -202,32 +245,275 @@ fn server_stat_from_json(
         Some(idx) => format!("{friendly} #{idx}"),
         None => friendly,
     };
-    let ready_str = match server.get("ready") {
-        Some(Value::Bool(b)) => b.to_string(),
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        _ => String::new(),
+
+    let bgd = partition_index.and_then(|idx| bgd_by_partition.get(&(idx as i64)));
+
+    // Phase: prefer the authoritative BGD status — it reports "Startup" while
+    // a partition is still booting, where the CR can already read "Running"
+    // (#21). Fall back to the CR's per-server phase when BGD is absent or
+    // carries an unrecognized status code.
+    let cr_phase = string_field(server, "phase");
+    let phase = bgd
+        .and_then(|b| b.status)
+        .and_then(bgd_status_phase)
+        .map(str::to_string)
+        .unwrap_or(cr_phase);
+
+    // Ready: BGD's boolean wins when present, else the CR value (bool/str/num).
+    let ready_str = match bgd.and_then(|b| b.ready) {
+        Some(b) => b.to_string(),
+        None => match server.get("ready") {
+            Some(Value::Bool(b)) => b.to_string(),
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            _ => String::new(),
+        },
     };
-    // The BG CR's status.servers[] entries don't carry a player count or
-    // age; we inherit the BG-level age and merge the per-partition player
-    // count from the matching ServerStats CR (keyed by partitionIndex).
-    let age = if let Some(start) = server.get("startTimestamp").and_then(Value::as_str) {
-        format_age_since_iso(start)
-    } else {
-        bg_age.to_string()
+
+    // Age: true per-pod start time when a matching pod is found (#21), else the
+    // per-server CR timestamp, else the cluster-wide BG age.
+    let age = partition_index
+        .and_then(|idx| resolve_pod_age(pod_starts, bg_name, raw_map, idx))
+        .or_else(|| {
+            server
+                .get("startTimestamp")
+                .and_then(Value::as_str)
+                .map(format_age_since_iso)
+        })
+        .unwrap_or_else(|| bg_age.to_string());
+
+    // Players: prefer BGD's live online count with grace/transit/queue
+    // annotations; otherwise the per-partition ServerStats CRD count.
+    let players = match bgd {
+        Some(b) => format_bgd_players(b),
+        None => partition_index
+            .and_then(|idx| stats_by_partition.get(&(idx as i64)))
+            .and_then(|s| s.players)
+            .map(|n| n.to_string())
+            .unwrap_or_default(),
     };
-    let players = partition_index
-        .and_then(|idx| stats_by_partition.get(&(idx as i64)))
-        .and_then(|s| s.players)
-        .map(|n| n.to_string())
-        .unwrap_or_default();
+
     RemoteBattlegroupServerStat {
         map: labelled,
-        phase: string_field(server, "phase"),
+        phase,
         ready: ready_str,
         players,
         age,
     }
+}
+
+/// Authoritative live state for one partition, parsed from the BGD
+/// `/v0/battlegroup` payload.
+#[derive(Default, Clone)]
+struct BgdServerInfo {
+    status: Option<i64>,
+    ready: Option<bool>,
+    online: i64,
+    grace: i64,
+    transit: i64,
+    queue: i64,
+}
+
+/// Map a BGD numeric status to a display phase. Only values documented by the
+/// BGD status tool are mapped (1 = Startup, 3 = Healthy); unknown codes return
+/// `None` so the CR-derived phase is kept rather than mislabeled.
+fn bgd_status_phase(status: i64) -> Option<&'static str> {
+    match status {
+        1 => Some("Startup"),
+        3 => Some("Healthy"),
+        _ => None,
+    }
+}
+
+/// Render a BGD player count with grace/transit/queue annotations, e.g.
+/// `"7 (Grace: 1, Transit: 2)"`. Plain count when none are pending.
+fn format_bgd_players(info: &BgdServerInfo) -> String {
+    let mut extra = Vec::new();
+    if info.grace > 0 {
+        extra.push(format!("Grace: {}", info.grace));
+    }
+    if info.transit > 0 {
+        extra.push(format!("Transit: {}", info.transit));
+    }
+    if info.queue > 0 {
+        extra.push(format!("Queue: {}", info.queue));
+    }
+    if extra.is_empty() {
+        info.online.to_string()
+    } else {
+        format!("{} ({})", info.online, extra.join(", "))
+    }
+}
+
+fn count_array(value: Option<&Value>) -> i64 {
+    value
+        .and_then(Value::as_array)
+        .map(|a| a.len() as i64)
+        .unwrap_or(0)
+}
+
+/// Index the BGD `/v0/battlegroup` payload by partition id. Field names vary
+/// across BGD builds, so each is matched defensively; partitions with no
+/// recognizable id are skipped. Returns an empty map for `Value::Null`.
+fn index_bgd_by_partition(bgd: &Value) -> std::collections::HashMap<i64, BgdServerInfo> {
+    let mut out = std::collections::HashMap::new();
+    for server in collect_bgd_servers(bgd) {
+        let Some(partition) = bgd_partition_id(server) else {
+            continue;
+        };
+        let last = server.get("lastServerState").unwrap_or(server);
+        let info = BgdServerInfo {
+            status: server
+                .get("status")
+                .and_then(Value::as_i64)
+                .or_else(|| last.get("status").and_then(Value::as_i64)),
+            ready: server
+                .get("ready")
+                .and_then(Value::as_bool)
+                .or_else(|| last.get("ready").and_then(Value::as_bool)),
+            online: count_array(last.get("players")),
+            grace: ["gracePeriodPlayers", "gracePeriod", "grace"]
+                .iter()
+                .map(|k| count_array(last.get(*k)))
+                .max()
+                .unwrap_or(0),
+            transit: ["transitPlayers", "transit", "inTransit"]
+                .iter()
+                .map(|k| count_array(last.get(*k)))
+                .max()
+                .unwrap_or(0),
+            queue: ["queuedPlayers", "queue", "queueCount", "queueLength"]
+                .iter()
+                .map(|k| {
+                    server
+                        .get(*k)
+                        .and_then(Value::as_i64)
+                        .unwrap_or_else(|| count_array(last.get(*k)))
+                })
+                .max()
+                .unwrap_or(0),
+        };
+        out.insert(partition, info);
+    }
+    out
+}
+
+/// Flatten the per-server state objects out of a BGD `/v0/battlegroup` payload.
+/// Live BGD nests servers under three map shapes rather than a flat list:
+///   - `singleServerMaps`: `{ map: <server state> }`
+///   - `dimensionMaps`: `{ map: { serversByDimension: { dim: <server state> } } }`
+///   - `instancedMaps`: `{ map: { instances: [ <server state>, … ] } }`
+/// A flat top-level `servers` array is also accepted as a fallback (older BGD
+/// builds and the unit tests).
+fn collect_bgd_servers(bgd: &Value) -> Vec<&Value> {
+    let mut servers = Vec::new();
+
+    if let Some(arr) = bgd
+        .get("servers")
+        .or_else(|| bgd.pointer("/battlegroup/servers"))
+        .and_then(Value::as_array)
+    {
+        servers.extend(arr.iter());
+    }
+    if let Some(map) = bgd.get("singleServerMaps").and_then(Value::as_object) {
+        servers.extend(map.values());
+    }
+    if let Some(map) = bgd.get("dimensionMaps").and_then(Value::as_object) {
+        for entry in map.values() {
+            if let Some(by_dim) = entry.get("serversByDimension").and_then(Value::as_object) {
+                servers.extend(by_dim.values());
+            }
+        }
+    }
+    if let Some(map) = bgd.get("instancedMaps").and_then(Value::as_object) {
+        for entry in map.values() {
+            if let Some(instances) = entry.get("instances").and_then(Value::as_array) {
+                servers.extend(instances.iter());
+            }
+        }
+    }
+
+    servers
+}
+
+/// Resolve a BGD server's partition id. Live BGD nests it at
+/// `partition.partitionId`; older/flat shapes carry it as a top-level
+/// `partitionId` / `partition` / `partitionIndex` integer.
+fn bgd_partition_id(server: &Value) -> Option<i64> {
+    server
+        .pointer("/partition/partitionId")
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            ["partitionId", "partition", "partitionIndex"]
+                .iter()
+                .find_map(|k| server.get(*k).and_then(Value::as_i64))
+        })
+}
+
+/// Lowercase + underscores-to-dashes, matching the map token Funcom bakes into
+/// server-group pod names (`Survival_1` -> `survival-1`).
+fn map_kebab(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+/// Extract `(pod_name, status.startTime)` for server-group pods (name contains
+/// `-sg-` and `-pod-`) from a `kubectl get pods -o json` payload.
+fn parse_pod_starts(pods: &Value) -> Vec<(String, String)> {
+    let Some(items) = pods.get("items").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for pod in items {
+        let name = pod
+            .pointer("/metadata/name")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !name.contains("-sg-") || !name.contains("-pod-") {
+            continue;
+        }
+        let start = pod
+            .pointer("/status/startTime")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if start.is_empty() {
+            continue;
+        }
+        out.push((name.to_string(), start.to_string()));
+    }
+    out
+}
+
+/// Resolve a partition's true pod age from the pod list, matching in decreasing
+/// specificity: exact `{bg}-sg-{kebab}-pod-{index}`, then the `{bg}-sg-{kebab}-pod-`
+/// map prefix, then any `{bg}-sg-*-pod-{index}` index suffix. Returns the
+/// formatted age of the first match, or `None` when nothing matches.
+fn resolve_pod_age(
+    pod_starts: &[(String, String)],
+    bg_name: &str,
+    raw_map: &str,
+    partition_index: u64,
+) -> Option<String> {
+    let kebab = map_kebab(raw_map);
+    let exact = format!("{bg_name}-sg-{kebab}-pod-{partition_index}");
+    let map_prefix = format!("{bg_name}-sg-{kebab}-pod-");
+    let bg_prefix = format!("{bg_name}-sg-");
+    let index_suffix = format!("-pod-{partition_index}");
+
+    let pick = pod_starts
+        .iter()
+        .find(|(name, _)| name == &exact)
+        .or_else(|| {
+            pod_starts
+                .iter()
+                .find(|(name, _)| name.starts_with(&map_prefix))
+        })
+        .or_else(|| {
+            pod_starts
+                .iter()
+                .find(|(name, _)| name.starts_with(&bg_prefix) && name.ends_with(&index_suffix))
+        })?;
+    let age = format_age_since_iso(&pick.1);
+    (!age.is_empty()).then_some(age)
 }
 
 /// Format an RFC 3339 timestamp like `"2026-05-22T01:27:53Z"` as a compact
@@ -443,7 +729,7 @@ mod tests {
     }
 
     fn bg_status(bg: &Value) -> Option<RemoteBattlegroupStatus> {
-        battlegroup_status_from_json_with_stats(bg, &Value::Null)
+        battlegroup_status_from_json_full(bg, &Value::Null, &Value::Null, &Value::Null)
     }
 
     #[test]
@@ -532,7 +818,8 @@ mod tests {
                 {"spec": {"area": {"partition": 2, "map": "Overmap"}}, "status": {"runtime": {"players": 3}}},
             ],
         });
-        let dto = battlegroup_status_from_json_with_stats(&value, &stats).expect("status maps");
+        let dto = battlegroup_status_from_json_full(&value, &stats, &Value::Null, &Value::Null)
+            .expect("status maps");
         assert_eq!(dto.server_stats[0].players, "7");
         assert_eq!(dto.server_stats[1].players, "0");
         assert_eq!(dto.server_stats[2].players, "3");
@@ -549,7 +836,8 @@ mod tests {
             }),
         );
         let stats = json!({"items": []});
-        let dto = battlegroup_status_from_json_with_stats(&value, &stats).expect("status maps");
+        let dto = battlegroup_status_from_json_full(&value, &stats, &Value::Null, &Value::Null)
+            .expect("status maps");
         assert_eq!(dto.server_stats[0].players, "");
     }
 
@@ -690,5 +978,187 @@ mod tests {
         let days = (chrono::Utc::now() - chrono::Duration::days(5) - chrono::Duration::hours(7))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         assert_eq!(format_age_since_iso(&days), "5d 7h");
+    }
+
+    #[test]
+    fn bgd_status_overrides_cr_phase_during_startup() {
+        // CR already reads "Running" but BGD status 1 = Startup must win (#21).
+        let value = bg(
+            json!({"stop": false}),
+            json!({
+                "phase": "Running",
+                "servers": [
+                    {"partitionMap": "Survival_1", "partitionIndex": 1, "phase": "Running", "ready": true},
+                ],
+            }),
+        );
+        let bgd = json!({
+            "servers": [
+                {"partitionId": 1, "status": 1, "ready": false,
+                 "lastServerState": {"players": []}},
+            ],
+        });
+        let dto = battlegroup_status_from_json_full(&value, &Value::Null, &bgd, &Value::Null)
+            .expect("status maps");
+        assert_eq!(dto.server_stats[0].phase, "Startup");
+        assert_eq!(dto.server_stats[0].ready, "false");
+    }
+
+    #[test]
+    fn bgd_players_annotate_grace_and_transit() {
+        let value = bg(
+            json!({"stop": false}),
+            json!({
+                "servers": [
+                    {"partitionMap": "Survival_1", "partitionIndex": 1, "phase": "Running", "ready": true},
+                ],
+            }),
+        );
+        let bgd = json!({
+            "servers": [
+                {"partitionId": 1, "status": 3, "ready": true,
+                 "lastServerState": {
+                     "players": ["a", "b", "c", "d", "e", "f", "g"],
+                     "gracePeriodPlayers": ["x"],
+                     "transitPlayers": ["y", "z"]
+                 }},
+            ],
+        });
+        let dto = battlegroup_status_from_json_full(&value, &Value::Null, &bgd, &Value::Null)
+            .expect("status maps");
+        assert_eq!(dto.server_stats[0].phase, "Healthy");
+        assert_eq!(dto.server_stats[0].players, "7 (Grace: 1, Transit: 2)");
+    }
+
+    #[test]
+    fn bgd_plain_count_when_no_pending() {
+        let info = BgdServerInfo {
+            online: 4,
+            ..Default::default()
+        };
+        assert_eq!(format_bgd_players(&info), "4");
+    }
+
+    #[test]
+    fn resolves_true_pod_age_by_name() {
+        let two_min_ago = (chrono::Utc::now() - chrono::Duration::minutes(2))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let value = bg(
+            json!({"stop": false}),
+            json!({
+                // BG-level start is an hour ago, but the pod itself is 2m old.
+                "startTimestamp": (chrono::Utc::now() - chrono::Duration::hours(1))
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                "servers": [
+                    {"partitionMap": "Survival_1", "partitionIndex": 1, "phase": "Running", "ready": true},
+                ],
+            }),
+        );
+        let pods = json!({
+            "items": [
+                {"metadata": {"name": "sh-test-bg-sg-survival-1-pod-1"},
+                 "status": {"startTime": two_min_ago}},
+                {"metadata": {"name": "sh-test-bg-mq-game-sts-0"},
+                 "status": {"startTime": "2026-01-01T00:00:00Z"}},
+            ],
+        });
+        let dto = battlegroup_status_from_json_full(&value, &Value::Null, &Value::Null, &pods)
+            .expect("status maps");
+        assert!(
+            dto.server_stats[0].age == "2m" || dto.server_stats[0].age == "120s",
+            "age was {:?}",
+            dto.server_stats[0].age
+        );
+    }
+
+    #[test]
+    fn unknown_bgd_status_keeps_cr_phase() {
+        assert_eq!(bgd_status_phase(1), Some("Startup"));
+        assert_eq!(bgd_status_phase(3), Some("Healthy"));
+        assert_eq!(bgd_status_phase(99), None);
+    }
+
+    #[test]
+    fn indexes_nested_live_bgd_map_shapes() {
+        // Real BGD nests servers under singleServerMaps / dimensionMaps /
+        // instancedMaps with the partition id at partition.partitionId.
+        let bgd = json!({
+            "singleServerMaps": {
+                "Survival_1": {
+                    "partition": {"partitionId": 1},
+                    "status": 3,
+                    "ready": true,
+                    "lastServerState": {"players": ["a", "b"], "transitPlayers": ["t"]}
+                }
+            },
+            "dimensionMaps": {
+                "DeepDesert": {
+                    "serversByDimension": {
+                        "0": {
+                            "partition": {"partitionId": 10},
+                            "status": 1,
+                            "ready": false,
+                            "lastServerState": {"players": []}
+                        }
+                    }
+                }
+            },
+            "instancedMaps": {
+                "Cave": {
+                    "instances": [
+                        {
+                            "partition": {"partitionId": 20},
+                            "status": 3,
+                            "lastServerState": {"players": ["c"]}
+                        }
+                    ]
+                }
+            }
+        });
+        let by_partition = index_bgd_by_partition(&bgd);
+        assert_eq!(by_partition.len(), 3);
+
+        let p1 = by_partition.get(&1).expect("partition 1");
+        assert_eq!(p1.status, Some(3));
+        assert_eq!(p1.ready, Some(true));
+        assert_eq!(p1.online, 2);
+        assert_eq!(p1.transit, 1);
+
+        let p10 = by_partition.get(&10).expect("partition 10");
+        assert_eq!(p10.status, Some(1));
+        assert_eq!(p10.ready, Some(false));
+        assert_eq!(p10.online, 0);
+
+        assert_eq!(by_partition.get(&20).expect("partition 20").online, 1);
+    }
+
+    #[test]
+    fn nested_bgd_phase_and_players_merge_into_server_stats() {
+        // End-to-end: CR says Running, nested BGD says Startup (status 1) with a
+        // grace-period player — both must surface on the row.
+        let value = bg(
+            json!({"stop": false}),
+            json!({
+                "phase": "Running",
+                "servers": [
+                    {"partitionMap": "Survival_1", "partitionIndex": 1, "phase": "Running", "ready": true},
+                ],
+            }),
+        );
+        let bgd = json!({
+            "singleServerMaps": {
+                "Survival_1": {
+                    "partition": {"partitionId": 1},
+                    "status": 1,
+                    "ready": false,
+                    "lastServerState": {"players": ["p1", "p2", "p3"], "gracePeriodPlayers": ["g"]}
+                }
+            }
+        });
+        let dto = battlegroup_status_from_json_full(&value, &Value::Null, &bgd, &Value::Null)
+            .expect("status maps");
+        assert_eq!(dto.server_stats[0].phase, "Startup");
+        assert_eq!(dto.server_stats[0].ready, "false");
+        assert_eq!(dto.server_stats[0].players, "3 (Grace: 1)");
     }
 }
