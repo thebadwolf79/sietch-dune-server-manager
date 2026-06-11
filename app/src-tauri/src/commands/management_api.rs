@@ -11,7 +11,7 @@ pub fn ensure_client(app: &tauri::AppHandle) -> Client {
         return client.inner().clone();
     }
     let client = Client::builder()
-        .timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(5))
         .build()
         .expect("reqwest client builds");
     app.manage(client.clone());

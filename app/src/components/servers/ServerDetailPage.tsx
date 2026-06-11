@@ -20,6 +20,9 @@ import StatusPill from "../ui/StatusPill";
 import ServerDashboard from "./ServerDashboard";
 import ServerPods from "./ServerPods";
 import ServerUpdatePanel from "./ServerUpdatePanel";
+import { vmGetState, vmHostReadiness } from "../../services/tauri";
+import { canManageVm, type SystemState } from "../../types/vm";
+import { type VmStage } from "./SystemStatusHeader";
 import AdminTab, { type AdminTabPrefill } from "../management/AdminTab";
 import AutomatedTasksTab from "../management/AutomatedTasksTab";
 import UsersTab from "../management/UsersTab";
@@ -92,6 +95,27 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
   const tunnelState = useManagementTunnel(server, managementReady);
   const tunnelId = tunnelState.kind === "ready" ? tunnelState.tunnelId : null;
   const [adminPrefill, setAdminPrefill] = useState<AdminTabPrefill>(null);
+  const [realVmStage, setRealVmStage] = useState<VmStage | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const readiness = await vmHostReadiness();
+        if (!canManageVm(readiness)) {
+          if (!cancelled) setRealVmStage(null);
+          return;
+        }
+        const vm = await vmGetState(server.worldUniqueName || "dune-awakening");
+        if (!cancelled) setRealVmStage(vmStageFromState(vm));
+      } catch {
+        if (!cancelled) setRealVmStage(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [status, statusError, server.worldUniqueName]);
 
   const goToAdmin = useCallback(
     (prefill: AdminTabPrefill) => {
@@ -160,6 +184,7 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
               server={server}
               status={liveStatus}
               statusError={statusError}
+              realVmStage={realVmStage}
               busyLabel={busyLabel}
               tunnels={tunnels}
               tunnelBusy={tunnelBusy}
@@ -202,7 +227,10 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
                     <UsersTab
                       tunnelId={id}
                       serverReachable={
-                        !!liveStatus && isBattlegroupStarted(liveStatus.battlegroup)
+                        !busy &&
+                        (realVmStage === null || realVmStage === "running") &&
+                        !!liveStatus &&
+                        isBattlegroupStarted(liveStatus.battlegroup)
                       }
                       onSwitchToAdmin={goToAdmin}
                     />
@@ -274,4 +302,23 @@ function ManagementContent({
     );
   }
   return <>{children(tunnelId)}</>;
+}
+
+function vmStageFromState(s: SystemState): VmStage | null {
+  switch (s.state) {
+    case "vmOff":
+      return "off";
+    case "vmSaved":
+    case "vmPaused":
+      return "saved";
+    case "vmRunning":
+    case "battlegroupStopped":
+    case "battlegroupStarting":
+    case "battlegroupHealthy":
+    case "battlegroupDegraded":
+    case "battlegroupStopping":
+      return "running";
+    default:
+      return null;
+  }
 }

@@ -46,7 +46,15 @@ export default function UsersTab({
   const [users, setUsers] = useState<PlayerDto[]>([]);
   const [query, setQuery] = useState("");
   const [onlineOnly, setOnlineOnly] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(() => {
+    const saved = localStorage.getItem("sietch-users-auto-refresh");
+    return saved !== null ? saved === "true" : true;
+  });
+
+  useEffect(() => {
+    localStorage.setItem("sietch-users-auto-refresh", String(autoRefresh));
+  }, [autoRefresh]);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

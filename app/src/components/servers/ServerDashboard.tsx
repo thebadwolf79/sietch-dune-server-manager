@@ -11,30 +11,9 @@ import {
   phaseTone,
   remoteServerDefaultUser,
 } from "../../utils/remote-server";
-import { vmGetState, vmHostReadiness } from "../../services/tauri";
-import { canManageVm, type SystemState } from "../../types/vm";
 
 import SystemStatusHeader, { type Verdict, type LifecyclePhase, type VmStage } from "./SystemStatusHeader";
 
-function vmStageFromState(s: SystemState): VmStage | null {
-  switch (s.state) {
-    case "vmOff":
-      return "off";
-    case "vmSaved":
-    case "vmPaused":
-      return "saved";
-    case "vmRunning":
-    case "battlegroupStopped":
-    case "battlegroupStarting":
-    case "battlegroupHealthy":
-    case "battlegroupDegraded":
-    case "battlegroupStopping":
-      return "running";
-    default:
-      // unknown / hostPermissionUnavailable / error — not on the host or can't tell.
-      return null;
-  }
-}
 import MetricTile from "../ui/MetricTile";
 import HostHealthPanel from "./HostHealthPanel";
 import VmPowerControls from "./VmPowerControls";
@@ -47,6 +26,7 @@ export type ServerDashboardProps = {
   server: RemoteServerRecord;
   status?: RemoteServerStatus;
   statusError?: string;
+  realVmStage: VmStage | null;
   busyLabel?: string;
   tunnels: Record<string, ServerTunnelStatus>;
   tunnelBusy: Record<string, boolean>;
@@ -66,6 +46,7 @@ export default function ServerDashboard({
   server,
   status,
   statusError,
+  realVmStage,
   busyLabel,
   tunnels,
   tunnelBusy,
@@ -121,31 +102,7 @@ export default function ServerDashboard({
     });
   }, [activePlayers]);
 
-  // Reflect the REAL Hyper-V VM power state in the header's VM-stage indicator
-  // when this machine is the host (matches the authoritative VmPowerControls
-  // below). On a remote/connect-only machine there's no local VM to read, so we
-  // fall back to the reachability-derived stage computed below. Refreshed with
-  // the status poll rather than on its own timer.
-  const [realVmStage, setRealVmStage] = useState<VmStage | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const readiness = await vmHostReadiness();
-        if (!canManageVm(readiness)) {
-          if (!cancelled) setRealVmStage(null);
-          return;
-        }
-        const vm = await vmGetState(hypervVmName);
-        if (!cancelled) setRealVmStage(vmStageFromState(vm));
-      } catch {
-        if (!cancelled) setRealVmStage(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [status, hypervVmName]);
+
 
   // 3. Synthesize single-glance verdict, details, stage, and lifecycle
   let verdict: Verdict = "operational";
