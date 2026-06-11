@@ -11,8 +11,7 @@ A desktop manager for existing Dune: Awakening dedicated servers.
 > gaming.tools, Funcom, or Legendary Entertainment.** "Dune" and related names
 > are trademarks of their respective owners; this is a fan-made server-admin tool.
 
-![Dashboard — BattleGroup status, lifecycle actions, management service, and tunnel controls](images/ss-1.png)
-
+![Dashboard — BattleGroup status, lifecycle actions, management service, and tunnel controls](images/EYJHBG~2.PNG)
 The app manages already-provisioned Dune: Awakening dedicated servers over SSH
 and Kubernetes control commands. It does not install the game server, create
 VMs, configure Hyper-V, provision Ubuntu, or manage external tools such as
