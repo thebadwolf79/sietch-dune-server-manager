@@ -8,6 +8,8 @@ import TopNav from "./TopNav";
 import UpdateHeaderControl from "./UpdateHeaderControl";
 
 export type HeaderProps = {
+  theme: "sietch" | "oled";
+  onToggleTheme: () => void;
   activePage: ActivePage;
   servers: RemoteServerRecord[];
   statuses: Record<string, RemoteServerStatus>;
@@ -24,6 +26,8 @@ export type HeaderProps = {
 };
 
 export default function Header({
+  theme,
+  onToggleTheme,
   activePage,
   servers,
   statuses,
@@ -63,6 +67,8 @@ export default function Header({
           />
         </Flex>
         <UpdateHeaderControl
+          theme={theme}
+          onToggleTheme={onToggleTheme}
           status={updateStatus}
           update={update}
           progress={updateProgress}

@@ -1,4 +1,5 @@
-import { Badge, Button, Flex } from "@radix-ui/themes";
+import { Badge, Button, Flex, IconButton } from "@radix-ui/themes";
+import { Sun, Moon } from "lucide-react";
 
 import type { Update } from "../../services/updater";
 import type { UpdateStatus } from "../../types/update";
@@ -6,6 +7,8 @@ import { updateLabel, updateTone } from "../../utils/formatting";
 import AboutDialog from "../dialogs/AboutDialog";
 
 export type UpdateHeaderControlProps = {
+  theme: "sietch" | "oled";
+  onToggleTheme: () => void;
   status: UpdateStatus;
   update: Update | null;
   progress: string | null;
@@ -14,6 +17,8 @@ export type UpdateHeaderControlProps = {
 };
 
 export default function UpdateHeaderControl({
+  theme,
+  onToggleTheme,
   status,
   update,
   progress,
@@ -36,6 +41,17 @@ export default function UpdateHeaderControl({
       <Button size="1" variant={hasUpdate ? "solid" : "surface"} disabled={busy} onClick={hasUpdate ? onOpenUpdate : onCheck}>
         {busy ? "Working..." : hasUpdate ? "Install" : "Check for updates"}
       </Button>
+      <IconButton
+        size="1"
+        variant="surface"
+        color="gray"
+        onClick={onToggleTheme}
+        title={theme === "sietch" ? "Switch to OLED Theme" : "Switch to Sietch Theme"}
+        style={{ cursor: "pointer" }}
+        aria-label="Toggle Theme"
+      >
+        {theme === "sietch" ? <Sun size={14} /> : <Moon size={14} />}
+      </IconButton>
       <AboutDialog />
     </Flex>
   );

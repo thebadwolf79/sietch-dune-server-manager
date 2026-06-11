@@ -65,6 +65,14 @@ typical dedicated-server deployment uses:
 - UDP 7777-7810 for game servers
 - TCP 31982 for RMQ
 
+## DB Pod Restarts & OOM Mitigation (Issue #23)
+
+Self-hosted servers running k3s, PostgreSQL, and game servers on a single VM can experience container restarts or OOM (Out Of Memory) events, especially during database backups. Sietch helps you mitigate this:
+
+1. **Add VM Swap**: Use the **Host Health & Hardening** panel in Sietch to check if swap is configured on your Alpine VM. Sietch offers a one-click fix to add a swapfile (e.g., 8 GB) and optimize `swappiness=10` to keep operations stable.
+2. **Adjust Minimum Servers**: In the game's **1.4.5.0** update, you can tune the per-map "Minimum Servers" setting to reduce the number of warm game-server pods running simultaneously, freeing up substantial RAM on resource-constrained hosts.
+3. **Enable Experimental Swap**: The 1.4.5.0 update also adds an `enable-experimental-swap` setting. If needed, this can be enabled using Sietch's guest VM capabilities or directly via the `/home/dune/.dune/bin/battlegroup enable-experimental-swap` CLI wrapper.
+
 ## Issues & feedback
 
 Found a bug in **Sietch** or have a request? Open an issue here:

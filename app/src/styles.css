@@ -1678,4 +1678,38 @@ button:disabled,
   white-space: nowrap;
 }
 
+/* =========================================================================
+   OLED Black Theme Override
+   ========================================================================= */
+
+.theme-oled {
+  /* Surfaces — pure black base, deep neutral grays */
+  --color-bg-base: #000000;
+  --color-bg-panel: #050505;
+  --color-bg-elevated: #0c0c0c;
+  --color-bg-input: #121212;
+  --color-bg-hover: #1a1a1a;
+  --color-bg-active: #222222;
+
+  /* Borders — deep neutral lines */
+  --color-border-hair: #0f0f0f;
+  --color-border-muted: #1a1a1a;
+  --color-border-default: #262626;
+  --color-border-strong: #383838;
+}
+
+/* Override background gradient in OLED mode */
+.theme-oled .app-shell {
+  background: #000000 !important;
+}
+
+.theme-oled .app-shell::after {
+  opacity: 0.008; /* reduce grain opacity on true black */
+}
+
+.theme-oled .radix-themes {
+  --color-panel-translucent: rgba(8, 8, 8, 0.7);
+}
+
+
 

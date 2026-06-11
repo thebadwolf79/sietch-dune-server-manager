@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Box, Flex, Theme } from "@radix-ui/themes";
 
 import AppErrorBoundary from "./components/AppErrorBoundary";
@@ -18,6 +19,25 @@ import { useActivePage } from "./hooks/useActivePage";
 import { log } from "./utils/logging";
 
 export function App() {
+  const [theme, setTheme] = useState<"sietch" | "oled">(() => {
+    const saved = localStorage.getItem("sietch-theme");
+    return (saved as "sietch" | "oled") || "sietch";
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "oled") {
+      root.classList.add("theme-oled");
+    } else {
+      root.classList.remove("theme-oled");
+    }
+    localStorage.setItem("sietch-theme", theme);
+  }, [theme]);
+
+  const handleToggleTheme = () => {
+    setTheme((t) => (t === "sietch" ? "oled" : "sietch"));
+  };
+
   const {
     logLevelFilter,
     setLogLevelFilter,
@@ -81,6 +101,8 @@ export function App() {
     >
       <Flex direction="column" height="100vh" className="app-shell">
         <Header
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
           activePage={activePage}
           servers={remoteServersHook.remoteServers}
           statuses={status.remoteServerStatuses}
