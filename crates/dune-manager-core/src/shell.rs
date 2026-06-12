@@ -11,6 +11,7 @@ pub fn run_program(program: &str, args: &[&str]) -> CommandResult<String> {
     suppress_console_window(&mut command);
     let output = command
         .args(args)
+        .stdin(std::process::Stdio::null())
         .output()
         .map_err(|err| failure(format!("Failed to run {program}: {err}")))?;
 
@@ -42,6 +43,9 @@ pub fn run_powershell(script: &str) -> CommandResult<String> {
         "powershell",
         &[
             "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",

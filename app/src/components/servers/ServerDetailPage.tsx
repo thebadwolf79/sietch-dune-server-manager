@@ -98,6 +98,11 @@ export default function ServerDetailPage(props: ServerDetailPageProps) {
   const [realVmStage, setRealVmStage] = useState<VmStage | null>(null);
 
   useEffect(() => {
+    if (status) {
+      setRealVmStage("running");
+      return;
+    }
+
     let cancelled = false;
     (async () => {
       try {

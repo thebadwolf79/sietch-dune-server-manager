@@ -109,6 +109,8 @@ pub fn powershell_json_command(id: &'static str, script: &str) -> StrictCommandS
         [
             "-NoProfile",
             "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
