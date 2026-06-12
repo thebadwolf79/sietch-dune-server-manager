@@ -906,22 +906,13 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
                 </label>
               )}
 
-              <Flex justify="between" align="center" gap="3">
-                <Text size="1" color="gray">
-                  {canPublish ? "Ready to publish." : "Complete required steps to publish."}
-                </Text>
+              <Flex justify="start" align="center" gap="3" wrap="wrap">
                 <button
                   type="button"
                   onClick={publish}
                   disabled={!canPublish || busy}
-                  className="action-btn"
+                  className="action-btn action-btn-cta"
                   data-tone={selected.destructive ? "danger" : "accent"}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    padding: "8px 16px",
-                  }}
                 >
                   {busy ? (
                     <>
@@ -935,6 +926,9 @@ export default function AdminTab({ tunnelId, prefill, onPrefillConsumed }: Admin
                     </>
                   )}
                 </button>
+                <Text size="1" color="gray">
+                  {canPublish ? "Ready to publish." : "Complete required steps to publish."}
+                </Text>
               </Flex>
             </Flex>
 

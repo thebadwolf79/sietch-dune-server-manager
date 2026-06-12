@@ -897,6 +897,41 @@ body {
   border-color: rgba(214, 105, 94, 0.6);
 }
 
+/* Primary call-to-action (e.g. Admin "Publish command"): a solid, bright,
+   angular button modeled on the Funcom launcher's LAUNCH / BUY buttons, so the
+   main action never blends into the panel the way a tinted ghost button does.
+   Uses the theme accent, so it's bronze by default and electric-cyan in OLED. */
+.action-btn-cta {
+  padding: 10px 24px;
+  min-height: 40px;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: none;
+  border-radius: 0;
+  /* Angular launcher bevel (top-left + bottom-right corners cut). */
+  clip-path: polygon(11px 0, 100% 0, 100% calc(100% - 11px), calc(100% - 11px) 100%, 0 100%, 0 11px);
+}
+.action-btn-cta[data-tone="accent"]:not(:disabled):not([data-state="pending"]) {
+  background: linear-gradient(180deg, var(--color-accent-strong), var(--color-accent));
+  color: #0c0a08;
+  box-shadow: 0 0 0 1px var(--color-accent-ring), 0 8px 20px -10px var(--color-accent);
+}
+.action-btn-cta[data-tone="accent"]:hover:not(:disabled):not([data-state="pending"]) {
+  background: linear-gradient(180deg, #ffffff, var(--color-accent-strong));
+  color: #0c0a08;
+}
+.action-btn-cta[data-tone="danger"]:not(:disabled):not([data-state="pending"]) {
+  background: linear-gradient(180deg, #e8897e, var(--color-err));
+  color: #160a08;
+  box-shadow: 0 0 0 1px var(--color-err-dim), 0 8px 20px -10px var(--color-err);
+}
+.action-btn-cta[data-tone="danger"]:hover:not(:disabled):not([data-state="pending"]) {
+  background: linear-gradient(180deg, #f0a99f, var(--color-err));
+  color: #160a08;
+}
+
 .action-btn[data-state="pending"] {
   cursor: progress;
   background: var(--color-bg-elevated);
