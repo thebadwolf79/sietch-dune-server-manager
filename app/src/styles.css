@@ -23,11 +23,19 @@
   --color-text-muted: #797366;
   --color-text-faint: #4c473f;
 
-  /* Accents */
+  /* Accents — warm bronze/gold is the brand accent (buttons, branding). */
   --color-accent: #d97757;
   --color-accent-strong: #ea8b6d;
   --color-accent-dim: rgba(217, 119, 87, 0.16);
   --color-accent-ring: rgba(217, 119, 87, 0.35);
+
+  /* Interactive — electric cyan for active / selected / focus states, mirroring
+     the Funcom launcher's gold-brand + cyan-interactive split. (In the OLED
+     theme the brand accent is also cyan, so the two converge there.) */
+  --color-interactive: #2bd4e6;
+  --color-interactive-strong: #67e8f9;
+  --color-interactive-dim: rgba(43, 212, 230, 0.16);
+  --color-interactive-ring: rgba(43, 212, 230, 0.4);
 
   --color-ok: #76b876;
   --color-ok-strong: #8acf8a;
@@ -78,7 +86,7 @@
   --color-panel-solid: var(--color-bg-panel);
   --color-panel-translucent: rgba(28, 26, 23, 0.7);
   --color-surface: var(--color-bg-elevated);
-  --color-focus-root: var(--color-accent-ring);
+  --color-focus-root: var(--color-interactive-ring);
 }
 
 * {
@@ -174,10 +182,17 @@ body {
 
 .app-title {
   font-family: var(--font-display);
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
   font-size: 15px;
-  color: var(--color-text-primary);
+  text-transform: uppercase;
+  /* Gold metallic wordmark, echoing the Funcom Dune launcher branding.
+     Brand color stays gold in both themes (only interactive states go cyan). */
+  background: linear-gradient(180deg, #f6dcab 0%, #e2b873 38%, #c79350 68%, #f0d094 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--color-accent-strong);
 }
 
 .app-title-sub {
@@ -440,8 +455,11 @@ body {
 }
 .server-detail-tabs[data-orientation="vertical"] .rt-TabsTrigger[data-state="active"] {
   background: var(--color-bg-elevated);
-  box-shadow: inset 2px 0 0 0 var(--color-accent);
-  color: var(--color-text-primary);
+  /* Active = electric cyan (launcher motif): cyan rail bar + cyan label + glow. */
+  box-shadow:
+    inset 3px 0 0 0 var(--color-interactive),
+    0 0 12px -4px var(--color-interactive-dim);
+  color: var(--color-interactive-strong);
 }
 .server-detail-tab-panels {
   flex: 1 1 auto;
